@@ -3,6 +3,7 @@ qt_add_library(photolife_core STATIC
     app/Application.h        app/Application.cpp
     app/Logging.h           app/Logging.cpp
     db/Database.h           db/Database.cpp
+    match/NameParser.h      match/NameParser.cpp
     model/CaptureListModel.h model/CaptureListModel.cpp
     model/TaxonomyTreeModel.h model/TaxonomyTreeModel.cpp
     net/HttpClient.h        net/HttpClient.cpp
@@ -47,6 +48,7 @@ qt_add_resources(photolife_core "photolife_migrations"
     FILES
         "${CMAKE_SOURCE_DIR}/resources/migrations/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/002_taxonomy.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/003_matching.sql"
 )
 
 # GUI executable.
