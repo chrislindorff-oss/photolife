@@ -153,6 +153,50 @@ bool TaxonomyStore::addStatus(qint64 taxonInatId, const StatusRecord &status)
     return q.exec();
 }
 
+bool TaxonomyStore::addName(qint64 taxonInatId, const QString &name, const QString &kind)
+{
+    const auto local = taxonLocalId(taxonInatId);
+    if (!local || name.trimmed().isEmpty())
+        return false;
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO taxon_name (taxon_id, name, name_folded, kind) VALUES (?, ?, ?, ?)"));
+    q.addBindValue(qlonglong(*local));
+    q.addBindValue(name.trimmed());
+    q.addBindValue(foldName(name));
+    q.addBindValue(kind);
+    return q.exec();
+}
+
+std::optional<qint64> TaxonomyStore::taxonInatIdByFoldedName(const QString &folded) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT t.inat_id FROM taxon_name tn JOIN taxon t ON t.id = tn.taxon_id "
+        "WHERE tn.name_folded = ? ORDER BY (tn.kind = 'accepted') DESC LIMIT 1"));
+    q.addBindValue(folded);
+    if (!q.exec() || !q.next())
+        return std::nullopt;
+    return q.value(0).toLongLong();
+}
+
+QStringList TaxonomyStore::projectGenera(int projectId) const
+{
+    QStringList genera;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT DISTINCT lower(substr(t.name, 1, "
+        "  CASE WHEN instr(t.name, ' ') > 0 THEN instr(t.name, ' ') - 1 ELSE length(t.name) END)) "
+        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
+    q.addBindValue(projectId);
+    if (q.exec()) {
+        while (q.next())
+            genera << q.value(0).toString();
+    }
+    return genera;
+}
+
 int TaxonomyStore::ensureProject(const QString &name, std::optional<qint64> rootTaxonInatId,
                                  std::optional<qint64> placeInatId, const QString &source)
 {

@@ -2,6 +2,7 @@
 qt_add_library(photolife_core STATIC
     app/Application.h        app/Application.cpp
     app/Logging.h           app/Logging.cpp
+    checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
     db/Database.h           db/Database.cpp
     match/MatchEngine.h     match/MatchEngine.cpp

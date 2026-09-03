@@ -33,6 +33,9 @@ public:
 
     bool addStatus(qint64 taxonInatId, const StatusRecord &status);
 
+    // Adds one alternative name to an existing taxon (kept if already present).
+    bool addName(qint64 taxonInatId, const QString &name, const QString &kind);
+
     // Returns the project id, creating the row if `name` is new.
     int ensureProject(const QString &name, std::optional<qint64> rootTaxonInatId,
                       std::optional<qint64> placeInatId, const QString &source);
@@ -57,6 +60,16 @@ public:
 
     std::optional<Place> placeByInatId(qint64 inatId) const;
     std::optional<qint64> taxonLocalId(qint64 inatId) const;
+
+    // The iNat id of a taxon whose accepted or alternative name folds to `folded`
+    // (accepted preferred). Lets a caller skip a network lookup for a name
+    // already cached.
+    std::optional<qint64> taxonInatIdByFoldedName(const QString &folded) const;
+
+    // Distinct genus tokens (first word of the accepted name) among a project's
+    // taxa, lower-cased.
+    QStringList projectGenera(int projectId) const;
+
     int taxonCount() const;
     std::optional<int> projectIdByName(const QString &name) const;
     QList<qint64> projectTaxonInatIds(int projectId) const;

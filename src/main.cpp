@@ -5,7 +5,13 @@
 
 #include <cstdio>
 
+#include <QFile>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+
 #include "app/Application.h"
+#include "checklist/ChecklistImporter.h"
+#include "checklist/ChecklistParser.h"
 #include "db/Database.h"
 #include "match/MatchService.h"
 #include "scan/ScanService.h"
@@ -125,6 +131,61 @@ int runHeadlessMatch(pl::Application &app)
     return exitCode;
 }
 
+// Headless "import a checklist CSV into a project and exit" mode.
+int runHeadlessChecklist(pl::Application &app, const QString &path, const QString &projectName,
+                         const QString &source)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning().noquote() << "cannot read" << path;
+        return 1;
+    }
+    const auto entries = pl::checklist::parseChecklistCsv(file.readAll());
+    qInfo().noquote() << QStringLiteral("%1: %2 rows").arg(path).arg(entries.size());
+
+    auto db = QSqlDatabase::database(app.database().connectionName(), false);
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT id, place_inat_id FROM project WHERE name = ?"));
+    q.addBindValue(projectName);
+    if (!q.exec() || !q.next()) {
+        qWarning().noquote() << "no project named" << projectName;
+        return 1;
+    }
+
+    pl::checklist::ChecklistImporter::Request request;
+    request.projectId = q.value(0).toInt();
+    request.source = source.isEmpty() ? QStringLiteral("checklist") : source;
+    if (!q.value(1).isNull())
+        request.placeInatId = q.value(1).toLongLong();
+    request.entries = entries;
+
+    pl::taxonomy::TaxonomyStore store(app.database().connectionName());
+    pl::checklist::ChecklistImporter importer(app.inat(), store);
+
+    QEventLoop loop;
+    int exitCode = 0;
+    QObject::connect(&importer, &pl::checklist::ChecklistImporter::progress,
+                     [](int done, int total) {
+                         std::fprintf(stderr, "\rimporting %d / %d   ", done, total);
+                     });
+    QObject::connect(&importer, &pl::checklist::ChecklistImporter::finished,
+                     [&](bool ok, const QString &error, int imported, int skipped, int unresolved) {
+                         std::fprintf(stderr, "\n");
+                         if (!ok) {
+                             qWarning().noquote() << "import failed:" << error;
+                             exitCode = 1;
+                         } else {
+                             qInfo().noquote()
+                                 << QStringLiteral("%1 imported | %2 skipped | %3 unresolved")
+                                        .arg(imported).arg(skipped).arg(unresolved);
+                         }
+                         loop.quit();
+                     });
+    QTimer::singleShot(0, [&] { importer.start(request); });
+    loop.exec();
+    return exitCode;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -164,6 +225,20 @@ int main(int argc, char *argv[])
         QStringLiteral("Match the catalogue against the cached taxonomy and exit."));
     parser.addOption(matchOption);
 
+    const QCommandLineOption checklistOption(
+        QStringLiteral("import-checklist"),
+        QStringLiteral("Import a checklist CSV <file> into --into and exit."),
+        QStringLiteral("file"));
+    const QCommandLineOption intoOption(
+        QStringLiteral("into"), QStringLiteral("Target project name for --import-checklist."),
+        QStringLiteral("project"));
+    const QCommandLineOption sourceOption(
+        QStringLiteral("source"), QStringLiteral("Status source label for --import-checklist."),
+        QStringLiteral("label"));
+    parser.addOption(checklistOption);
+    parser.addOption(intoOption);
+    parser.addOption(sourceOption);
+
     parser.process(qtApp);
 
     pl::Application app;
@@ -184,6 +259,10 @@ int main(int argc, char *argv[])
 
     if (parser.isSet(matchOption))
         return runHeadlessMatch(app);
+
+    if (parser.isSet(checklistOption))
+        return runHeadlessChecklist(app, parser.value(checklistOption), parser.value(intoOption),
+                                    parser.value(sourceOption));
 
     app.showMainWindow();
     return QApplication::exec();
