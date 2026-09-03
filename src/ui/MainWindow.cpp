@@ -25,6 +25,7 @@
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDesktopServices>
 #include <QDockWidget>
@@ -318,6 +319,12 @@ void MainWindow::buildReferenceTreeDock()
         refreshCoverage();
     });
 
+    m_photographedOnly = new QCheckBox(tr("Only taxa I've photographed"), panel);
+    connect(m_photographedOnly, &QCheckBox::toggled, this, [this](bool on) {
+        m_treeModel->setPhotographedOnly(on);
+        m_treeView->expandToDepth(on ? 6 : 1);
+    });
+
     m_treeView = new QTreeView(panel);
     m_treeView->setModel(m_treeModel);
     m_treeView->setUniformRowHeights(true);
@@ -340,6 +347,7 @@ void MainWindow::buildReferenceTreeDock()
     split->setStretchFactor(1, 1);
 
     layout->addWidget(m_projectCombo);
+    layout->addWidget(m_photographedOnly);
     layout->addWidget(split, 1);
     dock->setWidget(panel);
     addDockWidget(Qt::LeftDockWidgetArea, dock);

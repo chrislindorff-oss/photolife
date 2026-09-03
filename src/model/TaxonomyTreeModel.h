@@ -41,6 +41,10 @@ public:
     // Coverage overlays "have / missing" and species counts onto the tree.
     void setCoverage(const pl::coverage::ProjectCoverage &coverage);
 
+    // When on, hides every taxon with no photographed species in its subtree.
+    void setPhotographedOnly(bool on);
+    bool photographedOnly() const { return m_photographedOnly; }
+
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override;
     QModelIndex parent(const QModelIndex &child) const override;
     int rowCount(const QModelIndex &parent = {}) const override;
@@ -57,11 +61,14 @@ private:
     };
 
     Node *nodeFor(const QModelIndex &index) const;
+    void rebuild();
 
     pl::Database &m_db;
     int m_projectId = -1;
-    std::unique_ptr<Node> m_root;   // synthetic; its children are the real roots
+    QList<pl::taxonomy::TreeNode> m_flat;   // the project's taxa, parents first
+    std::unique_ptr<Node> m_root;           // synthetic; its children are the real roots
     pl::coverage::ProjectCoverage m_coverage;
+    bool m_photographedOnly = false;
 };
 
 } // namespace pl::model

@@ -4,6 +4,7 @@
 
 #include <QMainWindow>
 
+class QCheckBox;
 class QLabel;
 class QListView;
 class QListWidget;
@@ -108,6 +109,7 @@ private:
     model::TaxonomyTreeModel *m_treeModel = nullptr;
     QTreeView *m_treeView = nullptr;
     QComboBox *m_projectCombo = nullptr;
+    QCheckBox *m_photographedOnly = nullptr;
     taxonomy::ProjectBuilder *m_builder = nullptr;
     checklist::ChecklistImporter *m_checklistImporter = nullptr;
     CoveragePanel *m_coveragePanel = nullptr;

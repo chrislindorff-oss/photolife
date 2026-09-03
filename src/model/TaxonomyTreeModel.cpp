@@ -18,43 +18,23 @@ TaxonomyTreeModel::~TaxonomyTreeModel() = default;
 
 void TaxonomyTreeModel::setProject(int projectId)
 {
-    beginResetModel();
     m_projectId = projectId;
-    m_root = std::make_unique<Node>();
-
+    m_flat.clear();
     if (projectId > 0 && m_db.isOpen()) {
         taxonomy::TaxonomyStore store(m_db.connectionName());
-        const QList<taxonomy::TreeNode> flat = store.projectTree(projectId);
-
-        QHash<qint64, Node *> byId;
-        std::vector<std::unique_ptr<Node>> pending;
-        pending.reserve(flat.size());
-        for (const taxonomy::TreeNode &tn : flat) {
-            auto node = std::make_unique<Node>();
-            node->data = tn;
-            byId.insert(tn.inatId, node.get());
-            pending.push_back(std::move(node));
-        }
-
-        // projectTree() is ordered parents-before-children (by rank_level), so a
-        // single pass links every node whose parent is present.
-        for (auto &node : pending) {
-            Node *parent = m_root.get();
-            if (node->data.parentInatId) {
-                if (Node *found = byId.value(*node->data.parentInatId, nullptr))
-                    parent = found;
-            }
-            node->parent = parent;
-            parent->children.push_back(std::move(node));
-        }
+        m_flat = store.projectTree(projectId);
     }
-
-    endResetModel();
+    rebuild();
 }
 
 void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
 {
     m_coverage = coverage;
+    if (m_photographedOnly) {
+        // The visible set depends on coverage, so the tree structure changes.
+        rebuild();
+        return;
+    }
     if (!m_root->children.empty()) {
         emit dataChanged(index(0, 0),
                          index(int(m_root->children.size()) - 1, columnCount() - 1),
@@ -62,6 +42,54 @@ void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverag
                           SpeciesWithPhotosRole});
         emit layoutChanged();
     }
+}
+
+void TaxonomyTreeModel::setPhotographedOnly(bool on)
+{
+    if (m_photographedOnly == on)
+        return;
+    m_photographedOnly = on;
+    rebuild();
+}
+
+void TaxonomyTreeModel::rebuild()
+{
+    beginResetModel();
+    m_root = std::make_unique<Node>();
+
+    // In "photographed only" mode a taxon is kept when its subtree has a photo.
+    // subtreeHasPhotos rolls up, so a kept node's ancestors are always kept too
+    // and no child is ever orphaned.
+    auto keep = [this](qint64 inatId) {
+        if (!m_photographedOnly)
+            return true;
+        return m_coverage.byTaxon.value(inatId).subtreeHasPhotos;
+    };
+
+    QHash<qint64, Node *> byId;
+    std::vector<std::unique_ptr<Node>> pending;
+    pending.reserve(m_flat.size());
+    for (const taxonomy::TreeNode &tn : m_flat) {
+        if (!keep(tn.inatId))
+            continue;
+        auto node = std::make_unique<Node>();
+        node->data = tn;
+        byId.insert(tn.inatId, node.get());
+        pending.push_back(std::move(node));
+    }
+
+    // m_flat is ordered parents-before-children (by rank_level).
+    for (auto &node : pending) {
+        Node *parent = m_root.get();
+        if (node->data.parentInatId) {
+            if (Node *found = byId.value(*node->data.parentInatId, nullptr))
+                parent = found;
+        }
+        node->parent = parent;
+        parent->children.push_back(std::move(node));
+    }
+
+    endResetModel();
 }
 
 TaxonomyTreeModel::Node *TaxonomyTreeModel::nodeFor(const QModelIndex &index) const

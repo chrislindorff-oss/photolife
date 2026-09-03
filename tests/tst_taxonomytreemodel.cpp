@@ -36,6 +36,7 @@ private slots:
     void buildsHierarchyFromFlatRows();
     void passesModelTester();
     void emptyProjectHasNoRows();
+    void photographedOnlyFilterHidesUnphotographedSubtrees();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -125,6 +126,34 @@ void TestTaxonomyTreeModel::emptyProjectHasNoRows()
     model::TaxonomyTreeModel model(*m_db);
     model.setProject(-1);
     QCOMPARE(model.rowCount(), 0);
+}
+
+void TestTaxonomyTreeModel::photographedOnlyFilterHidesUnphotographedSubtrees()
+{
+    // Diuris pardina (900) is photographed; Pterostylis nutans (901) is not.
+    coverage::ProjectCoverage cov;
+    for (qint64 id : {qint64(47217), qint64(800), qint64(900)})
+        cov.byTaxon[id].subtreeHasPhotos = true;
+    for (qint64 id : {qint64(801), qint64(901)})
+        cov.byTaxon[id].subtreeHasPhotos = false;
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+
+    QCOMPARE(model.rowCount(), 1);            // full tree: the family
+    QCOMPARE(model.rowCount(model.index(0, 0)), 2);   // both genera
+
+    model.setPhotographedOnly(true);
+    QCOMPARE(model.rowCount(), 1);            // still the family (it has photos)
+    const QModelIndex family = model.index(0, 0);
+    QCOMPARE(model.rowCount(family), 1);      // only Diuris survives
+    QCOMPARE(model.data(model.index(0, 0, family), Qt::DisplayRole).toString(),
+             QStringLiteral("Diuris"));
+    QCOMPARE(model.rowCount(model.index(0, 0, family)), 1);   // Diuris pardina
+
+    model.setPhotographedOnly(false);
+    QCOMPARE(model.rowCount(model.index(0, 0)), 2);   // Pterostylis is back
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)
