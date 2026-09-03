@@ -7,6 +7,7 @@
 #include "net/INatClient.h"
 #include "match/MatchService.h"
 #include "net/QtNetworkTransport.h"
+#include "net/UpdateChecker.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
@@ -72,6 +73,10 @@ bool Application::initialize()
                              .toUtf8());
     m_inat = std::make_unique<net::INatClient>(*m_http);
 
+    m_updateChecker = std::make_unique<net::UpdateChecker>(*m_http);
+    m_updateChecker->setRepo(QString::fromLatin1(kReleasesRepo));
+    m_updateChecker->setCurrentVersion(QString::fromLatin1(kAppVersionFull));
+
     return true;
 }
 
@@ -120,6 +125,11 @@ taxonomy::TaxonomyStore &Application::taxonomyStore()
 net::INatClient &Application::inat()
 {
     return *m_inat;
+}
+
+net::UpdateChecker &Application::updateChecker()
+{
+    return *m_updateChecker;
 }
 
 } // namespace pl

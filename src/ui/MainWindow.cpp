@@ -9,6 +9,7 @@
 #include "checklist/ChecklistParser.h"
 #include "coverage/CoverageCalculator.h"
 #include "match/MatchService.h"
+#include "net/UpdateChecker.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
@@ -24,6 +25,7 @@
 #include <QAction>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -236,9 +238,37 @@ void MainWindow::buildMenus()
     quit->setMenuRole(QAction::QuitRole);
 
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
+    QAction *checkUpdate = helpMenu->addAction(tr("Check for &Updates…"), this, [this] {
+        auto &checker = m_app.updateChecker();
+        statusBar()->showMessage(tr("Checking for updates…"), 4000);
+        checker.check();
+    });
+    checkUpdate->setMenuRole(QAction::ApplicationSpecificRole);
     QAction *about = helpMenu->addAction(
         tr("&About %1").arg(QString::fromLatin1(kAppName)), this, &MainWindow::showAbout);
     about->setMenuRole(QAction::AboutRole);
+
+    connect(&m_app.updateChecker(), &net::UpdateChecker::upToDate, this, [this](const QString &v) {
+        QMessageBox::information(this, tr("Check for Updates"),
+                                tr("PhotoLife %1 is up to date.").arg(v));
+    });
+    connect(&m_app.updateChecker(), &net::UpdateChecker::updateAvailable, this,
+            [this](const QString &latest, const QString &url) {
+                QMessageBox box(QMessageBox::Information, tr("Update Available"),
+                                tr("PhotoLife %1 is available.").arg(latest), QMessageBox::Close,
+                                this);
+                if (!url.isEmpty()) {
+                    box.addButton(tr("Open Download Page"), QMessageBox::AcceptRole);
+                    if (box.exec() == QMessageBox::AcceptRole)
+                        QDesktopServices::openUrl(QUrl(url));
+                } else {
+                    box.exec();
+                }
+            });
+    connect(&m_app.updateChecker(), &net::UpdateChecker::checkFailed, this,
+            [this](const QString &err) {
+                statusBar()->showMessage(tr("Update check failed: %1").arg(err), 8000);
+            });
 
     QToolBar *toolbar = addToolBar(tr("Library"));
     toolbar->setObjectName(QStringLiteral("libraryToolBar"));
@@ -837,8 +867,10 @@ void MainWindow::showAbout()
     QMessageBox::about(
         this,
         tr("About %1").arg(QString::fromLatin1(kAppName)),
-        tr("<h3>%1 %2</h3><p>Catalogue nature photos against a taxonomic tree.</p>")
-            .arg(QString::fromLatin1(kAppName), QString::fromLatin1(kAppVersion)));
+        tr("<h3>%1 %2</h3><p>Catalogue nature photos against a taxonomic tree.</p>"
+           "<p style='color:gray'>Build %3 · Qt %4</p>")
+            .arg(QString::fromLatin1(kAppName), QString::fromLatin1(kAppVersion),
+                 QString::fromLatin1(kAppVersionFull), QString::fromLatin1(qVersion())));
 }
 
 } // namespace pl

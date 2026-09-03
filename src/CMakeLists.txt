@@ -22,6 +22,7 @@ qt_add_library(photolife_core STATIC
     net/INatParse.h         net/INatParse.cpp
     net/QtNetworkTransport.h net/QtNetworkTransport.cpp
     net/Transport.h
+    net/UpdateChecker.h     net/UpdateChecker.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp

@@ -23,6 +23,7 @@ class ThumbnailCache;
 namespace net {
 class HttpClient;
 class INatClient;
+class UpdateChecker;
 }
 namespace taxonomy {
 class TaxonomyStore;
@@ -53,6 +54,7 @@ public:
     thumb::ThumbnailCache &thumbnails();
     taxonomy::TaxonomyStore &taxonomyStore();
     net::INatClient &inat();
+    net::UpdateChecker &updateChecker();
 
 private:
     std::unique_ptr<Settings> m_settings;
@@ -64,6 +66,7 @@ private:
     std::unique_ptr<taxonomy::TaxonomyStore> m_taxonomyStore;
     std::unique_ptr<net::HttpClient> m_http;
     std::unique_ptr<net::INatClient> m_inat;
+    std::unique_ptr<net::UpdateChecker> m_updateChecker;
     std::unique_ptr<MainWindow> m_mainWindow;
 };
 
