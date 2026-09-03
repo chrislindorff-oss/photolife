@@ -1,52 +1,70 @@
--- Schema v1: the taxonomic tree, the photo catalogue, and the links between them.
+-- Schema v1: the local photo catalogue produced by the filesystem scanner.
 --
--- The migration runner (pl::Database) wraps this script in a transaction and
--- bumps PRAGMA user_version afterwards, so this file must not touch user_version
--- itself. Statements are split on a ';' that ends a line, so keep every
--- statement terminator at end-of-line and avoid ';' inside string literals.
+-- Only the scan-side tables live here. Taxonomy, projects and matches (see the
+-- PhotoLife Blueprint, section 6) arrive in a later migration once the
+-- iNaturalist client exists and their columns have settled.
+--
+-- The migration runner (pl::Database) wraps this script in one transaction and
+-- sets PRAGMA user_version afterwards, so this file must not touch user_version.
+-- Statements are split on a ';' that ends a line, so keep every terminator at
+-- end-of-line and avoid ';' inside string literals.
 
--- A node in the taxonomic tree. parent_id is NULL for roots (e.g. a kingdom).
--- rank is a free-text Linnaean rank ('kingdom', 'family', 'species', ...) rather
--- than an enum, so unofficial ranks ('subspecies', 'morph') are allowed.
-CREATE TABLE taxon (
-    id              INTEGER PRIMARY KEY,
-    parent_id       INTEGER REFERENCES taxon(id) ON DELETE CASCADE,
-    rank            TEXT NOT NULL,
-    scientific_name TEXT NOT NULL,
-    common_name     TEXT,
-    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    UNIQUE(parent_id, scientific_name)
+-- A directory seen while scanning a watched root. Kept even when it holds no
+-- images directly, so rank/name inference from the path is reusable and stable
+-- across rescans. kind: 'unknown' until the matching engine classifies it as
+-- 'taxon' | 'group' | 'locality' | 'staging'.
+CREATE TABLE folder (
+    id            INTEGER PRIMARY KEY,
+    path          TEXT NOT NULL UNIQUE,
+    parent_id     INTEGER REFERENCES folder(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    depth         INTEGER NOT NULL,
+    inferred_rank TEXT,
+    inferred_name TEXT,
+    kind          TEXT NOT NULL DEFAULT 'unknown'
 );
 
-CREATE INDEX idx_taxon_parent ON taxon(parent_id);
-CREATE INDEX idx_taxon_scientific_name ON taxon(scientific_name);
+CREATE INDEX idx_folder_parent ON folder(parent_id);
 
--- One row per image file discovered under a watched root.
-CREATE TABLE photo (
+-- One row per shot. A RAW file and its same-stem JPEG are two renditions of one
+-- capture; base_name is the shared filename stem (no extension) used to group
+-- them. captured_on is ISO-8601; date_source is 'filename' | 'exif' | 'none'.
+-- name_text / locality_text / organ_tags are parsed straight from base_name at
+-- scan time; resolving name_text to a taxon is the matching engine's job.
+CREATE TABLE capture (
+    id            INTEGER PRIMARY KEY,
+    folder_id     INTEGER NOT NULL REFERENCES folder(id) ON DELETE CASCADE,
+    base_name     TEXT NOT NULL,
+    name_text     TEXT,
+    locality_text TEXT,
+    organ_tags    TEXT,
+    captured_on   TEXT,
+    date_source   TEXT NOT NULL DEFAULT 'none',
+    first_seen    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    last_seen     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(folder_id, base_name)
+);
+
+CREATE INDEX idx_capture_folder ON capture(folder_id);
+CREATE INDEX idx_capture_captured_on ON capture(captured_on);
+
+-- A concrete file on disk backing a capture. kind: 'jpeg' | 'raw' | 'raw_preview'.
+-- (path, file_size, mtime) lets a rescan skip unchanged files without rehashing;
+-- content_hash keys the thumbnail cache so moved/renamed files keep their thumbs.
+CREATE TABLE rendition (
     id           INTEGER PRIMARY KEY,
+    capture_id   INTEGER NOT NULL REFERENCES capture(id) ON DELETE CASCADE,
     path         TEXT NOT NULL UNIQUE,
+    kind         TEXT NOT NULL,
+    ext          TEXT NOT NULL,
     content_hash TEXT,
     file_size    INTEGER,
+    mtime        INTEGER,
     width        INTEGER,
     height       INTEGER,
-    captured_at  TEXT,
-    camera_make  TEXT,
-    camera_model TEXT,
-    lens         TEXT,
-    imported_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    thumb_key    TEXT,
+    scanned_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX idx_photo_content_hash ON photo(content_hash);
-CREATE INDEX idx_photo_captured_at ON photo(captured_at);
-
--- Which taxa a photo depicts. A photo may be linked to several taxa; at most one
--- of those links is the primary subject (enforced by the partial unique index).
-CREATE TABLE photo_taxon (
-    photo_id   INTEGER NOT NULL REFERENCES photo(id) ON DELETE CASCADE,
-    taxon_id   INTEGER NOT NULL REFERENCES taxon(id) ON DELETE CASCADE,
-    is_primary INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (photo_id, taxon_id)
-);
-
-CREATE INDEX idx_photo_taxon_taxon ON photo_taxon(taxon_id);
-CREATE UNIQUE INDEX idx_photo_taxon_one_primary ON photo_taxon(photo_id) WHERE is_primary = 1;
+CREATE INDEX idx_rendition_capture ON rendition(capture_id);
+CREATE INDEX idx_rendition_content_hash ON rendition(content_hash);

@@ -9,3 +9,5 @@ endfunction()
 
 photolife_test(tst_database)
 photolife_test(tst_settings)
+photolife_test(tst_filenameparser)
+photolife_test(tst_exif)
