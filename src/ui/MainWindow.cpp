@@ -3,24 +3,38 @@
 #include "app/Application.h"
 #include "db/Database.h"
 #include "model/CaptureListModel.h"
+#include "model/TaxonomyTreeModel.h"
 #include "pl/Version.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
+#include "taxonomy/ProjectBuilder.h"
 #include "thumb/ThumbnailCache.h"
+#include "ui/NewProjectDialog.h"
 
 #include <QAction>
 #include <QCloseEvent>
+#include <QComboBox>
+#include <QDockWidget>
 #include <QFileDialog>
+#include <QHeaderView>
 #include <QKeySequence>
 #include <QLabel>
 #include <QListView>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QSignalBlocker>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QToolBar>
+#include <QTreeView>
+#include <QVBoxLayout>
+#include <QWidget>
+
+#include "db/Database.h"
 
 namespace pl {
 
@@ -30,10 +44,34 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     setWindowTitle(QString::fromLatin1(kAppName));
 
     m_model = new model::CaptureListModel(m_app.database(), m_app.thumbnails(), this);
+    m_treeModel = new model::TaxonomyTreeModel(m_app.database(), this);
+    m_builder = new taxonomy::ProjectBuilder(m_app.inat(), m_app.taxonomyStore(), this);
 
     buildMenus();
     buildCentralWidget();
+    buildReferenceTreeDock();
     restoreLayout();
+
+    connect(m_builder, &taxonomy::ProjectBuilder::progress, this,
+            [this](const QString &phase, int done, int total) {
+                statusBar()->showMessage(total > 0
+                                             ? tr("%1 — %2 / %3").arg(phase).arg(done).arg(total)
+                                             : phase);
+            });
+    connect(m_builder, &taxonomy::ProjectBuilder::finished, this,
+            [this](bool ok, const QString &error, int projectId) {
+                m_newTreeAction->setEnabled(true);
+                if (!ok) {
+                    statusBar()->showMessage(tr("Reference tree build failed: %1").arg(error),
+                                             10000);
+                    return;
+                }
+                statusBar()->showMessage(tr("Reference tree ready."), 6000);
+                reloadProjectList();
+                const int idx = m_projectCombo->findData(projectId);
+                if (idx >= 0)
+                    m_projectCombo->setCurrentIndex(idx);
+            });
 
     auto &scanner = m_app.scanService();
     connect(&scanner, &scan::ScanService::started, this, [this] { setScanUiRunning(true); });
@@ -49,6 +87,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
 
     m_model->reload();
     updateEmptyState();
+    reloadProjectList();
 }
 
 MainWindow::~MainWindow() = default;
@@ -69,6 +108,10 @@ void MainWindow::buildMenus()
     m_cancelAction->setEnabled(false);
 
     fileMenu->addSeparator();
+    m_newTreeAction = fileMenu->addAction(tr("&New Reference Tree…"),
+                                          this, &MainWindow::newReferenceTree);
+
+    fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
     quit->setShortcut(QKeySequence::Quit);
     quit->setMenuRole(QAction::QuitRole);
@@ -84,6 +127,79 @@ void MainWindow::buildMenus()
     toolbar->addAction(m_addFolderAction);
     toolbar->addAction(m_scanAction);
     toolbar->addAction(m_cancelAction);
+    toolbar->addSeparator();
+    toolbar->addAction(m_newTreeAction);
+}
+
+void MainWindow::buildReferenceTreeDock()
+{
+    auto *dock = new QDockWidget(tr("Reference Trees"), this);
+    dock->setObjectName(QStringLiteral("referenceTreeDock"));
+    dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+
+    auto *panel = new QWidget(dock);
+    auto *layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(6, 6, 6, 6);
+
+    m_projectCombo = new QComboBox(panel);
+    connect(m_projectCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        m_treeModel->setProject(index >= 0 ? m_projectCombo->itemData(index).toInt() : -1);
+        m_treeView->expandToDepth(1);
+    });
+
+    m_treeView = new QTreeView(panel);
+    m_treeView->setModel(m_treeModel);
+    m_treeView->setUniformRowHeights(true);
+    m_treeView->setAlternatingRowColors(true);
+    m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_treeView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+
+    layout->addWidget(m_projectCombo);
+    layout->addWidget(m_treeView, 1);
+    dock->setWidget(panel);
+    addDockWidget(Qt::LeftDockWidgetArea, dock);
+    resizeDocks({dock}, {340}, Qt::Horizontal);
+}
+
+void MainWindow::reloadProjectList()
+{
+    const int previous = m_projectCombo->currentData().isValid()
+                             ? m_projectCombo->currentData().toInt()
+                             : -1;
+
+    QSignalBlocker block(m_projectCombo);
+    m_projectCombo->clear();
+
+    if (m_app.database().isOpen()) {
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        q.exec(QStringLiteral("SELECT id, name FROM project ORDER BY name"));
+        while (q.next())
+            m_projectCombo->addItem(q.value(1).toString(), q.value(0).toInt());
+    }
+
+    if (m_projectCombo->count() == 0) {
+        m_treeModel->setProject(-1);
+        return;
+    }
+
+    const int restore = m_projectCombo->findData(previous);
+    m_projectCombo->setCurrentIndex(restore >= 0 ? restore : 0);
+    m_treeModel->setProject(m_projectCombo->currentData().toInt());
+    m_treeView->expandToDepth(1);
+}
+
+void MainWindow::newReferenceTree()
+{
+    if (m_builder->isRunning())
+        return;
+
+    NewProjectDialog dialog(this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    m_newTreeAction->setEnabled(false);
+    statusBar()->showMessage(tr("Building reference tree…"));
+    m_builder->start(dialog.request());
 }
 
 void MainWindow::buildCentralWidget()

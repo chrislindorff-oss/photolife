@@ -4,6 +4,8 @@
 
 class QLabel;
 class QListView;
+class QTreeView;
+class QComboBox;
 class QAction;
 
 namespace pl {
@@ -12,10 +14,14 @@ class Application;
 
 namespace model {
 class CaptureListModel;
+class TaxonomyTreeModel;
 }
 namespace scan {
 struct ScanProgress;
 struct ScanSummary;
+}
+namespace taxonomy {
+class ProjectBuilder;
 }
 
 class MainWindow : public QMainWindow
@@ -42,6 +48,10 @@ private:
     void onScanFinished(const scan::ScanSummary &summary);
     void updateEmptyState();
 
+    void buildReferenceTreeDock();
+    void reloadProjectList();
+    void newReferenceTree();
+
     Application &m_app;
 
     model::CaptureListModel *m_model = nullptr;
@@ -51,6 +61,12 @@ private:
     QAction *m_scanAction = nullptr;
     QAction *m_cancelAction = nullptr;
     QAction *m_addFolderAction = nullptr;
+
+    model::TaxonomyTreeModel *m_treeModel = nullptr;
+    QTreeView *m_treeView = nullptr;
+    QComboBox *m_projectCombo = nullptr;
+    taxonomy::ProjectBuilder *m_builder = nullptr;
+    QAction *m_newTreeAction = nullptr;
 };
 
 } // namespace pl
