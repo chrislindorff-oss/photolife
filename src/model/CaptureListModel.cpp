@@ -50,6 +50,8 @@ QHash<int, QByteArray> CaptureListModel::roleNames() const
         {CapturedOnRole, "capturedOn"},
         {DateSourceRole, "dateSource"},
         {PreviewPathRole, "previewPath"},
+        {MatchStatusRole, "matchStatus"},
+        {MatchedNameRole, "matchedName"},
     };
 }
 
@@ -67,6 +69,10 @@ QVariant CaptureListModel::data(const QModelIndex &index, int role) const
         QString tip = row.folderPath;
         if (!row.capturedOn.isEmpty())
             tip += QStringLiteral("\n%1 (%2)").arg(row.capturedOn, row.dateSource);
+        if (!row.matchedName.isEmpty())
+            tip += QStringLiteral("\n→ %1 (%2)").arg(row.matchedName, row.matchStatus);
+        else if (!row.matchStatus.isEmpty())
+            tip += QStringLiteral("\n%1").arg(row.matchStatus);
         return tip;
     }
     case Qt::DecorationRole: {
@@ -87,9 +93,21 @@ QVariant CaptureListModel::data(const QModelIndex &index, int role) const
         return row.dateSource;
     case PreviewPathRole:
         return row.previewPath;
+    case MatchStatusRole:
+        return row.matchStatus;
+    case MatchedNameRole:
+        return row.matchedName;
     default:
         return {};
     }
+}
+
+void CaptureListModel::setStatusFilter(const QString &status)
+{
+    if (m_statusFilter == status)
+        return;
+    m_statusFilter = status;
+    reload();
 }
 
 void CaptureListModel::reload()
@@ -99,16 +117,35 @@ void CaptureListModel::reload()
     m_rowsByHash.clear();
 
     if (m_db.isOpen()) {
+        QString having;
+        if (m_statusFilter == QLatin1String("auto"))
+            having = QStringLiteral(" WHERE match_status = 'auto'");
+        else if (m_statusFilter == QLatin1String("confirmed"))
+            having = QStringLiteral(" WHERE match_status = 'confirmed'");
+        else if (m_statusFilter == QLatin1String("pending"))
+            having = QStringLiteral(" WHERE match_status = 'pending' AND matched_id IS NOT NULL");
+        else if (m_statusFilter == QLatin1String("unmatched"))
+            having = QStringLiteral(
+                " WHERE match_status IS NULL OR (match_status = 'pending' AND matched_id IS NULL)");
+
         QSqlQuery q(QSqlDatabase::database(m_db.connectionName(), false));
         q.setForwardOnly(true);
         q.exec(QStringLiteral(
-            "SELECT c.id, c.base_name, c.name_text, c.captured_on, c.date_source, f.path, "
-            "  (SELECT r.path FROM rendition r WHERE r.capture_id = c.id "
-            "     ORDER BY (r.kind = 'raw'), r.id LIMIT 1), "
-            "  (SELECT r.content_hash FROM rendition r WHERE r.capture_id = c.id "
-            "     ORDER BY (r.kind = 'raw'), r.id LIMIT 1) "
-            "FROM capture c JOIN folder f ON f.id = c.folder_id "
-            "ORDER BY (c.captured_on IS NULL), c.captured_on DESC, c.id DESC"));
+            "SELECT id, base_name, name_text, captured_on, date_source, path, preview_path, "
+            "       preview_hash, match_status, matched_name FROM ("
+            "  SELECT c.id, c.base_name, c.name_text, c.captured_on, c.date_source, f.path, "
+            "    (SELECT r.path FROM rendition r WHERE r.capture_id = c.id "
+            "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_path, "
+            "    (SELECT r.content_hash FROM rendition r WHERE r.capture_id = c.id "
+            "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_hash, "
+            "    m.status AS match_status, m.taxon_id AS matched_id, t.name AS matched_name "
+            "  FROM capture c JOIN folder f ON f.id = c.folder_id "
+            "  LEFT JOIN capture_match m ON m.id = ("
+            "     SELECT id FROM capture_match WHERE capture_id = c.id "
+            "     ORDER BY (decided_by = 'user') DESC, confidence DESC LIMIT 1) "
+            "  LEFT JOIN taxon t ON t.id = m.taxon_id "
+            ")") + having + QStringLiteral(
+            " ORDER BY (captured_on IS NULL), captured_on DESC, id DESC"));
 
         while (q.next()) {
             Row row;
@@ -120,6 +157,17 @@ void CaptureListModel::reload()
             row.folderPath = q.value(5).toString();
             row.previewPath = q.value(6).toString();
             row.previewHash = q.value(7).toString();
+
+            const QString rawStatus = q.value(8).toString();
+            const bool hasTaxon = !q.value(9).isNull();
+            if (rawStatus.isEmpty())
+                row.matchStatus = QStringLiteral("unmatched");
+            else if (rawStatus == QLatin1String("pending") && !hasTaxon)
+                row.matchStatus = QStringLiteral("unmatched");
+            else
+                row.matchStatus = rawStatus;
+            row.matchedName = q.value(9).toString();
+
             if (!row.previewHash.isEmpty())
                 m_rowsByHash[row.previewHash].append(int(m_rows.size()));
             m_rows.append(std::move(row));

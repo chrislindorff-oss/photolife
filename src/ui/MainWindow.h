@@ -23,6 +23,9 @@ struct ScanSummary;
 namespace taxonomy {
 class ProjectBuilder;
 }
+namespace match {
+class MatchEngine;
+}
 
 class MainWindow : public QMainWindow
 {
@@ -51,6 +54,7 @@ private:
     void buildReferenceTreeDock();
     void reloadProjectList();
     void newReferenceTree();
+    void startMatch();
 
     Application &m_app;
 
@@ -67,6 +71,9 @@ private:
     QComboBox *m_projectCombo = nullptr;
     taxonomy::ProjectBuilder *m_builder = nullptr;
     QAction *m_newTreeAction = nullptr;
+
+    QAction *m_matchAction = nullptr;
+    QComboBox *m_filterCombo = nullptr;
 };
 
 } // namespace pl

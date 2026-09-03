@@ -30,6 +30,8 @@ public:
         CapturedOnRole,
         DateSourceRole,
         PreviewPathRole,
+        MatchStatusRole,   // "auto" | "pending" | "unmatched" | "confirmed"
+        MatchedNameRole,
     };
 
     CaptureListModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
@@ -41,6 +43,10 @@ public:
 
     // Re-reads every row from the catalogue.
     void reload();
+
+    // "" = all; "auto" | "pending" | "unmatched" | "confirmed" restrict the grid.
+    void setStatusFilter(const QString &status);
+    QString statusFilter() const { return m_statusFilter; }
 
     int captureCount() const { return int(m_rows.size()); }
 
@@ -55,6 +61,8 @@ private:
         QString dateSource;
         QString previewPath;
         QString previewHash;
+        QString matchStatus;
+        QString matchedName;
     };
 
     void onThumbnailReady(const QString &contentHash, int longestEdge);
@@ -64,6 +72,7 @@ private:
     QList<Row> m_rows;
     QHash<QString, QList<int>> m_rowsByHash;   // preview hash -> row indices
     QIcon m_placeholder;
+    QString m_statusFilter;
 };
 
 } // namespace pl::model

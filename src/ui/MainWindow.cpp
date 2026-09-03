@@ -5,6 +5,7 @@
 #include "model/CaptureListModel.h"
 #include "model/TaxonomyTreeModel.h"
 #include "pl/Version.h"
+#include "match/MatchService.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
@@ -27,8 +28,10 @@
 #include <QSignalBlocker>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QPainter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStyledItemDelegate>
 #include <QToolBar>
 #include <QTreeView>
 #include <QVBoxLayout>
@@ -37,6 +40,42 @@
 #include "db/Database.h"
 
 namespace pl {
+namespace {
+
+// Draws the base thumbnail plus a small status pip in the corner.
+class CaptureDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::paint(painter, option, index);
+
+        const QString status = index.data(model::CaptureListModel::MatchStatusRole).toString();
+        QColor colour;
+        if (status == QLatin1String("auto"))
+            colour = QColor(0x2E, 0x7D, 0x32);
+        else if (status == QLatin1String("confirmed"))
+            colour = QColor(0x15, 0x65, 0xC0);
+        else if (status == QLatin1String("pending"))
+            colour = QColor(0xE6, 0x9A, 0x00);
+        else
+            colour = QColor(0xC6, 0x28, 0x28);
+
+        const int d = 10;
+        const QRect r = option.rect.adjusted(6, 6, 0, 0);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(colour);
+        painter->drawEllipse(QRect(r.left(), r.top(), d, d));
+        painter->restore();
+    }
+};
+
+} // namespace
 
 MainWindow::MainWindow(Application &app, QWidget *parent)
     : QMainWindow(parent), m_app(app)
@@ -58,6 +97,27 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                                              ? tr("%1 — %2 / %3").arg(phase).arg(done).arg(total)
                                              : phase);
             });
+    auto &matcher = m_app.matchService();
+    connect(&matcher, &match::MatchService::started, this,
+            [this] { m_matchAction->setEnabled(false); statusBar()->showMessage(tr("Matching…")); });
+    connect(&matcher, &match::MatchService::progress, this, [this](int done, int total) {
+        statusBar()->showMessage(tr("Matching %1 / %2").arg(done).arg(total));
+    });
+    connect(&matcher, &match::MatchService::finished, this,
+            [this](match::MatchEngine::Stats s) {
+                m_matchAction->setEnabled(true);
+                m_model->reload();
+                updateEmptyState();
+                if (!s.ok()) {
+                    statusBar()->showMessage(tr("Match failed: %1").arg(s.error), 10000);
+                    return;
+                }
+                statusBar()->showMessage(
+                    tr("Matched — %1 automatic, %2 to review, %3 unmatched")
+                        .arg(s.autoApplied).arg(s.pending - s.unmatched).arg(s.unmatched),
+                    8000);
+            });
+
     connect(m_builder, &taxonomy::ProjectBuilder::finished, this,
             [this](bool ok, const QString &error, int projectId) {
                 m_newTreeAction->setEnabled(true);
@@ -110,6 +170,7 @@ void MainWindow::buildMenus()
     fileMenu->addSeparator();
     m_newTreeAction = fileMenu->addAction(tr("&New Reference Tree…"),
                                           this, &MainWindow::newReferenceTree);
+    m_matchAction = fileMenu->addAction(tr("&Match Library"), this, &MainWindow::startMatch);
 
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
@@ -129,6 +190,21 @@ void MainWindow::buildMenus()
     toolbar->addAction(m_cancelAction);
     toolbar->addSeparator();
     toolbar->addAction(m_newTreeAction);
+    toolbar->addAction(m_matchAction);
+
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(tr("Show: "), toolbar));
+    m_filterCombo = new QComboBox(toolbar);
+    m_filterCombo->addItem(tr("All"), QString());
+    m_filterCombo->addItem(tr("Auto-matched"), QStringLiteral("auto"));
+    m_filterCombo->addItem(tr("Needs review"), QStringLiteral("pending"));
+    m_filterCombo->addItem(tr("Unmatched"), QStringLiteral("unmatched"));
+    m_filterCombo->addItem(tr("Confirmed"), QStringLiteral("confirmed"));
+    connect(m_filterCombo, &QComboBox::currentIndexChanged, this, [this](int i) {
+        m_model->setStatusFilter(m_filterCombo->itemData(i).toString());
+        updateEmptyState();
+    });
+    toolbar->addWidget(m_filterCombo);
 }
 
 void MainWindow::buildReferenceTreeDock()
@@ -188,6 +264,23 @@ void MainWindow::reloadProjectList()
     m_treeView->expandToDepth(1);
 }
 
+void MainWindow::startMatch()
+{
+    if (m_app.matchService().isRunning())
+        return;
+    if (m_app.scanService().isRunning()) {
+        QMessageBox::information(this, tr("Match Library"),
+                                tr("Wait for the current scan to finish first."));
+        return;
+    }
+    if (m_model->captureCount() == 0) {
+        QMessageBox::information(this, tr("Match Library"),
+                                tr("Add and scan a folder of photos first."));
+        return;
+    }
+    m_app.matchService().start();
+}
+
 void MainWindow::newReferenceTree()
 {
     if (m_builder->isRunning())
@@ -215,6 +308,7 @@ void MainWindow::buildCentralWidget()
     m_grid->setGridSize(QSize(212, 232));
     m_grid->setWordWrap(true);
     m_grid->setSpacing(6);
+    m_grid->setItemDelegate(new CaptureDelegate(m_grid));
 
     m_emptyHint = new QLabel(this);
     m_emptyHint->setAlignment(Qt::AlignCenter);
@@ -237,8 +331,12 @@ void MainWindow::updateEmptyState()
         return;
 
     const int count = m_model->captureCount();
+    const bool filtered = !m_model->statusFilter().isEmpty();
     if (count > 0) {
         stack->setCurrentIndex(1);
+    } else if (filtered) {
+        m_emptyHint->setText(tr("No captures match this filter."));
+        stack->setCurrentIndex(0);
     } else {
         const bool haveRoots = !m_app.settings().watchedRoots().isEmpty();
         m_emptyHint->setText(haveRoots
@@ -247,7 +345,10 @@ void MainWindow::updateEmptyState()
         stack->setCurrentIndex(0);
     }
 
-    m_statusLabel->setText(count > 0 ? tr("%n capture(s)", nullptr, count) : QString());
+    m_statusLabel->setText(count > 0
+                               ? tr("%n capture(s)%1", nullptr, count)
+                                     .arg(filtered ? tr(" (filtered)") : QString())
+                               : QString());
 }
 
 void MainWindow::addWatchedFolder()
