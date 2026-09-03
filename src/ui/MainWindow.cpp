@@ -18,6 +18,7 @@
 #include "ui/CoveragePanel.h"
 #include "ui/ImageViewer.h"
 #include "ui/NewProjectDialog.h"
+#include "ui/ReviewPane.h"
 
 #include <QAction>
 #include <QCloseEvent>
@@ -128,6 +129,8 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 m_model->reload();
                 updateEmptyState();
                 refreshCoverage();
+                m_reviewPane->reload();
+                updateReviewTabText();
                 if (!s.ok()) {
                     statusBar()->showMessage(tr("Match failed: %1").arg(s.error), 10000);
                     return;
@@ -396,8 +399,20 @@ void MainWindow::updateMissingList()
             item->setForeground(QColor(0xB0, 0x50, 0x00));
     }
 
-    m_tabs->setTabText(2, missing.isEmpty() ? tr("Missing Species")
-                                            : tr("Missing Species (%1)").arg(missing.size()));
+    const int missingTab = m_tabs->indexOf(m_missingList);
+    if (missingTab >= 0)
+        m_tabs->setTabText(missingTab, missing.isEmpty()
+                                          ? tr("Missing Species")
+                                          : tr("Missing Species (%1)").arg(missing.size()));
+}
+
+void MainWindow::updateReviewTabText()
+{
+    const int reviewTab = m_tabs->indexOf(m_reviewPane);
+    if (reviewTab < 0)
+        return;
+    const int n = m_reviewPane->queueCount();
+    m_tabs->setTabText(reviewTab, n > 0 ? tr("Review (%1)").arg(n) : tr("Review"));
 }
 
 void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicked)
@@ -612,12 +627,22 @@ void MainWindow::buildCentralWidget()
     m_photoStack->addWidget(m_emptyHint);   // index 0
     m_photoStack->addWidget(m_grid);        // index 1
 
+    m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), this);
+    connect(m_reviewPane, &ReviewPane::queueChanged, this, [this] {
+        m_model->reload();
+        updateEmptyState();
+        refreshCoverage();
+        updateReviewTabText();
+    });
+
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(buildBrowsePage(), tr("Browse"));
     m_tabs->addTab(m_photoStack, tr("All Photos"));
+    m_tabs->addTab(m_reviewPane, tr("Review"));
     m_tabs->addTab(buildMissingPage(), tr("Missing Species"));
     m_tabs->setCurrentIndex(1);   // start on All Photos
     setCentralWidget(m_tabs);
+    updateReviewTabText();
 
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel);

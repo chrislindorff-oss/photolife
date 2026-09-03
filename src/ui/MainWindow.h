@@ -39,6 +39,7 @@ class ChecklistImporter;
 
 class CoveragePanel;
 class ImageViewer;
+class ReviewPane;
 
 class MainWindow : public QMainWindow
 {
@@ -67,6 +68,7 @@ private:
     void buildReferenceTreeDock();
     QWidget *buildBrowsePage();
     QWidget *buildMissingPage();
+    void updateReviewTabText();
     void reloadProjectList();
     void newReferenceTree();
     void refreshReferenceTree();
@@ -92,6 +94,7 @@ private:
     QLabel *m_taxonRepImage = nullptr;
     QLabel *m_taxonInfo = nullptr;
     QListWidget *m_missingList = nullptr;
+    ReviewPane *m_reviewPane = nullptr;
     ImageViewer *m_viewer = nullptr;
     coverage::ProjectCoverage m_coverage;
     qint64 m_selectedTaxon = 0;

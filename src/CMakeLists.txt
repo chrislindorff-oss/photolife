@@ -38,6 +38,7 @@ qt_add_library(photolife_core STATIC
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
+    ui/ReviewPane.h         ui/ReviewPane.cpp
 )
 
 configure_file(Version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/pl/Version.h" @ONLY)

@@ -290,9 +290,13 @@ int main(int argc, char *argv[])
                     }
                 }
             }
-            QTimer::singleShot(600, [&] {
-                if (QWidget *w = QApplication::topLevelWidgets().value(0))
-                    w->grab().save(out);
+            QTimer::singleShot(700, [&] {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    if (w->findChild<QTabWidget *>()) {
+                        w->grab().save(out);
+                        break;
+                    }
+                }
                 qtApp.quit();
             });
         });
