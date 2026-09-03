@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QAbstractItemModelTester>
+#include <QTreeView>
 
 #include "db/Database.h"
 #include "model/TaxonomyTreeModel.h"
@@ -37,6 +38,8 @@ private slots:
     void passesModelTester();
     void emptyProjectHasNoRows();
     void photographedOnlyFilterHidesUnphotographedSubtrees();
+    void indexForTaxonReflectsVisibility();
+    void filterToggleKeepsExpansionAndSelection();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -154,6 +157,79 @@ void TestTaxonomyTreeModel::photographedOnlyFilterHidesUnphotographedSubtrees()
 
     model.setPhotographedOnly(false);
     QCOMPARE(model.rowCount(model.index(0, 0)), 2);   // Pterostylis is back
+}
+
+void TestTaxonomyTreeModel::indexForTaxonReflectsVisibility()
+{
+    coverage::ProjectCoverage cov;
+    for (qint64 id : {qint64(47217), qint64(800), qint64(900)})
+        cov.byTaxon[id].subtreeHasPhotos = true;
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+
+    const QModelIndex diuris = model.indexForTaxon(800);
+    QVERIFY(diuris.isValid());
+    QCOMPARE(diuris.data(model::TaxonomyTreeModel::InatIdRole).toLongLong(), qint64(800));
+    QVERIFY(model.indexForTaxon(801).isValid());   // Pterostylis, currently shown
+    QVERIFY(!model.indexForTaxon(999999).isValid());
+
+    model.setPhotographedOnly(true);
+    QVERIFY(model.indexForTaxon(800).isValid());   // Diuris still shown
+    QVERIFY(!model.indexForTaxon(801).isValid());  // Pterostylis now hidden
+
+    model.setPhotographedOnly(false);
+    QVERIFY(model.indexForTaxon(801).isValid());   // back
+}
+
+void TestTaxonomyTreeModel::filterToggleKeepsExpansionAndSelection()
+{
+    coverage::ProjectCoverage cov;
+    for (qint64 id : {qint64(47217), qint64(800), qint64(900)})
+        cov.byTaxon[id].subtreeHasPhotos = true;
+
+    model::TaxonomyTreeModel model(*m_db);
+    QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::Fatal);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+
+    QTreeView view;
+    view.setModel(&model);
+    view.expand(model.indexForTaxon(47217));   // family
+    view.expand(model.indexForTaxon(800));     // Diuris
+    view.setCurrentIndex(model.indexForTaxon(900));   // Diuris pardina
+    QVERIFY(view.isExpanded(model.indexForTaxon(800)));
+
+    // The MainWindow snapshot/restore, inlined.
+    auto toggle = [&](bool on) {
+        QList<qint64> expanded;
+        for (qint64 id : {qint64(47217), qint64(800), qint64(801), qint64(900), qint64(901)})
+            if (const QModelIndex i = model.indexForTaxon(id); i.isValid() && view.isExpanded(i))
+                expanded << id;
+        const qint64 current =
+            view.currentIndex().data(model::TaxonomyTreeModel::InatIdRole).toLongLong();
+
+        model.setPhotographedOnly(on);
+
+        for (qint64 id : expanded)
+            if (const QModelIndex i = model.indexForTaxon(id); i.isValid())
+                view.setExpanded(i, true);
+        if (const QModelIndex c = model.indexForTaxon(current); c.isValid())
+            view.setCurrentIndex(c);
+    };
+
+    toggle(true);
+    QVERIFY(view.isExpanded(model.indexForTaxon(800)));           // Diuris still open
+    QCOMPARE(view.currentIndex().data(model::TaxonomyTreeModel::InatIdRole).toLongLong(),
+             qint64(900));                                        // still on Diuris pardina
+    QVERIFY(!model.indexForTaxon(801).isValid());                 // Pterostylis hidden
+
+    toggle(false);
+    QVERIFY(view.isExpanded(model.indexForTaxon(800)));           // still open after untick
+    QCOMPARE(view.currentIndex().data(model::TaxonomyTreeModel::InatIdRole).toLongLong(),
+             qint64(900));
+    QVERIFY(model.indexForTaxon(801).isValid());                  // Pterostylis reappeared
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

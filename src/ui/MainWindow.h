@@ -2,7 +2,11 @@
 
 #include "coverage/CoverageCalculator.h"
 
+#include <QList>
 #include <QMainWindow>
+#include <QModelIndex>
+
+#include <functional>
 
 class QCheckBox;
 class QLabel;
@@ -13,7 +17,6 @@ class QTabWidget;
 class QTreeView;
 class QComboBox;
 class QAction;
-class QModelIndex;
 class QAbstractItemModel;
 
 namespace pl {
@@ -78,6 +81,9 @@ private:
     void importChecklist();
     void refreshCoverage();
     void onTreeSelectionChanged();
+    void selectTaxonInTree(qint64 inatId);
+    QList<qint64> collectExpandedTaxa(const QModelIndex &parent = {}) const;
+    void mutateTreePreservingState(const std::function<void()> &mutate);
     void updateMissingList();
     void openViewer(QAbstractItemModel *model, const QModelIndex &index);
     int currentProjectId() const;
@@ -102,6 +108,8 @@ private:
     HelpWindow *m_helpWindow = nullptr;
     coverage::ProjectCoverage m_coverage;
     qint64 m_selectedTaxon = 0;
+    qint64 m_lastSelectedTaxon = 0;   // last taxon the user chose; survives a filter toggle
+    bool m_restoringTreeState = false;
     QAction *m_scanAction = nullptr;
     QAction *m_cancelAction = nullptr;
     QAction *m_addFolderAction = nullptr;

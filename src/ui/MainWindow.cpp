@@ -321,8 +321,11 @@ void MainWindow::buildReferenceTreeDock()
 
     m_photographedOnly = new QCheckBox(tr("Only taxa I've photographed"), panel);
     connect(m_photographedOnly, &QCheckBox::toggled, this, [this](bool on) {
-        m_treeModel->setPhotographedOnly(on);
-        m_treeView->expandToDepth(on ? 6 : 1);
+        const bool wasCollapsed = collectExpandedTaxa().isEmpty();
+        mutateTreePreservingState([this, on] { m_treeModel->setPhotographedOnly(on); });
+        if (on && wasCollapsed)
+            m_treeView->expandToDepth(6);   // one-shot reveal of the photographed taxa
+        onTreeSelectionChanged();
     });
 
     m_treeView = new QTreeView(panel);
@@ -365,23 +368,80 @@ void MainWindow::refreshCoverage()
     const int pid = currentProjectId();
     if (pid <= 0 || !m_app.database().isOpen()) {
         m_coveragePanel->clear();
-        m_treeModel->setCoverage({});
+        mutateTreePreservingState([this] { m_treeModel->setCoverage({}); });
+        onTreeSelectionChanged();
         return;
     }
     m_coverage = coverage::computeCoverage(m_app.database().connectionName(), pid);
     coverage::pickRepresentatives(m_app.database().connectionName(), pid);
     m_coveragePanel->setCoverage(m_coverage);
-    m_treeModel->setCoverage(m_coverage);
+    mutateTreePreservingState([this] { m_treeModel->setCoverage(m_coverage); });
     updateMissingList();
     onTreeSelectionChanged();
 }
 
+QList<qint64> MainWindow::collectExpandedTaxa(const QModelIndex &parent) const
+{
+    QList<qint64> ids;
+    const int rows = m_treeModel->rowCount(parent);
+    for (int r = 0; r < rows; ++r) {
+        const QModelIndex idx = m_treeModel->index(r, 0, parent);
+        if (m_treeView->isExpanded(idx)) {
+            ids << idx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong();
+            ids += collectExpandedTaxa(idx);   // only descend into expanded nodes
+        }
+    }
+    return ids;
+}
+
+void MainWindow::mutateTreePreservingState(const std::function<void()> &mutate)
+{
+    // Snapshot while the view is idle (nothing here forces a layout).
+    const QList<qint64> expanded = collectExpandedTaxa();
+    const QModelIndex topIdx = m_treeView->indexAt(QPoint(2, 2));
+    const qint64 topTaxon = topIdx.isValid()
+                                ? topIdx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong()
+                                : 0;
+    const QModelIndex curIdx = m_treeView->currentIndex();
+    const int curColumn = curIdx.isValid() ? curIdx.column() : 0;
+    const qint64 curTaxon = curIdx.isValid()
+                                ? curIdx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong()
+                                : m_lastSelectedTaxon;
+
+    m_restoringTreeState = true;
+    mutate();
+
+    // Restore: expansions, then the current index, then scroll (last — scrollTo
+    // forces the pending layout; nothing before it may).
+    for (qint64 id : expanded) {
+        const QModelIndex idx = m_treeModel->indexForTaxon(id);
+        if (idx.isValid())
+            m_treeView->setExpanded(idx, true);
+    }
+    if (curTaxon > 0) {
+        const QModelIndex idx = m_treeModel->indexForTaxon(curTaxon);
+        if (idx.isValid())
+            m_treeView->setCurrentIndex(idx.sibling(idx.row(), curColumn));
+    }
+    if (const QModelIndex top = m_treeModel->indexForTaxon(topTaxon); top.isValid())
+        m_treeView->scrollTo(top, QAbstractItemView::PositionAtTop);
+    else if (m_treeView->currentIndex().isValid())
+        m_treeView->scrollTo(m_treeView->currentIndex(), QAbstractItemView::EnsureVisible);
+
+    m_restoringTreeState = false;
+}
+
 void MainWindow::onTreeSelectionChanged()
 {
+    if (m_restoringTreeState)
+        return;
+
     const QModelIndex idx = m_treeView->currentIndex();
     m_selectedTaxon = idx.isValid()
                           ? idx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong()
                           : 0;
+    if (m_selectedTaxon > 0)
+        m_lastSelectedTaxon = m_selectedTaxon;
     m_taxonModel->setTaxonScope(m_selectedTaxon);
 
     if (m_selectedTaxon <= 0) {
@@ -735,24 +795,25 @@ QWidget *MainWindow::buildMissingPage()
     m_missingList = new QListWidget(this);
     m_missingList->setAlternatingRowColors(true);
     connect(m_missingList, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
-        const qint64 inatId = item->data(Qt::UserRole).toLongLong();
-        std::function<bool(const QModelIndex &)> findAndSelect = [&](const QModelIndex &parent) {
-            for (int r = 0; r < m_treeModel->rowCount(parent); ++r) {
-                const QModelIndex idx = m_treeModel->index(r, 0, parent);
-                if (idx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong() == inatId) {
-                    m_treeView->setCurrentIndex(idx);
-                    m_treeView->scrollTo(idx);
-                    return true;
-                }
-                if (findAndSelect(idx))
-                    return true;
-            }
-            return false;
-        };
-        if (findAndSelect({}))
-            m_tabs->setCurrentIndex(0);
+        selectTaxonInTree(item->data(Qt::UserRole).toLongLong());
+        m_tabs->setCurrentIndex(0);   // Browse
     });
     return m_missingList;
+}
+
+void MainWindow::selectTaxonInTree(qint64 inatId)
+{
+    QModelIndex idx = m_treeModel->indexForTaxon(inatId);
+    if (!idx.isValid() && m_photographedOnly->isChecked()) {
+        // A missing (unphotographed) taxon is hidden by the filter — lift it,
+        // keeping the tree's position, then try again.
+        m_photographedOnly->setChecked(false);
+        idx = m_treeModel->indexForTaxon(inatId);
+    }
+    if (!idx.isValid())
+        return;
+    m_treeView->setCurrentIndex(idx);
+    m_treeView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
 }
 
 void MainWindow::updateEmptyState()

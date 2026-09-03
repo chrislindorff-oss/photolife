@@ -35,13 +35,20 @@ void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverag
         rebuild();
         return;
     }
-    if (!m_root->children.empty()) {
-        emit dataChanged(index(0, 0),
-                         index(int(m_root->children.size()) - 1, columnCount() - 1),
-                         {Qt::DisplayRole, Qt::FontRole, HasPhotosRole, SpeciesTotalRole,
-                          SpeciesWithPhotosRole});
-        emit layoutChanged();
-    }
+    // Structure is unchanged; coverage feeds several roles on every node.
+    emitCoverageDataChanged({});
+}
+
+void TaxonomyTreeModel::emitCoverageDataChanged(const QModelIndex &parent)
+{
+    const int n = rowCount(parent);
+    if (n == 0)
+        return;
+    emit dataChanged(index(0, 0, parent), index(n - 1, columnCount() - 1, parent),
+                     {Qt::DisplayRole, Qt::FontRole, Qt::ForegroundRole, Qt::ToolTipRole,
+                      HasPhotosRole, SpeciesTotalRole, SpeciesWithPhotosRole, StatusRole});
+    for (int r = 0; r < n; ++r)
+        emitCoverageDataChanged(index(r, 0, parent));
 }
 
 void TaxonomyTreeModel::setPhotographedOnly(bool on)
@@ -56,6 +63,7 @@ void TaxonomyTreeModel::rebuild()
 {
     beginResetModel();
     m_root = std::make_unique<Node>();
+    m_byId.clear();   // every Node is reallocated below
 
     // In "photographed only" mode a taxon is kept when its subtree has a photo.
     // subtreeHasPhotos rolls up, so a kept node's ancestors are always kept too
@@ -66,7 +74,6 @@ void TaxonomyTreeModel::rebuild()
         return m_coverage.byTaxon.value(inatId).subtreeHasPhotos;
     };
 
-    QHash<qint64, Node *> byId;
     std::vector<std::unique_ptr<Node>> pending;
     pending.reserve(m_flat.size());
     for (const taxonomy::TreeNode &tn : m_flat) {
@@ -74,7 +81,7 @@ void TaxonomyTreeModel::rebuild()
             continue;
         auto node = std::make_unique<Node>();
         node->data = tn;
-        byId.insert(tn.inatId, node.get());
+        m_byId.insert(tn.inatId, node.get());
         pending.push_back(std::move(node));
     }
 
@@ -82,7 +89,7 @@ void TaxonomyTreeModel::rebuild()
     for (auto &node : pending) {
         Node *parent = m_root.get();
         if (node->data.parentInatId) {
-            if (Node *found = byId.value(*node->data.parentInatId, nullptr))
+            if (Node *found = m_byId.value(*node->data.parentInatId, nullptr))
                 parent = found;
         }
         node->parent = parent;
@@ -90,6 +97,19 @@ void TaxonomyTreeModel::rebuild()
     }
 
     endResetModel();
+}
+
+QModelIndex TaxonomyTreeModel::indexForTaxon(qint64 inatId) const
+{
+    Node *node = m_byId.value(inatId, nullptr);
+    if (!node || !node->parent)
+        return {};
+    const auto &siblings = node->parent->children;
+    for (int i = 0; i < int(siblings.size()); ++i) {
+        if (siblings.at(i).get() == node)
+            return createIndex(i, 0, node);
+    }
+    return {};
 }
 
 TaxonomyTreeModel::Node *TaxonomyTreeModel::nodeFor(const QModelIndex &index) const

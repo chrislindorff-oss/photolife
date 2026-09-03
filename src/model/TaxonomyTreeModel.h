@@ -45,6 +45,10 @@ public:
     void setPhotographedOnly(bool on);
     bool photographedOnly() const { return m_photographedOnly; }
 
+    // The index of a taxon by its iNaturalist id, or an invalid index when the
+    // taxon is not currently in the tree (e.g. filtered out). Column 0.
+    QModelIndex indexForTaxon(qint64 inatId) const;
+
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override;
     QModelIndex parent(const QModelIndex &child) const override;
     int rowCount(const QModelIndex &parent = {}) const override;
@@ -62,11 +66,13 @@ private:
 
     Node *nodeFor(const QModelIndex &index) const;
     void rebuild();
+    void emitCoverageDataChanged(const QModelIndex &parent);
 
     pl::Database &m_db;
     int m_projectId = -1;
     QList<pl::taxonomy::TreeNode> m_flat;   // the project's taxa, parents first
     std::unique_ptr<Node> m_root;           // synthetic; its children are the real roots
+    QHash<qint64, Node *> m_byId;           // live nodes by iNat id, rebuilt each rebuild()
     pl::coverage::ProjectCoverage m_coverage;
     bool m_photographedOnly = false;
 };
