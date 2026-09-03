@@ -12,6 +12,9 @@ BUILD_DIR="${1:-$REPO_ROOT/build-appimage}"
 APPDIR="$BUILD_DIR/AppDir"
 TOOLS_DIR="$BUILD_DIR/tools"
 
+VERSION="$(git -C "$REPO_ROOT" describe --tags --always --match 'v*' 2>/dev/null | sed 's/^v//')"
+VERSION="${VERSION:-0.1.0}"
+
 mkdir -p "$TOOLS_DIR"
 fetch() {  # fetch <url> <dest>
     [ -x "$2" ] && return 0
@@ -36,9 +39,6 @@ cmake --build "$BUILD_DIR"
 echo ">> installing into AppDir"
 rm -rf "$APPDIR"
 DESTDIR="$APPDIR" cmake --install "$BUILD_DIR"
-
-VERSION="$(sed -n 's/.*PhotoLife version: //p' <<<"$(cmake -S "$REPO_ROOT" -B "$BUILD_DIR" -LA 2>/dev/null || true)")"
-VERSION="${VERSION:-0.1.0}"
 
 echo ">> bundling Qt and packing (version $VERSION)"
 export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake)}"
