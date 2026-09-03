@@ -3,9 +3,13 @@
 #include "app/Logging.h"
 #include "db/Database.h"
 #include "pl/Version.h"
+#include "net/HttpClient.h"
+#include "net/INatClient.h"
+#include "net/QtNetworkTransport.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
+#include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/MainWindow.h"
 
@@ -55,6 +59,16 @@ bool Application::initialize()
     m_libraryWatcher = std::make_unique<scan::LibraryWatcher>(*m_database);
     m_libraryWatcher->setRoots(m_settings->watchedRoots());
 
+    m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
+    m_http = std::make_unique<net::HttpClient>(
+        std::make_unique<net::QtNetworkTransport>(), m_taxonomyStore.get());
+    m_http->setUserAgent(QStringLiteral("%1/%2 (+%3)")
+                             .arg(QString::fromLatin1(kAppName),
+                                  QString::fromLatin1(kAppVersion),
+                                  QString::fromLatin1(kOrgDomain))
+                             .toUtf8());
+    m_inat = std::make_unique<net::INatClient>(*m_http);
+
     return true;
 }
 
@@ -88,6 +102,16 @@ scan::LibraryWatcher &Application::libraryWatcher()
 thumb::ThumbnailCache &Application::thumbnails()
 {
     return *m_thumbnails;
+}
+
+taxonomy::TaxonomyStore &Application::taxonomyStore()
+{
+    return *m_taxonomyStore;
+}
+
+net::INatClient &Application::inat()
+{
+    return *m_inat;
 }
 
 } // namespace pl

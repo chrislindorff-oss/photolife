@@ -6,8 +6,11 @@
 #include <cstdio>
 
 #include "app/Application.h"
+#include "db/Database.h"
 #include "scan/ScanService.h"
 #include "scan/ScanTypes.h"
+#include "taxonomy/ProjectBuilder.h"
+#include "taxonomy/TaxonomyStore.h"
 
 namespace {
 
@@ -48,6 +51,44 @@ int runHeadlessScan(pl::Application &app, const QStringList &roots)
     return exitCode;
 }
 
+// Headless "build a reference tree and exit" mode.
+int runHeadlessBuild(pl::Application &app, const pl::taxonomy::ProjectBuilder::Request &request)
+{
+    QEventLoop loop;
+    int exitCode = 0;
+
+    pl::taxonomy::TaxonomyStore store(app.database().connectionName());
+    pl::taxonomy::ProjectBuilder builder(app.inat(), store);
+
+    QObject::connect(&builder, &pl::taxonomy::ProjectBuilder::progress,
+                     [](const QString &phase, int done, int total) {
+                         if (total > 0)
+                             std::fprintf(stderr, "\r%-28s %d / %d      ",
+                                          phase.toUtf8().constData(), done, total);
+                         else
+                             std::fprintf(stderr, "\r%-28s            ",
+                                          phase.toUtf8().constData());
+                     });
+    QObject::connect(&builder, &pl::taxonomy::ProjectBuilder::finished,
+                     [&](bool ok, const QString &error, int projectId) {
+                         std::fprintf(stderr, "\n");
+                         if (ok) {
+                             qInfo().noquote()
+                                 << QStringLiteral("project %1 built: %2 taxa cached")
+                                        .arg(projectId)
+                                        .arg(store.projectTaxonInatIds(projectId).size());
+                         } else {
+                             qWarning().noquote() << "build failed:" << error;
+                             exitCode = 1;
+                         }
+                         loop.quit();
+                     });
+
+    QTimer::singleShot(0, [&] { builder.start(request); });
+    loop.exec();
+    return exitCode;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -63,6 +104,25 @@ int main(int argc, char *argv[])
         QStringLiteral("Scan <dir> into the catalogue and exit (repeatable)."),
         QStringLiteral("dir"));
     parser.addOption(scanOption);
+
+    const QCommandLineOption buildOption(
+        QStringLiteral("build-project"),
+        QStringLiteral("Build a reference tree named <name> from iNaturalist and exit."),
+        QStringLiteral("name"));
+    const QCommandLineOption taxonOption(
+        QStringLiteral("taxon"), QStringLiteral("Root taxon for --build-project."),
+        QStringLiteral("query"));
+    const QCommandLineOption rankOption(
+        QStringLiteral("rank"), QStringLiteral("Optional rank filter for --taxon."),
+        QStringLiteral("rank"));
+    const QCommandLineOption placeOption(
+        QStringLiteral("place"), QStringLiteral("Region for --build-project (blank = global)."),
+        QStringLiteral("query"));
+    parser.addOption(buildOption);
+    parser.addOption(taxonOption);
+    parser.addOption(rankOption);
+    parser.addOption(placeOption);
+
     parser.process(qtApp);
 
     pl::Application app;
@@ -71,6 +131,15 @@ int main(int argc, char *argv[])
 
     if (parser.isSet(scanOption))
         return runHeadlessScan(app, parser.values(scanOption));
+
+    if (parser.isSet(buildOption)) {
+        pl::taxonomy::ProjectBuilder::Request request;
+        request.projectName = parser.value(buildOption);
+        request.taxonQuery = parser.value(taxonOption);
+        request.rank = parser.value(rankOption);
+        request.placeQuery = parser.value(placeOption);
+        return runHeadlessBuild(app, request);
+    }
 
     app.showMainWindow();
     return QApplication::exec();

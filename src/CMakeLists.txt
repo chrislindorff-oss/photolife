@@ -17,6 +17,7 @@ qt_add_library(photolife_core STATIC
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
+    taxonomy/ProjectBuilder.h taxonomy/ProjectBuilder.cpp
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
     taxonomy/TaxonomyTypes.h
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
