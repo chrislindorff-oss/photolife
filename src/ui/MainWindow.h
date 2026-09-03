@@ -38,6 +38,7 @@ class ChecklistImporter;
 }
 
 class CoveragePanel;
+class HelpWindow;
 class ImageViewer;
 class ReviewPane;
 
@@ -57,6 +58,7 @@ private:
     void buildCentralWidget();
     void restoreLayout();
     void showAbout();
+    void showHelp();
 
     void addWatchedFolder();
     void startScan();
@@ -96,6 +98,7 @@ private:
     QListWidget *m_missingList = nullptr;
     ReviewPane *m_reviewPane = nullptr;
     ImageViewer *m_viewer = nullptr;
+    HelpWindow *m_helpWindow = nullptr;
     coverage::ProjectCoverage m_coverage;
     qint64 m_selectedTaxon = 0;
     QAction *m_scanAction = nullptr;

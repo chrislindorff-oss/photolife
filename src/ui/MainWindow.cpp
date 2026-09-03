@@ -18,6 +18,7 @@
 #include "thumb/ThumbnailCache.h"
 #include "ui/AliasEditorDialog.h"
 #include "ui/CoveragePanel.h"
+#include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
 #include "ui/NewProjectDialog.h"
 #include "ui/ReviewPane.h"
@@ -238,6 +239,10 @@ void MainWindow::buildMenus()
     quit->setMenuRole(QAction::QuitRole);
 
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
+    QAction *helpContents = helpMenu->addAction(
+        tr("%1 &Help").arg(QString::fromLatin1(kAppName)), this, &MainWindow::showHelp);
+    helpContents->setShortcut(QKeySequence::HelpContents);
+    helpMenu->addSeparator();
     QAction *checkUpdate = helpMenu->addAction(tr("Check for &Updates…"), this, [this] {
         auto &checker = m_app.updateChecker();
         statusBar()->showMessage(tr("Checking for updates…"), 4000);
@@ -860,6 +865,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
     m_app.settings().setMainWindowGeometry(saveGeometry());
     m_app.settings().setMainWindowState(saveState());
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::showHelp()
+{
+    if (!m_helpWindow)
+        m_helpWindow = new HelpWindow(this);
+    m_helpWindow->showPage();
 }
 
 void MainWindow::showAbout()

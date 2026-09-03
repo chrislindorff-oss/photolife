@@ -38,6 +38,7 @@ qt_add_library(photolife_core STATIC
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
     ui/AliasEditorDialog.h  ui/AliasEditorDialog.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
+    ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
@@ -75,7 +76,8 @@ else()
     message(STATUS "LibRaw not found: RAW-only captures will show a placeholder")
 endif()
 
-# Schema migrations are compiled in so the binary is self-contained.
+# Schema migrations and the help pages are compiled in so the binary is
+# self-contained.
 qt_add_resources(photolife_core "photolife_migrations"
     PREFIX "/"
     BASE "${CMAKE_SOURCE_DIR}/resources"
@@ -83,6 +85,13 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/003_matching.sql"
+)
+
+qt_add_resources(photolife_core "photolife_help"
+    PREFIX "/"
+    BASE "${CMAKE_SOURCE_DIR}/resources"
+    FILES
+        "${CMAKE_SOURCE_DIR}/resources/help/help.html"
 )
 
 # GUI executable.

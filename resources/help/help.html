@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>PhotoLife Help</title></head>
+<body>
+
+<h1>PhotoLife Help</h1>
+
+<p>PhotoLife builds a catalogue alongside your nature-photo library and hangs
+each photo on the tree of life. It never moves, renames or edits your files &mdash;
+it reads them and keeps its own database.</p>
+
+<h2>Contents</h2>
+<ul>
+  <li><a href="#workflow">The workflow at a glance</a></li>
+  <li><a href="#library">1. Add your photo folders</a></li>
+  <li><a href="#trees">2. Build a reference tree</a></li>
+  <li><a href="#checklist">3. Import a regional checklist (optional)</a></li>
+  <li><a href="#match">4. Match your photos</a></li>
+  <li><a href="#review">5. Review the uncertain matches</a></li>
+  <li><a href="#browse">Browsing &amp; coverage</a></li>
+  <li><a href="#viewer">The image viewer</a></li>
+  <li><a href="#names">Learned names</a></li>
+  <li><a href="#files">Where PhotoLife keeps things</a></li>
+  <li><a href="#raw">RAW files</a></li>
+  <li><a href="#shortcuts">Keyboard shortcuts</a></li>
+  <li><a href="#cli">Command line</a></li>
+</ul>
+
+<hr>
+
+<h2 id="workflow">The workflow at a glance</h2>
+<ol>
+  <li><b>Add a folder</b> of photos to the library &rarr; PhotoLife scans it.</li>
+  <li><b>Build a reference tree</b> for a group and region (e.g. Orchids of Victoria)
+      from iNaturalist.</li>
+  <li><b>Import a checklist</b> CSV to add rare species and conservation status
+      (optional).</li>
+  <li><b>Match Library</b> &rarr; every photo is tied to a taxon by its folder and
+      file name.</li>
+  <li><b>Review</b> the ones PhotoLife was unsure about.</li>
+  <li><b>Browse</b> the tree and watch your coverage grow.</li>
+</ol>
+<p>Steps 2&ndash;4 need an internet connection (they query the iNaturalist API);
+everything is cached, so afterwards PhotoLife works offline.</p>
+
+<h2 id="library">1. Add your photo folders</h2>
+<p><b>File &rarr; Add Folder to Library&hellip;</b> and choose a folder. PhotoLife
+walks it, records every image, and groups a RAW file and its same-name JPEG as one
+<i>capture</i>. It skips junk (<tt>Thumbs.db</tt>, sidecar files, folders like
+&ldquo;To Sort and Upload&rdquo;).</p>
+<p>It watches your folders afterwards and re-scans automatically when they change.
+<b>File &rarr; Rescan Library</b> forces a full re-scan; unchanged files are never
+re-read.</p>
+<p>Your folder names matter: a <i>Family / Genus / Species</i> tree with scientific
+names in the file names matches best, but PhotoLife copes with synonyms, misspellings,
+<tt>sp.</tt>, hybrids, aggregates, and common-name folders for fauna.</p>
+
+<h2 id="trees">2. Build a reference tree</h2>
+<p><b>File &rarr; New Reference Tree&hellip;</b> Give it a name, a root taxon
+(<i>Orchidaceae</i>), an optional rank, and a region (<i>Victoria, AU</i> &mdash;
+leave blank for worldwide). PhotoLife resolves the place and taxon against
+iNaturalist, pulls the region&rsquo;s species list, and fills in the intermediate
+ranks so the tree is connected from kingdom down to species.</p>
+<p>You can keep several trees and switch between them with the drop-down at the top
+of the <b>Reference Trees</b> panel on the left. <b>File &rarr; Refresh Reference
+Tree</b> re-pulls the current one from iNaturalist.</p>
+
+<h2 id="checklist">3. Import a regional checklist</h2>
+<p><b>File &rarr; Import Checklist&hellip;</b> and pick a CSV of
+<tt>&lt;name&gt;,&lt;conservation status&gt;</tt> rows (such as a state vascular-plant
+list). PhotoLife adds any species in the current tree&rsquo;s genera &mdash;
+including rarities with no iNaturalist observations &mdash; and records their threat
+status, which then shows in the coverage panel and the tree tooltips.</p>
+
+<h2 id="match">4. Match your photos</h2>
+<p><b>File &rarr; Match Library.</b> For each capture PhotoLife parses the folder
+path and the file name, reconciles them against the cached taxonomy (including
+synonyms), scores the result, and either applies it automatically or puts it in the
+review queue. Re-running Match never disturbs a decision you made yourself.</p>
+<p>In the <b>All Photos</b> tab a coloured dot on each thumbnail shows its status:
+<span style="color:#2E7D32">&#9679;</span> automatic,
+<span style="color:#E69A00">&#9679;</span> needs review,
+<span style="color:#C62828">&#9679;</span> unmatched,
+<span style="color:#1565C0">&#9679;</span> confirmed by you.
+The <b>Show</b> box filters by status.</p>
+
+<h2 id="review">5. Review the uncertain matches</h2>
+<p>The <b>Review</b> tab lists everything PhotoLife was unsure about, grouped by
+folder. For the selected photo you see its guess, a ranked list of alternatives, and
+a search box. Then:</p>
+<ul>
+  <li><b>Confirm</b> &mdash; accept the highlighted taxon. PhotoLife learns the
+      name, so the same oddity is never queued again.</li>
+  <li><b>Reject</b> &mdash; there is no good match; drop it from the queue.</li>
+  <li><b>Genus only</b> &mdash; tie it to the genus (for <tt>sp.</tt> photos).</li>
+  <li><b>Not a taxon</b> &mdash; this folder is a place or a staging folder, not a
+      species.</li>
+  <li><b>Skip</b> &mdash; come back to it later.</li>
+  <li><b>Apply to folder</b> &mdash; give the chosen taxon to every remaining
+      pending photo in the same folder.</li>
+</ul>
+
+<h2 id="browse">Browsing &amp; coverage</h2>
+<p>The <b>Browse</b> tab follows your selection in the tree: pick a taxon and you see
+its cover photo, its details, and a grid of just its photos. The <b>Coverage</b>
+column in the tree shows a <b>&#10004;</b> for photographed species, a
+<b>&middot;</b> for missing ones, and a &ldquo;have / total&rdquo; count on genera and
+families.</p>
+<p>The panel under the tree summarises the whole project: species photographed,
+threatened-species coverage broken out by status, and the most recent capture. The
+<b>Missing Species</b> tab is a plain list of the gaps &mdash; activate one to jump
+to it in the tree.</p>
+
+<h2 id="viewer">The image viewer</h2>
+<p>Double-click any thumbnail to open the full-size viewer. Left/Right (or Page
+Up/Down) move through the current set, Home/End jump to the ends, and Esc closes it.</p>
+
+<h2 id="names">Learned names</h2>
+<p><b>File &rarr; Learned Names&hellip;</b> lists the corrections PhotoLife has picked
+up from your reviewing. Forgetting one puts the affected photos back in the queue on
+the next Match Library run.</p>
+
+<h2 id="files">Where PhotoLife keeps things</h2>
+<p>The catalogue database and the thumbnail cache live in your user data folder
+(<tt>~/.local/share/PhotoLife</tt> on Linux, <tt>%LOCALAPPDATA%\PhotoLife</tt> on
+Windows). Your original photos are never touched. Deleting that folder resets
+PhotoLife without affecting a single photo.</p>
+
+<h2 id="raw">RAW files</h2>
+<p>When a shot has both a RAW and a JPEG, PhotoLife shows the JPEG. For a RAW with no
+JPEG sibling it reads the embedded preview &mdash; if this build was compiled with
+LibRaw. Otherwise a RAW-only capture shows a plain placeholder tile; the photo is
+still fully catalogued and matched.</p>
+
+<h2 id="shortcuts">Keyboard shortcuts</h2>
+<table border="1" cellpadding="4" cellspacing="0">
+  <tr><td><b>Ctrl+O</b></td><td>Add Folder to Library</td></tr>
+  <tr><td><b>F5</b></td><td>Rescan Library</td></tr>
+  <tr><td><b>F1</b></td><td>This help</td></tr>
+  <tr><td><b>Ctrl+Q</b></td><td>Quit</td></tr>
+  <tr><td colspan="2"><i>In the image viewer:</i></td></tr>
+  <tr><td><b>&larr; / &rarr;</b></td><td>Previous / next photo</td></tr>
+  <tr><td><b>Home / End</b></td><td>First / last photo</td></tr>
+  <tr><td><b>Esc</b></td><td>Close the viewer</td></tr>
+</table>
+
+<h2 id="cli">Command line</h2>
+<p>For scripting and first-time bulk imports, the same steps are available headless:</p>
+<pre>
+PhotoLife --scan &lt;folder&gt;
+PhotoLife --build-project "&lt;name&gt;" --taxon &lt;taxon&gt; --rank &lt;rank&gt; --place "&lt;region&gt;"
+PhotoLife --import-checklist &lt;file.csv&gt; --into "&lt;project&gt;" --source "&lt;label&gt;"
+PhotoLife --match
+</pre>
+
+<p style="color:gray"><small>PhotoLife &mdash; taxonomy and species lists from the
+iNaturalist API; read-only catalogue.</small></p>
+
+</body>
+</html>
