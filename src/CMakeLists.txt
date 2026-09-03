@@ -7,6 +7,7 @@ qt_add_library(photolife_core STATIC
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
+    match/MatchReviewer.h   match/MatchReviewer.cpp
     match/MatchService.h    match/MatchService.cpp
     match/NameParser.h      match/NameParser.cpp
     match/PathClassifier.h  match/PathClassifier.cpp
