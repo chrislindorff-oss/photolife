@@ -4,6 +4,7 @@ qt_add_library(photolife_core STATIC
     app/Logging.h           app/Logging.cpp
     db/Database.h           db/Database.cpp
     match/NameParser.h      match/NameParser.cpp
+    match/PathClassifier.h  match/PathClassifier.cpp
     model/CaptureListModel.h model/CaptureListModel.cpp
     model/TaxonomyTreeModel.h model/TaxonomyTreeModel.cpp
     net/HttpClient.h        net/HttpClient.cpp
