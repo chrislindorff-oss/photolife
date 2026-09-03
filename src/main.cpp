@@ -2,6 +2,7 @@
 #include <QCommandLineParser>
 #include <QEventLoop>
 #include <QTimer>
+#include <QWidget>
 
 #include <cstdio>
 
@@ -239,6 +240,12 @@ int main(int argc, char *argv[])
     parser.addOption(intoOption);
     parser.addOption(sourceOption);
 
+    const QCommandLineOption screenshotOption(
+        QStringLiteral("screenshot"),
+        QStringLiteral("Open the window, save a PNG to <file>, and exit."),
+        QStringLiteral("file"));
+    parser.addOption(screenshotOption);
+
     parser.process(qtApp);
 
     pl::Application app;
@@ -255,6 +262,18 @@ int main(int argc, char *argv[])
         request.rank = parser.value(rankOption);
         request.placeQuery = parser.value(placeOption);
         return runHeadlessBuild(app, request);
+    }
+
+    if (parser.isSet(screenshotOption)) {
+        app.showMainWindow();
+        const QString out = parser.value(screenshotOption);
+        QTimer::singleShot(1200, [&] {
+            if (QWidget *w = QApplication::activeWindow() ? QApplication::activeWindow()
+                                                          : QApplication::topLevelWidgets().value(0))
+                w->grab().save(out);
+            qtApp.quit();
+        });
+        return QApplication::exec();
     }
 
     if (parser.isSet(matchOption))

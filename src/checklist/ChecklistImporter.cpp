@@ -13,6 +13,20 @@ QString genusToken(const QString &name)
 {
     return name.section(QLatin1Char(' '), 0, 0).toLower();
 }
+
+// Real conservation statuses are short ("Rare", "Critically Endangered").
+// The VBA CSV occasionally has a note where a status should be.
+bool isPlausibleStatus(const QString &status)
+{
+    const QString s = status.trimmed();
+    if (s.isEmpty() || s.length() > 32)
+        return false;
+    if (s.split(QLatin1Char(' '), Qt::SkipEmptyParts).size() > 4)
+        return false;
+    const QString l = s.toLower();
+    return !l.contains(QLatin1String("list")) && !l.contains(QLatin1String("advisory"))
+           && !l.contains(QLatin1String("included"));
+}
 } // namespace
 
 ChecklistImporter::ChecklistImporter(pl::net::INatClient &inat, pl::taxonomy::TaxonomyStore &store,
@@ -92,7 +106,7 @@ void ChecklistImporter::processNext()
             if (pl::taxonomy::TaxonomyStore::foldName(acceptedName) != folded)
                 m_store.addName(taxonInatId, entry.name, QStringLiteral("synonym"));
 
-            if (!entry.status.isEmpty()) {
+            if (isPlausibleStatus(entry.status)) {
                 pl::taxonomy::StatusRecord status;
                 status.placeInatId = m_request.placeInatId;
                 status.status = entry.status;

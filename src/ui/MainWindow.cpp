@@ -16,6 +16,7 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/CoveragePanel.h"
+#include "ui/ImageViewer.h"
 #include "ui/NewProjectDialog.h"
 
 #include <QAction>
@@ -24,12 +25,16 @@
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
+#include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -40,11 +45,14 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStyledItemDelegate>
+#include <QTabWidget>
 #include <QToolBar>
 #include <QTreeView>
 #include <QSplitter>
 #include <QVBoxLayout>
 #include <QWidget>
+
+#include <functional>
 
 #include "db/Database.h"
 
@@ -270,6 +278,8 @@ void MainWindow::buildReferenceTreeDock()
     m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_treeView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_treeView->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    connect(m_treeView->selectionModel(), &QItemSelectionModel::currentChanged,
+            this, &MainWindow::onTreeSelectionChanged);
 
     m_coveragePanel = new CoveragePanel(panel);
 
@@ -300,9 +310,123 @@ void MainWindow::refreshCoverage()
         m_treeModel->setCoverage({});
         return;
     }
-    const auto cov = coverage::computeCoverage(m_app.database().connectionName(), pid);
-    m_coveragePanel->setCoverage(cov);
-    m_treeModel->setCoverage(cov);
+    m_coverage = coverage::computeCoverage(m_app.database().connectionName(), pid);
+    coverage::pickRepresentatives(m_app.database().connectionName(), pid);
+    m_coveragePanel->setCoverage(m_coverage);
+    m_treeModel->setCoverage(m_coverage);
+    updateMissingList();
+    onTreeSelectionChanged();
+}
+
+void MainWindow::onTreeSelectionChanged()
+{
+    const QModelIndex idx = m_treeView->currentIndex();
+    m_selectedTaxon = idx.isValid()
+                          ? idx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong()
+                          : 0;
+    m_taxonModel->setTaxonScope(m_selectedTaxon);
+
+    if (m_selectedTaxon <= 0) {
+        m_taxonInfo->setText(tr("<i>Select a taxon in the tree to see its photos.</i>"));
+        m_taxonRepImage->clear();
+        return;
+    }
+
+    const auto cov = m_coverage.byTaxon.value(m_selectedTaxon);
+    QString html = QStringLiteral("<h3 style='margin:0'>%1</h3>").arg(cov.name.toHtmlEscaped());
+    if (!cov.commonName.isEmpty() && cov.commonName != cov.name)
+        html += QStringLiteral("<div>%1</div>").arg(cov.commonName.toHtmlEscaped());
+    html += QStringLiteral("<div style='color:gray'>%1</div>").arg(cov.rank);
+    if (!cov.status.isEmpty())
+        html += QStringLiteral("<div><b>%1</b></div>").arg(cov.status.toHtmlEscaped());
+
+    if (cov.speciesTotal > 0)
+        html += QStringLiteral("<p>%1 of %2 species photographed</p>")
+                    .arg(cov.speciesWithPhotos).arg(cov.speciesTotal);
+    html += QStringLiteral("<p>%1</p>")
+                .arg(cov.captureCount == 1 ? tr("1 capture")
+                                           : tr("%1 captures").arg(cov.captureCount));
+    if (!cov.newestCapture.isEmpty())
+        html += QStringLiteral("<p style='color:gray'>Most recent: %1</p>").arg(cov.newestCapture);
+    m_taxonInfo->setText(html);
+
+    const auto rep = coverage::representativeFor(m_app.database().connectionName(),
+                                                 currentProjectId(), m_selectedTaxon);
+    if (!rep.previewPath.isEmpty()) {
+        const QPixmap pm = m_app.thumbnails().thumbnail(rep.previewHash, rep.previewPath,
+                                                        thumb::ThumbnailCache::kGridPx);
+        m_taxonRepImage->setPixmap(pm.isNull()
+                                       ? QPixmap()
+                                       : pm.scaled(m_taxonRepImage->size(), Qt::KeepAspectRatio,
+                                                   Qt::SmoothTransformation));
+    } else {
+        m_taxonRepImage->setPixmap({});
+        m_taxonRepImage->setText(tr("no photo"));
+    }
+}
+
+void MainWindow::updateMissingList()
+{
+    if (!m_missingList)
+        return;
+    m_missingList->clear();
+
+    QList<coverage::TaxonCoverage> missing;
+    for (const auto &tc : m_coverage.byTaxon) {
+        if (tc.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) == 0
+            && !tc.subtreeHasPhotos) {
+            missing.append(tc);
+        }
+    }
+    std::sort(missing.begin(), missing.end(),
+              [](const coverage::TaxonCoverage &a, const coverage::TaxonCoverage &b) {
+                  return a.name < b.name;
+              });
+
+    for (const auto &tc : missing) {
+        QString label = tc.name;
+        if (!tc.status.isEmpty())
+            label += QStringLiteral("   — %1").arg(tc.status);
+        auto *item = new QListWidgetItem(label, m_missingList);
+        item->setData(Qt::UserRole, tc.inatId);
+        if (!tc.status.isEmpty())
+            item->setForeground(QColor(0xB0, 0x50, 0x00));
+    }
+
+    m_tabs->setTabText(2, missing.isEmpty() ? tr("Missing Species")
+                                            : tr("Missing Species (%1)").arg(missing.size()));
+}
+
+void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicked)
+{
+    if (!model || !clicked.isValid())
+        return;
+
+    QVector<ImageViewer::Item> items;
+    int start = 0;
+    for (int r = 0; r < model->rowCount(); ++r) {
+        const QModelIndex idx = model->index(r, 0);
+        ImageViewer::Item item;
+        item.path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
+        item.caption = idx.data(Qt::DisplayRole).toString();
+        if (const QString matched = idx.data(model::CaptureListModel::MatchedNameRole).toString();
+            !matched.isEmpty())
+            item.caption += QStringLiteral("  ·  ") + matched;
+        if (item.path.isEmpty())
+            continue;
+        if (r == clicked.row())
+            start = items.size();
+        items.append(item);
+    }
+    if (items.isEmpty())
+        return;
+
+    if (!m_viewer)
+        m_viewer = new ImageViewer(this);
+    m_viewer->setItems(items, start);
+    m_viewer->show();
+    m_viewer->raise();
+    m_viewer->activateWindow();
 }
 
 void MainWindow::refreshReferenceTree()
@@ -449,38 +573,111 @@ void MainWindow::newReferenceTree()
     m_builder->start(dialog.request());
 }
 
+namespace {
+
+QListView *makeCaptureGrid(QWidget *parent, QAbstractItemModel *model)
+{
+    auto *grid = new QListView(parent);
+    grid->setModel(model);
+    grid->setViewMode(QListView::IconMode);
+    grid->setResizeMode(QListView::Adjust);
+    grid->setMovement(QListView::Static);
+    grid->setUniformItemSizes(true);
+    grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    grid->setIconSize(QSize(192, 192));
+    grid->setGridSize(QSize(212, 232));
+    grid->setWordWrap(true);
+    grid->setSpacing(6);
+    return grid;
+}
+
+} // namespace
+
 void MainWindow::buildCentralWidget()
 {
-    m_grid = new QListView(this);
-    m_grid->setModel(m_model);
-    m_grid->setViewMode(QListView::IconMode);
-    m_grid->setResizeMode(QListView::Adjust);
-    m_grid->setMovement(QListView::Static);
-    m_grid->setUniformItemSizes(true);
-    m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_grid->setIconSize(QSize(192, 192));
-    m_grid->setGridSize(QSize(212, 232));
-    m_grid->setWordWrap(true);
-    m_grid->setSpacing(6);
+    m_grid = makeCaptureGrid(this, m_model);
     m_grid->setItemDelegate(new CaptureDelegate(m_grid));
+    connect(m_grid, &QAbstractItemView::doubleClicked, this,
+            [this](const QModelIndex &i) { openViewer(m_model, i); });
 
     m_emptyHint = new QLabel(this);
     m_emptyHint->setAlignment(Qt::AlignCenter);
     m_emptyHint->setWordWrap(true);
     m_emptyHint->setEnabled(false);
 
-    auto *stack = new QStackedWidget(this);
-    stack->addWidget(m_emptyHint);   // index 0
-    stack->addWidget(m_grid);        // index 1
-    setCentralWidget(stack);
+    m_photoStack = new QStackedWidget(this);
+    m_photoStack->addWidget(m_emptyHint);   // index 0
+    m_photoStack->addWidget(m_grid);        // index 1
+
+    m_tabs = new QTabWidget(this);
+    m_tabs->addTab(buildBrowsePage(), tr("Browse"));
+    m_tabs->addTab(m_photoStack, tr("All Photos"));
+    m_tabs->addTab(buildMissingPage(), tr("Missing Species"));
+    m_tabs->setCurrentIndex(1);   // start on All Photos
+    setCentralWidget(m_tabs);
 
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel);
 }
 
+QWidget *MainWindow::buildBrowsePage()
+{
+    m_taxonModel = new model::CaptureListModel(m_app.database(), m_app.thumbnails(), this);
+
+    m_taxonRepImage = new QLabel(this);
+    m_taxonRepImage->setFixedSize(120, 120);
+    m_taxonRepImage->setAlignment(Qt::AlignCenter);
+    m_taxonRepImage->setFrameShape(QFrame::StyledPanel);
+
+    m_taxonInfo = new QLabel(this);
+    m_taxonInfo->setTextFormat(Qt::RichText);
+    m_taxonInfo->setWordWrap(true);
+    m_taxonInfo->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+
+    auto *header = new QHBoxLayout;
+    header->addWidget(m_taxonRepImage);
+    header->addWidget(m_taxonInfo, 1);
+
+    m_taxonGrid = makeCaptureGrid(this, m_taxonModel);
+    m_taxonGrid->setItemDelegate(new CaptureDelegate(m_taxonGrid));
+    connect(m_taxonGrid, &QAbstractItemView::doubleClicked, this,
+            [this](const QModelIndex &i) { openViewer(m_taxonModel, i); });
+
+    auto *page = new QWidget(this);
+    auto *layout = new QVBoxLayout(page);
+    layout->addLayout(header);
+    layout->addWidget(m_taxonGrid, 1);
+    return page;
+}
+
+QWidget *MainWindow::buildMissingPage()
+{
+    m_missingList = new QListWidget(this);
+    m_missingList->setAlternatingRowColors(true);
+    connect(m_missingList, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
+        const qint64 inatId = item->data(Qt::UserRole).toLongLong();
+        std::function<bool(const QModelIndex &)> findAndSelect = [&](const QModelIndex &parent) {
+            for (int r = 0; r < m_treeModel->rowCount(parent); ++r) {
+                const QModelIndex idx = m_treeModel->index(r, 0, parent);
+                if (idx.data(model::TaxonomyTreeModel::InatIdRole).toLongLong() == inatId) {
+                    m_treeView->setCurrentIndex(idx);
+                    m_treeView->scrollTo(idx);
+                    return true;
+                }
+                if (findAndSelect(idx))
+                    return true;
+            }
+            return false;
+        };
+        if (findAndSelect({}))
+            m_tabs->setCurrentIndex(0);
+    });
+    return m_missingList;
+}
+
 void MainWindow::updateEmptyState()
 {
-    auto *stack = qobject_cast<QStackedWidget *>(centralWidget());
+    QStackedWidget *stack = m_photoStack;
     if (!stack)
         return;
 

@@ -1,12 +1,19 @@
 #pragma once
 
+#include "coverage/CoverageCalculator.h"
+
 #include <QMainWindow>
 
 class QLabel;
 class QListView;
+class QListWidget;
+class QStackedWidget;
+class QTabWidget;
 class QTreeView;
 class QComboBox;
 class QAction;
+class QModelIndex;
+class QAbstractItemModel;
 
 namespace pl {
 
@@ -31,6 +38,7 @@ class ChecklistImporter;
 }
 
 class CoveragePanel;
+class ImageViewer;
 
 class MainWindow : public QMainWindow
 {
@@ -57,11 +65,16 @@ private:
     void updateEmptyState();
 
     void buildReferenceTreeDock();
+    QWidget *buildBrowsePage();
+    QWidget *buildMissingPage();
     void reloadProjectList();
     void newReferenceTree();
     void refreshReferenceTree();
     void importChecklist();
     void refreshCoverage();
+    void onTreeSelectionChanged();
+    void updateMissingList();
+    void openViewer(QAbstractItemModel *model, const QModelIndex &index);
     int currentProjectId() const;
     void startMatch();
 
@@ -71,6 +84,17 @@ private:
     QListView *m_grid = nullptr;
     QLabel *m_emptyHint = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QTabWidget *m_tabs = nullptr;
+    QStackedWidget *m_photoStack = nullptr;
+
+    model::CaptureListModel *m_taxonModel = nullptr;
+    QListView *m_taxonGrid = nullptr;
+    QLabel *m_taxonRepImage = nullptr;
+    QLabel *m_taxonInfo = nullptr;
+    QListWidget *m_missingList = nullptr;
+    ImageViewer *m_viewer = nullptr;
+    coverage::ProjectCoverage m_coverage;
+    qint64 m_selectedTaxon = 0;
     QAction *m_scanAction = nullptr;
     QAction *m_cancelAction = nullptr;
     QAction *m_addFolderAction = nullptr;
