@@ -14,6 +14,9 @@ namespace scan {
 class ScanService;
 class LibraryWatcher;
 }
+namespace match {
+class MatchService;
+}
 namespace thumb {
 class ThumbnailCache;
 }
@@ -46,6 +49,7 @@ public:
     Settings &settings();
     scan::ScanService &scanService();
     scan::LibraryWatcher &libraryWatcher();
+    match::MatchService &matchService();
     thumb::ThumbnailCache &thumbnails();
     taxonomy::TaxonomyStore &taxonomyStore();
     net::INatClient &inat();
@@ -56,6 +60,7 @@ private:
     std::unique_ptr<thumb::ThumbnailCache> m_thumbnails;
     std::unique_ptr<scan::ScanService> m_scanService;
     std::unique_ptr<scan::LibraryWatcher> m_libraryWatcher;
+    std::unique_ptr<match::MatchService> m_matchService;
     std::unique_ptr<taxonomy::TaxonomyStore> m_taxonomyStore;
     std::unique_ptr<net::HttpClient> m_http;
     std::unique_ptr<net::INatClient> m_inat;

@@ -7,6 +7,7 @@
 
 #include "app/Application.h"
 #include "db/Database.h"
+#include "match/MatchService.h"
 #include "scan/ScanService.h"
 #include "scan/ScanTypes.h"
 #include "taxonomy/ProjectBuilder.h"
@@ -89,6 +90,41 @@ int runHeadlessBuild(pl::Application &app, const pl::taxonomy::ProjectBuilder::R
     return exitCode;
 }
 
+// Headless "match the catalogue against the taxonomy and exit" mode.
+int runHeadlessMatch(pl::Application &app)
+{
+    QEventLoop loop;
+    int exitCode = 0;
+
+    auto &matcher = app.matchService();
+    QObject::connect(&matcher, &pl::match::MatchService::progress, [](int done, int total) {
+        std::fprintf(stderr, "\rmatching %d / %d   ", done, total);
+    });
+    QObject::connect(&matcher, &pl::match::MatchService::finished,
+                     [&](pl::match::MatchEngine::Stats s) {
+                         std::fprintf(stderr, "\n");
+                         if (!s.ok()) {
+                             qWarning().noquote() << "match failed:" << s.error;
+                             exitCode = 1;
+                         } else {
+                             qInfo().noquote()
+                                 << QStringLiteral("%1 captures | %2 auto | %3 pending | "
+                                                   "%4 unmatched%5")
+                                        .arg(s.captures)
+                                        .arg(s.autoApplied)
+                                        .arg(s.pending)
+                                        .arg(s.unmatched)
+                                        .arg(s.cancelled ? QStringLiteral(" (cancelled)")
+                                                         : QString());
+                         }
+                         loop.quit();
+                     });
+
+    QTimer::singleShot(0, [&] { matcher.start(); });
+    loop.exec();
+    return exitCode;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -123,6 +159,11 @@ int main(int argc, char *argv[])
     parser.addOption(rankOption);
     parser.addOption(placeOption);
 
+    const QCommandLineOption matchOption(
+        QStringLiteral("match"),
+        QStringLiteral("Match the catalogue against the cached taxonomy and exit."));
+    parser.addOption(matchOption);
+
     parser.process(qtApp);
 
     pl::Application app;
@@ -140,6 +181,9 @@ int main(int argc, char *argv[])
         request.placeQuery = parser.value(placeOption);
         return runHeadlessBuild(app, request);
     }
+
+    if (parser.isSet(matchOption))
+        return runHeadlessMatch(app);
 
     app.showMainWindow();
     return QApplication::exec();

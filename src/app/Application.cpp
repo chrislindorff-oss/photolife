@@ -5,6 +5,7 @@
 #include "pl/Version.h"
 #include "net/HttpClient.h"
 #include "net/INatClient.h"
+#include "match/MatchService.h"
 #include "net/QtNetworkTransport.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
@@ -59,6 +60,8 @@ bool Application::initialize()
     m_libraryWatcher = std::make_unique<scan::LibraryWatcher>(*m_database);
     m_libraryWatcher->setRoots(m_settings->watchedRoots());
 
+    m_matchService = std::make_unique<match::MatchService>(dbPath);
+
     m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
     m_http = std::make_unique<net::HttpClient>(
         std::make_unique<net::QtNetworkTransport>(), m_taxonomyStore.get());
@@ -97,6 +100,11 @@ scan::ScanService &Application::scanService()
 scan::LibraryWatcher &Application::libraryWatcher()
 {
     return *m_libraryWatcher;
+}
+
+match::MatchService &Application::matchService()
+{
+    return *m_matchService;
 }
 
 thumb::ThumbnailCache &Application::thumbnails()

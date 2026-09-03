@@ -3,6 +3,8 @@ qt_add_library(photolife_core STATIC
     app/Application.h        app/Application.cpp
     app/Logging.h           app/Logging.cpp
     db/Database.h           db/Database.cpp
+    match/MatchEngine.h     match/MatchEngine.cpp
+    match/MatchService.h    match/MatchService.cpp
     match/NameParser.h      match/NameParser.cpp
     match/PathClassifier.h  match/PathClassifier.cpp
     match/TaxonResolver.h   match/TaxonResolver.cpp
