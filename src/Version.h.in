@@ -1,0 +1,10 @@
+#pragma once
+
+namespace pl {
+
+inline constexpr const char *kAppName     = "PhotoLife";
+inline constexpr const char *kAppVersion  = "@PROJECT_VERSION@";
+inline constexpr const char *kOrgName     = "PhotoLife";
+inline constexpr const char *kOrgDomain   = "photolife.local";
+
+} // namespace pl
