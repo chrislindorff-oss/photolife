@@ -5,12 +5,17 @@
 #include "model/CaptureListModel.h"
 #include "model/TaxonomyTreeModel.h"
 #include "pl/Version.h"
+#include "checklist/ChecklistImporter.h"
+#include "checklist/ChecklistParser.h"
+#include "coverage/CoverageCalculator.h"
 #include "match/MatchService.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
 #include "taxonomy/ProjectBuilder.h"
+#include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
+#include "ui/CoveragePanel.h"
 #include "ui/NewProjectDialog.h"
 
 #include <QAction>
@@ -18,9 +23,12 @@
 #include <QComboBox>
 #include <QDockWidget>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QKeySequence>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListView>
 #include <QMenu>
 #include <QMenuBar>
@@ -34,6 +42,7 @@
 #include <QStyledItemDelegate>
 #include <QToolBar>
 #include <QTreeView>
+#include <QSplitter>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -85,6 +94,8 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     m_model = new model::CaptureListModel(m_app.database(), m_app.thumbnails(), this);
     m_treeModel = new model::TaxonomyTreeModel(m_app.database(), this);
     m_builder = new taxonomy::ProjectBuilder(m_app.inat(), m_app.taxonomyStore(), this);
+    m_checklistImporter =
+        new checklist::ChecklistImporter(m_app.inat(), m_app.taxonomyStore(), this);
 
     buildMenus();
     buildCentralWidget();
@@ -108,6 +119,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 m_matchAction->setEnabled(true);
                 m_model->reload();
                 updateEmptyState();
+                refreshCoverage();
                 if (!s.ok()) {
                     statusBar()->showMessage(tr("Match failed: %1").arg(s.error), 10000);
                     return;
@@ -121,6 +133,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     connect(m_builder, &taxonomy::ProjectBuilder::finished, this,
             [this](bool ok, const QString &error, int projectId) {
                 m_newTreeAction->setEnabled(true);
+                m_refreshTreeAction->setEnabled(true);
                 if (!ok) {
                     statusBar()->showMessage(tr("Reference tree build failed: %1").arg(error),
                                              10000);
@@ -131,6 +144,27 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 const int idx = m_projectCombo->findData(projectId);
                 if (idx >= 0)
                     m_projectCombo->setCurrentIndex(idx);
+                refreshCoverage();
+            });
+
+    connect(m_checklistImporter, &checklist::ChecklistImporter::progress, this,
+            [this](int done, int total) {
+                statusBar()->showMessage(tr("Importing checklist %1 / %2").arg(done).arg(total));
+            });
+    connect(m_checklistImporter, &checklist::ChecklistImporter::finished, this,
+            [this](bool ok, const QString &error, int imported, int skipped, int unresolved) {
+                m_importChecklistAction->setEnabled(true);
+                if (!ok) {
+                    statusBar()->showMessage(tr("Checklist import failed: %1").arg(error), 10000);
+                    return;
+                }
+                statusBar()->showMessage(
+                    tr("Checklist imported — %1 added, %2 skipped, %3 unresolved")
+                        .arg(imported).arg(skipped).arg(unresolved),
+                    8000);
+                m_treeModel->setProject(currentProjectId());
+                m_treeView->expandToDepth(1);
+                refreshCoverage();
             });
 
     auto &scanner = m_app.scanService();
@@ -170,6 +204,10 @@ void MainWindow::buildMenus()
     fileMenu->addSeparator();
     m_newTreeAction = fileMenu->addAction(tr("&New Reference Tree…"),
                                           this, &MainWindow::newReferenceTree);
+    m_refreshTreeAction = fileMenu->addAction(tr("Re&fresh Reference Tree"),
+                                              this, &MainWindow::refreshReferenceTree);
+    m_importChecklistAction = fileMenu->addAction(tr("&Import Checklist…"),
+                                                  this, &MainWindow::importChecklist);
     m_matchAction = fileMenu->addAction(tr("&Match Library"), this, &MainWindow::startMatch);
 
     fileMenu->addSeparator();
@@ -190,6 +228,7 @@ void MainWindow::buildMenus()
     toolbar->addAction(m_cancelAction);
     toolbar->addSeparator();
     toolbar->addAction(m_newTreeAction);
+    toolbar->addAction(m_importChecklistAction);
     toolbar->addAction(m_matchAction);
 
     toolbar->addSeparator();
@@ -221,6 +260,7 @@ void MainWindow::buildReferenceTreeDock()
     connect(m_projectCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_treeModel->setProject(index >= 0 ? m_projectCombo->itemData(index).toInt() : -1);
         m_treeView->expandToDepth(1);
+        refreshCoverage();
     });
 
     m_treeView = new QTreeView(panel);
@@ -229,12 +269,124 @@ void MainWindow::buildReferenceTreeDock()
     m_treeView->setAlternatingRowColors(true);
     m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_treeView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_treeView->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+
+    m_coveragePanel = new CoveragePanel(panel);
+
+    auto *split = new QSplitter(Qt::Vertical, panel);
+    split->addWidget(m_treeView);
+    split->addWidget(m_coveragePanel);
+    split->setStretchFactor(0, 4);
+    split->setStretchFactor(1, 1);
 
     layout->addWidget(m_projectCombo);
-    layout->addWidget(m_treeView, 1);
+    layout->addWidget(split, 1);
     dock->setWidget(panel);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
-    resizeDocks({dock}, {340}, Qt::Horizontal);
+    resizeDocks({dock}, {360}, Qt::Horizontal);
+}
+
+int MainWindow::currentProjectId() const
+{
+    const QVariant data = m_projectCombo->currentData();
+    return data.isValid() ? data.toInt() : -1;
+}
+
+void MainWindow::refreshCoverage()
+{
+    const int pid = currentProjectId();
+    if (pid <= 0 || !m_app.database().isOpen()) {
+        m_coveragePanel->clear();
+        m_treeModel->setCoverage({});
+        return;
+    }
+    const auto cov = coverage::computeCoverage(m_app.database().connectionName(), pid);
+    m_coveragePanel->setCoverage(cov);
+    m_treeModel->setCoverage(cov);
+}
+
+void MainWindow::refreshReferenceTree()
+{
+    if (m_builder->isRunning())
+        return;
+    const int pid = currentProjectId();
+    if (pid <= 0) {
+        QMessageBox::information(this, tr("Refresh Reference Tree"),
+                                tr("Select a reference tree first."));
+        return;
+    }
+
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral(
+        "SELECT p.name, rt.name, rt.rank, pl.name "
+        "FROM project p "
+        "LEFT JOIN taxon rt ON rt.inat_id = p.root_taxon_inat_id "
+        "LEFT JOIN place pl ON pl.inat_id = p.place_inat_id WHERE p.id = ?"));
+    q.addBindValue(pid);
+    if (!q.exec() || !q.next() || q.value(1).isNull()) {
+        QMessageBox::information(this, tr("Refresh Reference Tree"),
+                                tr("This tree can't be refreshed automatically."));
+        return;
+    }
+
+    taxonomy::ProjectBuilder::Request request;
+    request.projectName = q.value(0).toString();
+    request.taxonQuery = q.value(1).toString();
+    request.rank = q.value(2).toString();
+    request.placeQuery = q.value(3).toString();
+
+    m_refreshTreeAction->setEnabled(false);
+    statusBar()->showMessage(tr("Refreshing reference tree…"));
+    m_builder->start(request);
+}
+
+void MainWindow::importChecklist()
+{
+    if (m_checklistImporter->isRunning())
+        return;
+    const int pid = currentProjectId();
+    if (pid <= 0) {
+        QMessageBox::information(this, tr("Import Checklist"),
+                                tr("Select or create a reference tree to import into first."));
+        return;
+    }
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Import Checklist CSV"), QDir::homePath(),
+        tr("CSV files (*.csv);;All files (*)"));
+    if (path.isEmpty())
+        return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, tr("Import Checklist"), tr("Could not read %1.").arg(path));
+        return;
+    }
+    const auto entries = checklist::parseChecklistCsv(file.readAll());
+    if (entries.isEmpty()) {
+        QMessageBox::information(this, tr("Import Checklist"),
+                                tr("No usable rows found in %1.").arg(QFileInfo(path).fileName()));
+        return;
+    }
+
+    const QString source = QInputDialog::getText(
+        this, tr("Import Checklist"), tr("Status source label:"), QLineEdit::Normal,
+        QFileInfo(path).completeBaseName());
+
+    checklist::ChecklistImporter::Request request;
+    request.projectId = pid;
+    request.source = source;
+    request.entries = entries;
+
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral("SELECT place_inat_id FROM project WHERE id = ?"));
+    q.addBindValue(pid);
+    if (q.exec() && q.next() && !q.value(0).isNull())
+        request.placeInatId = q.value(0).toLongLong();
+
+    m_importChecklistAction->setEnabled(false);
+    statusBar()->showMessage(tr("Importing %1 checklist rows…").arg(entries.size()));
+    m_checklistImporter->start(request);
 }
 
 void MainWindow::reloadProjectList()
@@ -255,6 +407,7 @@ void MainWindow::reloadProjectList()
 
     if (m_projectCombo->count() == 0) {
         m_treeModel->setProject(-1);
+        refreshCoverage();
         return;
     }
 
@@ -262,6 +415,7 @@ void MainWindow::reloadProjectList()
     m_projectCombo->setCurrentIndex(restore >= 0 ? restore : 0);
     m_treeModel->setProject(m_projectCombo->currentData().toInt());
     m_treeView->expandToDepth(1);
+    refreshCoverage();
 }
 
 void MainWindow::startMatch()

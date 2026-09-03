@@ -3,7 +3,9 @@
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
 
+#include <QColor>
 #include <QFont>
+#include <QStringList>
 
 namespace pl::model {
 
@@ -50,6 +52,18 @@ void TaxonomyTreeModel::setProject(int projectId)
     endResetModel();
 }
 
+void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
+{
+    m_coverage = coverage;
+    if (!m_root->children.empty()) {
+        emit dataChanged(index(0, 0),
+                         index(int(m_root->children.size()) - 1, columnCount() - 1),
+                         {Qt::DisplayRole, Qt::FontRole, HasPhotosRole, SpeciesTotalRole,
+                          SpeciesWithPhotosRole});
+        emit layoutChanged();
+    }
+}
+
 TaxonomyTreeModel::Node *TaxonomyTreeModel::nodeFor(const QModelIndex &index) const
 {
     if (!index.isValid())
@@ -94,7 +108,7 @@ int TaxonomyTreeModel::rowCount(const QModelIndex &parent) const
 
 int TaxonomyTreeModel::columnCount(const QModelIndex &) const
 {
-    return 2;
+    return 3;
 }
 
 QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
@@ -105,13 +119,27 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
     const taxonomy::TreeNode &t = node->data;
 
     switch (role) {
-    case Qt::DisplayRole:
+    case Qt::DisplayRole: {
         if (index.column() == 0) {
             if (!t.commonName.isEmpty() && t.commonName != t.name)
                 return QStringLiteral("%1  ·  %2").arg(t.name, t.commonName);
             return t.name;
         }
-        return t.rank;
+        if (index.column() == 1)
+            return t.rank;
+
+        // Column 2: coverage.
+        const auto cov = m_coverage.byTaxon.constFind(t.inatId);
+        if (cov == m_coverage.byTaxon.constEnd())
+            return {};
+        if (t.isLeafRank)
+            return cov->subtreeHasPhotos ? QStringLiteral("✔") : QStringLiteral("·");
+        if (cov->speciesTotal > 0)
+            return QStringLiteral("%1 / %2").arg(cov->speciesWithPhotos).arg(cov->speciesTotal);
+        return {};
+    }
+    case Qt::TextAlignmentRole:
+        return index.column() == 2 ? int(Qt::AlignCenter) : QVariant();
     case Qt::FontRole:
         if (index.column() == 0 && t.isLeafRank && t.inRegion) {
             QFont f;
@@ -119,14 +147,37 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
             return f;
         }
         return {};
-    case Qt::ToolTipRole:
-        return t.inRegion ? QObject::tr("Recorded in this region") : QVariant();
+    case Qt::ForegroundRole: {
+        if (index.column() != 2 || !t.isLeafRank)
+            return {};
+        const auto cov = m_coverage.byTaxon.constFind(t.inatId);
+        if (cov == m_coverage.byTaxon.constEnd())
+            return {};
+        return cov->subtreeHasPhotos ? QColor(0x2E, 0x7D, 0x32) : QColor(0xB0, 0xB0, 0xB0);
+    }
+    case Qt::ToolTipRole: {
+        QStringList bits;
+        if (t.inRegion)
+            bits << tr("Recorded in this region");
+        if (const auto cov = m_coverage.byTaxon.constFind(t.inatId);
+            cov != m_coverage.byTaxon.constEnd() && !cov->status.isEmpty())
+            bits << cov->status;
+        return bits.isEmpty() ? QVariant() : bits.join(QStringLiteral(" · "));
+    }
     case InatIdRole:
         return t.inatId;
     case RankRole:
         return t.rank;
     case InRegionRole:
         return t.inRegion;
+    case SpeciesTotalRole:
+        return m_coverage.byTaxon.value(t.inatId).speciesTotal;
+    case SpeciesWithPhotosRole:
+        return m_coverage.byTaxon.value(t.inatId).speciesWithPhotos;
+    case HasPhotosRole:
+        return m_coverage.byTaxon.value(t.inatId).subtreeHasPhotos;
+    case StatusRole:
+        return m_coverage.byTaxon.value(t.inatId).status;
     default:
         return {};
     }
@@ -136,7 +187,11 @@ QVariant TaxonomyTreeModel::headerData(int section, Qt::Orientation orientation,
 {
     if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
         return {};
-    return section == 0 ? tr("Taxon") : tr("Rank");
+    switch (section) {
+    case 0:  return tr("Taxon");
+    case 1:  return tr("Rank");
+    default: return tr("Coverage");
+    }
 }
 
 } // namespace pl::model

@@ -26,6 +26,11 @@ class ProjectBuilder;
 namespace match {
 class MatchEngine;
 }
+namespace checklist {
+class ChecklistImporter;
+}
+
+class CoveragePanel;
 
 class MainWindow : public QMainWindow
 {
@@ -54,6 +59,10 @@ private:
     void buildReferenceTreeDock();
     void reloadProjectList();
     void newReferenceTree();
+    void refreshReferenceTree();
+    void importChecklist();
+    void refreshCoverage();
+    int currentProjectId() const;
     void startMatch();
 
     Application &m_app;
@@ -70,7 +79,11 @@ private:
     QTreeView *m_treeView = nullptr;
     QComboBox *m_projectCombo = nullptr;
     taxonomy::ProjectBuilder *m_builder = nullptr;
+    checklist::ChecklistImporter *m_checklistImporter = nullptr;
+    CoveragePanel *m_coveragePanel = nullptr;
     QAction *m_newTreeAction = nullptr;
+    QAction *m_refreshTreeAction = nullptr;
+    QAction *m_importChecklistAction = nullptr;
 
     QAction *m_matchAction = nullptr;
     QComboBox *m_filterCombo = nullptr;

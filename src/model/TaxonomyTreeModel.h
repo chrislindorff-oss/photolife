@@ -1,5 +1,6 @@
 #pragma once
 
+#include "coverage/CoverageCalculator.h"
 #include "taxonomy/TaxonomyTypes.h"
 
 #include <QAbstractItemModel>
@@ -25,6 +26,10 @@ public:
         InatIdRole = Qt::UserRole + 1,
         RankRole,
         InRegionRole,
+        SpeciesTotalRole,
+        SpeciesWithPhotosRole,
+        HasPhotosRole,
+        StatusRole,
     };
 
     explicit TaxonomyTreeModel(pl::Database &db, QObject *parent = nullptr);
@@ -32,6 +37,9 @@ public:
 
     void setProject(int projectId);
     int projectId() const { return m_projectId; }
+
+    // Coverage overlays "have / missing" and species counts onto the tree.
+    void setCoverage(const pl::coverage::ProjectCoverage &coverage);
 
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override;
     QModelIndex parent(const QModelIndex &child) const override;
@@ -53,6 +61,7 @@ private:
     pl::Database &m_db;
     int m_projectId = -1;
     std::unique_ptr<Node> m_root;   // synthetic; its children are the real roots
+    pl::coverage::ProjectCoverage m_coverage;
 };
 
 } // namespace pl::model
