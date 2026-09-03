@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PhotoLife
+GenericName=Nature Photo Catalogue
+Comment=Catalogue nature photos against a taxonomic tree
+Exec=PhotoLife %F
+Icon=photolife
+Terminal=false
+Categories=Graphics;Photography;Database;
+MimeType=image/jpeg;image/png;image/tiff;
+Keywords=photo;nature;taxonomy;iNaturalist;species;

@@ -2,9 +2,14 @@
 
 namespace pl {
 
-inline constexpr const char *kAppName     = "PhotoLife";
-inline constexpr const char *kAppVersion  = "@PROJECT_VERSION@";
-inline constexpr const char *kOrgName     = "PhotoLife";
-inline constexpr const char *kOrgDomain   = "photolife.local";
+inline constexpr const char *kAppName        = "PhotoLife";
+inline constexpr const char *kAppVersion     = "@PROJECT_VERSION@";
+inline constexpr const char *kAppVersionFull = "@PHOTOLIFE_VERSION_FULL@";
+inline constexpr const char *kOrgName        = "PhotoLife";
+inline constexpr const char *kOrgDomain      = "photolife.local";
+inline constexpr const char *kHomepageUrl    = "@PROJECT_HOMEPAGE_URL@";
+
+// GitHub "owner/repo" the update check queries for the latest release.
+inline constexpr const char *kReleasesRepo   = "chrisl/photolife";
 
 } // namespace pl

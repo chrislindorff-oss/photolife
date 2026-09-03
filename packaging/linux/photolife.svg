@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a8f5f"/>
+      <stop offset="1" stop-color="#235740"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#bg)"/>
+  <!-- aperture-blade ring, hinting at a camera -->
+  <g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" opacity="0.9">
+    <circle cx="64" cy="64" r="30"/>
+  </g>
+  <!-- a leaf on the branch of a tree -->
+  <path d="M64 92 C64 74 64 58 64 40" stroke="#dff3e6" stroke-width="6"
+        stroke-linecap="round" fill="none"/>
+  <path d="M64 58 C50 54 40 44 40 30 C56 30 66 40 66 56 Z" fill="#dff3e6"/>
+  <path d="M64 74 C78 72 90 62 92 46 C74 44 62 56 62 72 Z" fill="#bfe6cf"/>
+</svg>

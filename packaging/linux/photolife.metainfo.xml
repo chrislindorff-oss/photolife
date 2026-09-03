@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>local.photolife.PhotoLife</id>
+  <name>PhotoLife</name>
+  <summary>Catalogue nature photos against a taxonomic tree</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LGPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      PhotoLife builds a catalogue alongside your nature photo library and hangs
+      each photo on the tree of life. It reads reference taxonomies and regional
+      species lists from iNaturalist and from checklist CSVs, matches your photos
+      to taxa by folder and file name, and shows coverage — which species you
+      have photographed and which branches are still bare.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">photolife.desktop</launchable>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-03">
+      <description><p>First packaged build: scan, taxonomy, matching, coverage, review.</p></description>
+    </release>
+  </releases>
+</component>

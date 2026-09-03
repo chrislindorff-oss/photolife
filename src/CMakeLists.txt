@@ -69,6 +69,28 @@ qt_add_resources(photolife_core "photolife_migrations"
 # GUI executable.
 qt_add_executable(photolife main.cpp)
 target_link_libraries(photolife PRIVATE photolife_core)
-set_target_properties(photolife PROPERTIES WIN32_EXECUTABLE ON)
+set_target_properties(photolife PROPERTIES
+    WIN32_EXECUTABLE ON
+    OUTPUT_NAME PhotoLife)
 
-install(TARGETS photolife RUNTIME DESTINATION bin)
+if(WIN32)
+    string(REPLACE "." "," _ver_commas "${PROJECT_VERSION}")
+    target_sources(photolife PRIVATE "${CMAKE_SOURCE_DIR}/packaging/windows/photolife.rc")
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/packaging/windows/photolife.rc" PROPERTIES
+        COMPILE_DEFINITIONS
+        "PHOTOLIFE_VERSION_RC=${_ver_commas},0;PHOTOLIFE_VERSION_STR=\"${PHOTOLIFE_VERSION_FULL}\"")
+    target_include_directories(photolife PRIVATE "${CMAKE_SOURCE_DIR}/packaging/windows")
+endif()
+
+install(TARGETS photolife
+    RUNTIME DESTINATION bin
+    BUNDLE DESTINATION .)
+
+if(UNIX AND NOT APPLE)
+    install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/photolife.desktop"
+            DESTINATION share/applications)
+    install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/photolife.svg"
+            DESTINATION share/icons/hicolor/scalable/apps)
+    install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/photolife.metainfo.xml"
+            DESTINATION share/metainfo)
+endif()
