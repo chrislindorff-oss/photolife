@@ -4,6 +4,7 @@ qt_add_library(photolife_core STATIC
     app/Logging.h           app/Logging.cpp
     checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
+    coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
     match/MatchService.h    match/MatchService.cpp
