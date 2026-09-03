@@ -6,6 +6,7 @@ qt_add_library(photolife_core STATIC
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
+    match/CandidateFinder.h match/CandidateFinder.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
     match/MatchReviewer.h   match/MatchReviewer.cpp
     match/MatchService.h    match/MatchService.cpp
@@ -14,6 +15,7 @@ qt_add_library(photolife_core STATIC
     match/TaxonResolver.h   match/TaxonResolver.cpp
     match/TextSimilarity.h  match/TextSimilarity.cpp
     model/CaptureListModel.h model/CaptureListModel.cpp
+    model/ReviewQueueModel.h model/ReviewQueueModel.cpp
     model/TaxonomyTreeModel.h model/TaxonomyTreeModel.cpp
     net/HttpClient.h        net/HttpClient.cpp
     net/INatClient.h        net/INatClient.cpp
