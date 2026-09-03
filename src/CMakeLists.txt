@@ -10,6 +10,7 @@ qt_add_library(photolife_core STATIC
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
+    thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
 )
 

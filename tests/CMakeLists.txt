@@ -5,6 +5,8 @@ function(photolife_test name)
     qt_add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE photolife_core Qt6::Test)
     add_test(NAME ${name} COMMAND ${name})
+    # Headless: no X11/Wayland on CI, and QImage IO needs a QPA plugin.
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endfunction()
 
 photolife_test(tst_database)
@@ -13,3 +15,4 @@ photolife_test(tst_filenameparser)
 photolife_test(tst_exif)
 photolife_test(tst_filescanner)
 photolife_test(tst_cataloguewriter)
+photolife_test(tst_thumbnailcache)
