@@ -22,7 +22,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qt6-base-dev qt6-base-dev-tools libqt6sql6-sqlite \
-            ninja-build libgl-dev
+            ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -47,6 +47,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
+
+      - name: Install LibRaw (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libraw-dev libjpeg-turbo8-dev
 
       - name: Install Qt ${{ matrix.qt }}
         uses: jurplel/install-qt-action@v4

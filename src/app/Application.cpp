@@ -8,6 +8,7 @@
 #include "match/MatchService.h"
 #include "net/QtNetworkTransport.h"
 #include "net/UpdateChecker.h"
+#include "raw/RawPreview.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
@@ -55,6 +56,8 @@ bool Application::initialize()
 
     const QString thumbDir = QDir(dataDir).filePath(QStringLiteral("thumbnails"));
     m_thumbnails = std::make_unique<thumb::ThumbnailCache>(thumbDir);
+    raw::installRawLoader(*m_thumbnails);
+    qInfo() << "RAW previews:" << (raw::isAvailable() ? "enabled (LibRaw)" : "unavailable");
 
     m_scanService = std::make_unique<scan::ScanService>(dbPath);
 

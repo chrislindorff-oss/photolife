@@ -23,6 +23,7 @@ qt_add_library(photolife_core STATIC
     net/QtNetworkTransport.h net/QtNetworkTransport.cpp
     net/Transport.h
     net/UpdateChecker.h     net/UpdateChecker.cpp
+    raw/RawPreview.h        raw/RawPreview.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp
@@ -56,6 +57,23 @@ target_link_libraries(photolife_core PUBLIC
     Qt6::Network
     Qt6::Concurrent
 )
+
+# LibRaw is optional: with it, RAW-only captures get an embedded-preview
+# thumbnail; without it they show a placeholder.
+option(PHOTOLIFE_USE_LIBRAW "Use LibRaw for camera-RAW previews when available" ON)
+if(PHOTOLIFE_USE_LIBRAW)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LibRaw IMPORTED_TARGET libraw)
+    endif()
+endif()
+if(LibRaw_FOUND)
+    target_link_libraries(photolife_core PRIVATE PkgConfig::LibRaw)
+    target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_LIBRAW)
+    message(STATUS "LibRaw ${LibRaw_VERSION}: RAW previews enabled")
+else()
+    message(STATUS "LibRaw not found: RAW-only captures will show a placeholder")
+endif()
 
 # Schema migrations are compiled in so the binary is self-contained.
 qt_add_resources(photolife_core "photolife_migrations"
