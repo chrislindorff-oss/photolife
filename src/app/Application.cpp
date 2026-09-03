@@ -3,7 +3,9 @@
 #include "app/Logging.h"
 #include "db/Database.h"
 #include "pl/Version.h"
+#include "scan/ScanService.h"
 #include "settings/Settings.h"
+#include "thumb/ThumbnailCache.h"
 #include "ui/MainWindow.h"
 
 #include <QCoreApplication>
@@ -44,6 +46,11 @@ bool Application::initialize()
     qInfo() << "Catalogue open:" << dbPath
             << "(schema v" << m_database->schemaVersion() << ")";
 
+    const QString thumbDir = QDir(dataDir).filePath(QStringLiteral("thumbnails"));
+    m_thumbnails = std::make_unique<thumb::ThumbnailCache>(thumbDir);
+
+    m_scanService = std::make_unique<scan::ScanService>(dbPath);
+
     return true;
 }
 
@@ -62,6 +69,16 @@ Database &Application::database()
 Settings &Application::settings()
 {
     return *m_settings;
+}
+
+scan::ScanService &Application::scanService()
+{
+    return *m_scanService;
+}
+
+thumb::ThumbnailCache &Application::thumbnails()
+{
+    return *m_thumbnails;
 }
 
 } // namespace pl

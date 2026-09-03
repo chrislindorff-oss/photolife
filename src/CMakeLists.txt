@@ -3,6 +3,7 @@ qt_add_library(photolife_core STATIC
     app/Application.h        app/Application.cpp
     app/Logging.h           app/Logging.cpp
     db/Database.h           db/Database.cpp
+    model/CaptureListModel.h model/CaptureListModel.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp

@@ -18,7 +18,8 @@ bool registerMetaTypes()
 const bool kMetaTypesRegistered = registerMetaTypes();
 } // namespace
 
-// Lives on the background thread. Opens its own catalogue connection there.
+// Does the work on the background thread. Opens its own catalogue connection
+// there; emits progress/finished, which are delivered to the service's thread.
 class ScanService::Worker : public QObject
 {
     Q_OBJECT
@@ -29,31 +30,25 @@ public:
     {
     }
 
-signals:
-    void progress(pl::scan::ScanProgress progress);
-    void finished(pl::scan::ScanSummary summary);
-
-public slots:
     void run()
     {
         ScanSummary summary;
+        auto cancelled = [this] { return m_cancel->load(); };
 
         Database db;
         if (!db.open(m_dbPath)) {
-            summary.error = db.error();
+            summary.error = db.error().isEmpty() ? QStringLiteral("cannot open catalogue")
+                                                 : db.error();
             emit finished(summary);
             return;
         }
 
-        auto cancelled = [this] { return m_cancel->load(); };
-
         FileScanner scanner;
-        scanner.setProgressCallback([this](const ScanProgress &p) { emit progress(p); });
         scanner.setCancelPredicate(cancelled);
+        scanner.setProgressCallback([this](const ScanProgress &p) { emit progress(p); });
 
         const QList<DiscoveredCapture> captures = scanner.scan(m_roots);
-
-        if (scanner.wasCancelled() || cancelled()) {
+        if (scanner.wasCancelled()) {
             summary.cancelled = true;
             emit finished(summary);
             return;
@@ -66,6 +61,10 @@ public slots:
 
         emit finished(summary);
     }
+
+signals:
+    void progress(pl::scan::ScanProgress progress);
+    void finished(pl::scan::ScanSummary summary);
 
 private:
     QString m_dbPath;
@@ -83,9 +82,10 @@ ScanService::~ScanService()
 {
     cancel();
     if (m_thread) {
-        m_thread->quit();
         m_thread->wait();
+        delete m_thread;
     }
+    delete m_worker;
 }
 
 void ScanService::start(const QStringList &roots)
@@ -95,15 +95,18 @@ void ScanService::start(const QStringList &roots)
     m_running = true;
     m_cancel = std::make_shared<std::atomic_bool>(false);
 
-    m_thread = new QThread(this);
-    auto *worker = new Worker(m_databasePath, roots, m_cancel);
-    worker->moveToThread(m_thread);
+    m_worker = new Worker(m_databasePath, roots, m_cancel);
+    Worker *worker = m_worker;
+    m_thread = QThread::create([worker] { worker->run(); });
 
-    connect(m_thread, &QThread::started, worker, &Worker::run);
     connect(worker, &Worker::progress, this, &ScanService::progress);
     connect(worker, &Worker::finished, this, &ScanService::onFinished);
-    connect(worker, &Worker::finished, worker, &QObject::deleteLater);
-    connect(worker, &Worker::finished, m_thread, &QThread::quit);
+    connect(m_thread, &QThread::finished, this, [this] {
+        m_thread->deleteLater();
+        m_worker->deleteLater();
+        m_thread = nullptr;
+        m_worker = nullptr;
+    });
 
     emit started();
     m_thread->start();
@@ -117,11 +120,6 @@ void ScanService::cancel()
 
 void ScanService::onFinished(ScanSummary summary)
 {
-    if (m_thread) {
-        m_thread->wait();
-        m_thread->deleteLater();
-        m_thread = nullptr;
-    }
     m_running = false;
     m_cancel.reset();
     emit finished(summary);

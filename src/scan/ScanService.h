@@ -41,6 +41,7 @@ private:
 
     QString m_databasePath;
     QThread *m_thread = nullptr;
+    Worker *m_worker = nullptr;
     std::shared_ptr<std::atomic_bool> m_cancel;
     bool m_running = false;
 };
