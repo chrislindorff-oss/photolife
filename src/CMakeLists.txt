@@ -12,6 +12,8 @@ qt_add_library(photolife_core STATIC
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
+    taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
+    taxonomy/TaxonomyTypes.h
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
 )
@@ -36,6 +38,7 @@ qt_add_resources(photolife_core "photolife_migrations"
     BASE "${CMAKE_SOURCE_DIR}/resources"
     FILES
         "${CMAKE_SOURCE_DIR}/resources/migrations/001_initial.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/002_taxonomy.sql"
 )
 
 # GUI executable.
