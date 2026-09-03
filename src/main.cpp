@@ -3,6 +3,8 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QWidget>
+#include <QTabWidget>
+#include <QTreeView>
 
 #include <cstdio>
 
@@ -244,7 +246,11 @@ int main(int argc, char *argv[])
         QStringLiteral("screenshot"),
         QStringLiteral("Open the window, save a PNG to <file>, and exit."),
         QStringLiteral("file"));
+    const QCommandLineOption tabOption(
+        QStringLiteral("tab"), QStringLiteral("Tab index for --screenshot."),
+        QStringLiteral("n"), QStringLiteral("1"));
     parser.addOption(screenshotOption);
+    parser.addOption(tabOption);
 
     parser.process(qtApp);
 
@@ -267,11 +273,28 @@ int main(int argc, char *argv[])
     if (parser.isSet(screenshotOption)) {
         app.showMainWindow();
         const QString out = parser.value(screenshotOption);
-        QTimer::singleShot(1200, [&] {
-            if (QWidget *w = QApplication::activeWindow() ? QApplication::activeWindow()
-                                                          : QApplication::topLevelWidgets().value(0))
-                w->grab().save(out);
-            qtApp.quit();
+        const int tab = parser.value(tabOption).toInt();
+        QTimer::singleShot(1000, [&] {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                if (auto *tabs = w->findChild<QTabWidget *>())
+                    tabs->setCurrentIndex(tab);
+                if (tab == 0) {
+                    if (auto *tree = w->findChild<QTreeView *>()) {
+                        tree->expandAll();
+                        // select the last visible row (a species, deep in the tree)
+                        QModelIndex idx = tree->model()->index(0, 0);
+                        while (tree->model()->rowCount(idx) > 0)
+                            idx = tree->model()->index(tree->model()->rowCount(idx) - 1, 0, idx);
+                        if (idx.isValid())
+                            tree->setCurrentIndex(idx);
+                    }
+                }
+            }
+            QTimer::singleShot(600, [&] {
+                if (QWidget *w = QApplication::topLevelWidgets().value(0))
+                    w->grab().save(out);
+                qtApp.quit();
+            });
         });
         return QApplication::exec();
     }

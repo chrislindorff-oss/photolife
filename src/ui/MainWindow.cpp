@@ -275,9 +275,12 @@ void MainWindow::buildReferenceTreeDock()
     m_treeView->setModel(m_treeModel);
     m_treeView->setUniformRowHeights(true);
     m_treeView->setAlternatingRowColors(true);
-    m_treeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_treeView->header()->setStretchLastSection(false);
+    m_treeView->header()->setSectionResizeMode(0, QHeaderView::Interactive);
     m_treeView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_treeView->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_treeView->setColumnWidth(0, 240);
+    m_treeView->setAutoScroll(false);   // keep shallow names visible when selecting deep nodes
     connect(m_treeView->selectionModel(), &QItemSelectionModel::currentChanged,
             this, &MainWindow::onTreeSelectionChanged);
 
