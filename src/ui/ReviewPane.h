@@ -3,6 +3,7 @@
 #include "match/CandidateFinder.h"
 #include "match/MatchReviewer.h"
 
+#include <QModelIndex>
 #include <QWidget>
 
 class QLabel;
@@ -10,6 +11,7 @@ class QLineEdit;
 class QListView;
 class QListWidget;
 class QPushButton;
+class QSortFilterProxyModel;
 
 namespace pl {
 class Database;
@@ -57,12 +59,17 @@ private:
     void skip();
     void applyToFolder();
 
+    int visibleQueueCount() const;        // proxy row count (respects the filter)
+    QModelIndex visibleQueueIndex(int row) const;
+
     pl::Database &m_db;
     pl::thumb::ThumbnailCache &m_thumbs;
     pl::model::ReviewQueueModel *m_queue;
+    QSortFilterProxyModel *m_queueProxy;
     pl::match::MatchReviewer m_reviewer;
     pl::match::CandidateFinder m_finder;
 
+    QLineEdit *m_photoFilter;
     QListView *m_queueView;
     QLabel *m_thumb;
     QLabel *m_info;

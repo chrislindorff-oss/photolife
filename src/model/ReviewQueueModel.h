@@ -34,6 +34,7 @@ public:
         ConfidenceRole,
         NoteRole,
         QualifierRole,
+        SearchTextRole,   // name + folder + guess, joined, for the filter box
     };
 
     ReviewQueueModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,

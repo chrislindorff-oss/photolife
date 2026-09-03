@@ -7,6 +7,7 @@
 #include <QPixmap>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QStringList>
 
 namespace pl::model {
 namespace {
@@ -76,6 +77,9 @@ QVariant ReviewQueueModel::data(const QModelIndex &index, int role) const
     case ConfidenceRole:     return row.confidence;
     case NoteRole:           return row.note;
     case QualifierRole:      return row.qualifier;
+    case SearchTextRole:
+        return QStringList{row.nameText, row.baseName, row.folderPath, row.guessName}
+            .join(QLatin1Char(' '));
     default:                 return {};
     }
 }

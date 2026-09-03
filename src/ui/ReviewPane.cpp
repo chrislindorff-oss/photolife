@@ -12,6 +12,7 @@
 #include <QListView>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QVBoxLayout>
 
@@ -26,11 +27,27 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs, QWid
     , m_db(db)
     , m_thumbs(thumbs)
     , m_queue(new ReviewQueueModel(db, thumbs, this))
+    , m_queueProxy(new QSortFilterProxyModel(this))
     , m_reviewer(db.connectionName())
     , m_finder(db.connectionName())
 {
+    m_queueProxy->setSourceModel(m_queue);
+    m_queueProxy->setFilterRole(ReviewQueueModel::SearchTextRole);
+    m_queueProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    m_queueProxy->setDynamicSortFilter(true);
+
+    m_photoFilter = new QLineEdit(this);
+    m_photoFilter->setPlaceholderText(tr("Filter photos by name, folder or guess…"));
+    m_photoFilter->setClearButtonEnabled(true);
+    connect(m_photoFilter, &QLineEdit::textChanged, this, [this](const QString &text) {
+        m_queueProxy->setFilterFixedString(text);
+        if (!m_queueView->currentIndex().isValid() && visibleQueueCount() > 0)
+            m_queueView->setCurrentIndex(visibleQueueIndex(0));
+        showCurrent();
+    });
+
     m_queueView = new QListView(this);
-    m_queueView->setModel(m_queue);
+    m_queueView->setModel(m_queueProxy);
     m_queueView->setIconSize(QSize(64, 64));
     m_queueView->setUniformItemSizes(true);
     m_queueView->setMinimumWidth(280);
@@ -106,8 +123,14 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs, QWid
     rightLayout->addWidget(m_empty);
     rightLayout->addWidget(detail, 1);
 
+    auto *leftPane = new QWidget(this);
+    auto *leftLayout = new QVBoxLayout(leftPane);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->addWidget(m_photoFilter);
+    leftLayout->addWidget(m_queueView, 1);
+
     auto *split = new QSplitter(Qt::Horizontal, this);
-    split->addWidget(m_queueView);
+    split->addWidget(leftPane);
     split->addWidget(rightStack);
     split->setStretchFactor(0, 1);
     split->setStretchFactor(1, 2);
@@ -121,14 +144,24 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs, QWid
 void ReviewPane::reload()
 {
     m_queue->reload();
-    if (m_queue->rowCount() > 0)
-        m_queueView->setCurrentIndex(m_queue->index(0));
+    if (visibleQueueCount() > 0)
+        m_queueView->setCurrentIndex(visibleQueueIndex(0));
     showCurrent();
 }
 
 int ReviewPane::queueCount() const
 {
-    return m_queue->queueCount();
+    return m_queue->queueCount();   // total pending, ignoring the UI filter
+}
+
+int ReviewPane::visibleQueueCount() const
+{
+    return m_queueProxy->rowCount();
+}
+
+QModelIndex ReviewPane::visibleQueueIndex(int row) const
+{
+    return m_queueProxy->index(row, 0);
 }
 
 qint64 ReviewPane::currentCaptureId() const
@@ -153,9 +186,13 @@ void ReviewPane::showCurrent()
 {
     const QModelIndex idx = m_queueView->currentIndex();
     const bool have = idx.isValid();
-    m_empty->setVisible(!have && m_queue->rowCount() == 0);
 
     if (!have) {
+        m_empty->setText(m_queue->queueCount() == 0
+                             ? tr("The review queue is empty. Run Match Library, or "
+                                  "everything is decided.")
+                             : tr("No photos match the filter."));
+        m_empty->setVisible(true);
         m_info->clear();
         m_guess->clear();
         m_candidates->clear();
@@ -164,6 +201,7 @@ void ReviewPane::showCurrent()
         m_bulkButton->setEnabled(false);
         return;
     }
+    m_empty->setVisible(false);
 
     const QString folder = idx.data(ReviewQueueModel::FolderPathRole).toString();
     const QString nameText = idx.data(ReviewQueueModel::NameTextRole).toString();
@@ -228,7 +266,12 @@ void ReviewPane::populateCandidates(const QList<pl::match::TaxonCandidate> &cand
 void ReviewPane::runSearch(const QString &text)
 {
     if (text.trimmed().size() < 3) {
-        showCurrent();
+        // Restore the auto-suggested candidates without disturbing the search box
+        // or the queue selection.
+        const QModelIndex idx = m_queueView->currentIndex();
+        if (idx.isValid())
+            populateCandidates(m_finder.forCapture(currentCaptureId()),
+                               idx.data(ReviewQueueModel::GuessInatIdRole).toLongLong());
         return;
     }
     populateCandidates(m_finder.search(text), 0);
@@ -238,10 +281,10 @@ void ReviewPane::afterDecision(qint64 captureId)
 {
     const QModelIndex idx = m_queueView->currentIndex();
     const int nextRow = idx.isValid() ? idx.row() : 0;
-    m_queue->dropCapture(captureId);
-    if (m_queue->rowCount() > 0) {
-        const int row = qMin(nextRow, m_queue->rowCount() - 1);
-        m_queueView->setCurrentIndex(m_queue->index(row));
+    m_queue->dropCapture(captureId);   // by id on the source; the proxy follows
+    if (visibleQueueCount() > 0) {
+        const int row = qMin(nextRow, visibleQueueCount() - 1);
+        m_queueView->setCurrentIndex(visibleQueueIndex(row));
     }
     showCurrent();
     emit queueChanged();
@@ -282,10 +325,10 @@ void ReviewPane::notATaxon()
 
 void ReviewPane::skip()
 {
-    if (m_queue->rowCount() < 2)
+    if (visibleQueueCount() < 2)
         return;
     const int row = m_queueView->currentIndex().row();
-    m_queueView->setCurrentIndex(m_queue->index((row + 1) % m_queue->rowCount()));
+    m_queueView->setCurrentIndex(visibleQueueIndex((row + 1) % visibleQueueCount()));
 }
 
 void ReviewPane::applyToFolder()
@@ -300,8 +343,8 @@ void ReviewPane::applyToFolder()
         return;
 
     m_queue->reload();
-    if (m_queue->rowCount() > 0)
-        m_queueView->setCurrentIndex(m_queue->index(0));
+    if (visibleQueueCount() > 0)
+        m_queueView->setCurrentIndex(visibleQueueIndex(0));
     showCurrent();
     emit queueChanged();
 }
