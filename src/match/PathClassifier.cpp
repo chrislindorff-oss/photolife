@@ -115,7 +115,12 @@ FolderClass classifyFolderName(const QString &folderName)
     const bool validGenus = validGenusRe.match(parsed.genus).hasMatch();
     const bool validEpithet = parsed.specificEpithet.isEmpty()
                               || validEpithetRe.match(parsed.specificEpithet).hasMatch();
-    if (!validGenus || !validEpithet)
+    // A Latin binomial's epithet is lower-case in the folder name too; an
+    // upper-case second word ("Pacific Black Duck") means it is a common name.
+    const QStringList words = stripped.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    const bool secondWordLower = words.size() < 2 || (!words.at(1).isEmpty()
+                                                      && words.at(1).front().isLower());
+    if (!validGenus || !validEpithet || (parsed.hasSpecies() && !secondWordLower))
         return out;   // Unknown
 
     if (parsed.hasSpecies() && !parsed.infraEpithet.isEmpty()) {
@@ -198,6 +203,11 @@ int classifyFolders(const QString &connectionName)
         const bool underTaxon = nearestKind(r.parentId, FolderKind::Taxon);
         const ParsedName parsed = parseName(stripNumbering(r.name));
 
+        // A multi-word Title-Case phrase directly under a group (no genus above)
+        // is a Fauna common-name species folder ("Pacific Black Duck").
+        static const QRegularExpression commonNameRe(
+            QStringLiteral(R"(^([A-Z][a-z'-]+ ){1,4}[A-Z][a-z'-]+$)"));
+
         if (underTaxon && !underGroup && parsed.genus.isEmpty()) {
             r.klass.kind = FolderKind::Locality;
         } else if (parsed.hasGenus() && parsed.isGenusOnly()) {
@@ -205,6 +215,11 @@ int classifyFolders(const QString &connectionName)
             r.klass.kind = FolderKind::Taxon;
             r.klass.rank = QStringLiteral("genus");
             r.klass.inferredName = parsed.genus;
+        } else if (underGroup && !underTaxon
+                   && commonNameRe.match(stripNumbering(r.name)).hasMatch()) {
+            r.klass.kind = FolderKind::Taxon;
+            r.klass.rank = QStringLiteral("species");
+            r.klass.inferredName = stripNumbering(r.name);
         } else if (underTaxon) {
             r.klass.kind = FolderKind::Locality;
         }

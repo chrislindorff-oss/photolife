@@ -34,6 +34,7 @@ qt_add_library(photolife_core STATIC
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
     taxonomy/TaxonomyTypes.h
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
+    ui/AliasEditorDialog.h  ui/AliasEditorDialog.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/MainWindow.h         ui/MainWindow.cpp

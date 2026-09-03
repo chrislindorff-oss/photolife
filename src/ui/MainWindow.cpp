@@ -15,6 +15,7 @@
 #include "taxonomy/ProjectBuilder.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
+#include "ui/AliasEditorDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/ImageViewer.h"
 #include "ui/NewProjectDialog.h"
@@ -220,6 +221,14 @@ void MainWindow::buildMenus()
     m_importChecklistAction = fileMenu->addAction(tr("&Import Checklist…"),
                                                   this, &MainWindow::importChecklist);
     m_matchAction = fileMenu->addAction(tr("&Match Library"), this, &MainWindow::startMatch);
+    fileMenu->addAction(tr("&Learned Names…"), this, [this] {
+        AliasEditorDialog dialog(m_app.database(), this);
+        connect(&dialog, &AliasEditorDialog::aliasesChanged, this, [this] {
+            statusBar()->showMessage(
+                tr("Forgotten names take effect on the next Match Library run."), 6000);
+        });
+        dialog.exec();
+    });
 
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);

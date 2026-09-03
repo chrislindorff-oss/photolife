@@ -24,6 +24,7 @@ private slots:
     void localityAndStagingFolders();
     void unknownForAmbiguous();
     void classifyFoldersUsesTreeContext();
+    void faunaCommonNameFolderUnderGroup();
 };
 
 void TestPathClassifier::groupFolders()
@@ -121,6 +122,39 @@ void TestPathClassifier::classifyFoldersUsesTreeContext()
     QCOMPARE(kindOf(QStringLiteral("Chorizandra")), (std::pair<QString, QString>{"taxon", "genus"}));
     // Locality nested under a species.
     QCOMPARE(kindOf(QStringLiteral("Thompson Track, BRNP")).first, QStringLiteral("locality"));
+}
+
+void TestPathClassifier::faunaCommonNameFolderUnderGroup()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString root = tmp.filePath(QStringLiteral("Fauna Photos"));
+
+    auto touch = [](const QString &p) {
+        QDir().mkpath(QFileInfo(p).absolutePath());
+        QFile f(p);
+        f.open(QIODevice::WriteOnly);
+        f.write("x");
+    };
+    touch(root + QStringLiteral("/Birds/Ducks, Geese, and Waterfowl/Pacific Black Duck/"
+                                "Pacific Black Duck - Werribee 1-1-2020.jpg"));
+
+    Database db;
+    QVERIFY(db.open(QStringLiteral(":memory:")));
+    scan::CatalogueWriter writer(db.connectionName());
+    scan::FileScanner scanner;
+    QVERIFY(writer.sync(scanner.scan({root}), {root}).ok());
+
+    QVERIFY(classifyFolders(db.connectionName()) > 0);
+
+    QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+    q.prepare(QStringLiteral("SELECT kind, inferred_rank, inferred_name FROM folder WHERE name = ?"));
+    q.addBindValue(QStringLiteral("Pacific Black Duck"));
+    q.exec();
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toString(), QStringLiteral("taxon"));
+    QCOMPARE(q.value(1).toString(), QStringLiteral("species"));
+    QCOMPARE(q.value(2).toString(), QStringLiteral("Pacific Black Duck"));
 }
 
 QTEST_GUILESS_MAIN(TestPathClassifier)

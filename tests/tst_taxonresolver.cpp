@@ -27,6 +27,7 @@ private slots:
     void genusOnlyResolvesToGenus();
     void fuzzyMatchesTypo();
     void aliasBeatsEverything();
+    void resolvesCommonNameFromRawString();
     void nonTaxonMarker();
     void nothingMatches();
 
@@ -147,6 +148,21 @@ void TestTaxonResolver::aliasBeatsEverything()
     QVERIFY(!c.isEmpty());
     QCOMPARE(c.first().matchedVia, QStringLiteral("alias"));
     QCOMPARE(c.first().name, QStringLiteral("Caladenia carnea"));
+}
+
+void TestTaxonResolver::resolvesCommonNameFromRawString()
+{
+    taxonomy::Taxon duck;
+    duck.inatId = 7000;
+    duck.rank = QStringLiteral("species");
+    duck.name = QStringLiteral("Anas superciliosa");
+    duck.vernacular = {QStringLiteral("Pacific Black Duck")};
+    m_store->upsertTaxon(duck);
+
+    const auto c = m_resolver->resolve(parseName(QStringLiteral("Pacific Black Duck")));
+    QVERIFY(!c.isEmpty());
+    QCOMPARE(c.first().name, QStringLiteral("Anas superciliosa"));
+    QCOMPARE(c.first().matchedVia, QStringLiteral("vernacular"));
 }
 
 void TestTaxonResolver::nonTaxonMarker()

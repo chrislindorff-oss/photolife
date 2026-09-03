@@ -114,6 +114,12 @@ QList<TaxonCandidate> TaxonResolver::exactCandidates(const ParsedName &parsed) c
             lookup(QStringLiteral("%1 %2").arg(binomial, parsed.infraEpithet), {});
         }
     }
+
+    // The whole raw string, folded — catches common names ("Pacific Black Duck")
+    // and any spelling stored verbatim in taxon_name.
+    const QString rawFolded = TaxonomyStore::foldName(parsed.raw);
+    if (!rawFolded.isEmpty() && rawFolded != binomial)
+        lookup(rawFolded, {});
     for (const QString &altGenus : parsed.altGenera) {
         if (altGenus.compare(parsed.genus, Qt::CaseInsensitive) == 0 || parsed.specificEpithet.isEmpty())
             continue;
