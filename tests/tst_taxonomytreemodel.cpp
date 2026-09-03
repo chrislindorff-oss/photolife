@@ -40,6 +40,7 @@ private slots:
     void photographedOnlyFilterHidesUnphotographedSubtrees();
     void indexForTaxonReflectsVisibility();
     void filterToggleKeepsExpansionAndSelection();
+    void findTaxaMatchesNameAndCommonName();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -230,6 +231,37 @@ void TestTaxonomyTreeModel::filterToggleKeepsExpansionAndSelection()
     QCOMPARE(view.currentIndex().data(model::TaxonomyTreeModel::InatIdRole).toLongLong(),
              qint64(900));
     QVERIFY(model.indexForTaxon(801).isValid());                  // Pterostylis reappeared
+}
+
+void TestTaxonomyTreeModel::findTaxaMatchesNameAndCommonName()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+
+    QCOMPARE(model.findTaxa(QString()), QList<qint64>{});
+
+    // Scientific-name prefix.
+    const QList<qint64> diuris = model.findTaxa(QStringLiteral("diur"));
+    QVERIFY(!diuris.isEmpty());
+    QCOMPARE(diuris.first(), qint64(800));   // genus Diuris, a prefix hit, ranks first
+    QVERIFY(diuris.contains(qint64(900)));   // Diuris pardina also matches
+
+    // A prefix hit outranks a mid-string hit: "pardina" only matches the species.
+    QCOMPARE(model.findTaxa(QStringLiteral("pardina")), QList<qint64>{qint64(900)});
+
+    // Common-name match, case-insensitive.
+    QCOMPARE(model.findTaxa(QStringLiteral("leopard")), QList<qint64>{qint64(900)});
+
+    // Hidden taxa are still searchable (findTaxa works off the full project set).
+    coverage::ProjectCoverage cov;
+    for (qint64 id : {qint64(47217), qint64(800), qint64(900)})
+        cov.byTaxon[id].subtreeHasPhotos = true;
+    model.setCoverage(cov);
+    model.setPhotographedOnly(true);
+    QVERIFY(!model.indexForTaxon(901).isValid());                       // Pterostylis hidden
+    QCOMPARE(model.findTaxa(QStringLiteral("pterostylis")).first(), qint64(801));
+
+    QVERIFY(model.findTaxa(QStringLiteral("nothing here")).isEmpty());
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

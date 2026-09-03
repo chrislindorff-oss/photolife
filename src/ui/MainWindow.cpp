@@ -319,6 +319,12 @@ void MainWindow::buildReferenceTreeDock()
         refreshCoverage();
     });
 
+    m_treeSearch = new QLineEdit(panel);
+    m_treeSearch->setPlaceholderText(tr("Search taxa — jumps as you type, Enter for next"));
+    m_treeSearch->setClearButtonEnabled(true);
+    connect(m_treeSearch, &QLineEdit::textChanged, this, &MainWindow::onTreeSearchChanged);
+    connect(m_treeSearch, &QLineEdit::returnPressed, this, &MainWindow::onTreeSearchNext);
+
     m_photographedOnly = new QCheckBox(tr("Only taxa I've photographed"), panel);
     connect(m_photographedOnly, &QCheckBox::toggled, this, [this](bool on) {
         const bool wasCollapsed = collectExpandedTaxa().isEmpty();
@@ -350,6 +356,7 @@ void MainWindow::buildReferenceTreeDock()
     split->setStretchFactor(1, 1);
 
     layout->addWidget(m_projectCombo);
+    layout->addWidget(m_treeSearch);
     layout->addWidget(m_photographedOnly);
     layout->addWidget(split, 1);
     dock->setWidget(panel);
@@ -814,6 +821,22 @@ void MainWindow::selectTaxonInTree(qint64 inatId)
         return;
     m_treeView->setCurrentIndex(idx);
     m_treeView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+}
+
+void MainWindow::onTreeSearchChanged(const QString &text)
+{
+    m_treeSearchHits = m_treeModel->findTaxa(text);
+    m_treeSearchPos = 0;
+    if (!m_treeSearchHits.isEmpty())
+        selectTaxonInTree(m_treeSearchHits.first());
+}
+
+void MainWindow::onTreeSearchNext()
+{
+    if (m_treeSearchHits.isEmpty())
+        return;
+    m_treeSearchPos = (m_treeSearchPos + 1) % m_treeSearchHits.size();
+    selectTaxonInTree(m_treeSearchHits.at(m_treeSearchPos));
 }
 
 void MainWindow::updateEmptyState()

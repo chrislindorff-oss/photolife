@@ -7,6 +7,8 @@
 #include <QFont>
 #include <QStringList>
 
+#include <algorithm>
+
 namespace pl::model {
 
 TaxonomyTreeModel::TaxonomyTreeModel(pl::Database &db, QObject *parent)
@@ -110,6 +112,48 @@ QModelIndex TaxonomyTreeModel::indexForTaxon(qint64 inatId) const
             return createIndex(i, 0, node);
     }
     return {};
+}
+
+QList<qint64> TaxonomyTreeModel::findTaxa(const QString &text, int limit) const
+{
+    const QString needle = taxonomy::TaxonomyStore::foldName(text);
+    if (needle.isEmpty())
+        return {};
+
+    struct Hit
+    {
+        int tier;
+        qint64 inatId;
+    };
+    QList<Hit> hits;
+    for (const taxonomy::TreeNode &tn : m_flat) {
+        const QString name = taxonomy::TaxonomyStore::foldName(tn.name);
+        const QString common = taxonomy::TaxonomyStore::foldName(tn.commonName);
+        int tier = -1;
+        if (name.startsWith(needle))
+            tier = 0;
+        else if (!common.isEmpty() && common.startsWith(needle))
+            tier = 1;
+        else if (name.contains(needle))
+            tier = 2;
+        else if (common.contains(needle))
+            tier = 3;
+        if (tier >= 0)
+            hits.push_back({tier, tn.inatId});
+    }
+
+    // m_flat is already ordered (rank_level desc, then name); a stable sort by
+    // tier keeps that as the secondary order.
+    std::stable_sort(hits.begin(), hits.end(),
+                     [](const Hit &a, const Hit &b) { return a.tier < b.tier; });
+
+    QList<qint64> out;
+    for (const Hit &h : hits) {
+        out.push_back(h.inatId);
+        if (out.size() >= limit)
+            break;
+    }
+    return out;
 }
 
 TaxonomyTreeModel::Node *TaxonomyTreeModel::nodeFor(const QModelIndex &index) const

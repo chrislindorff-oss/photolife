@@ -10,6 +10,7 @@
 
 class QCheckBox;
 class QLabel;
+class QLineEdit;
 class QListView;
 class QListWidget;
 class QStackedWidget;
@@ -82,6 +83,8 @@ private:
     void refreshCoverage();
     void onTreeSelectionChanged();
     void selectTaxonInTree(qint64 inatId);
+    void onTreeSearchChanged(const QString &text);
+    void onTreeSearchNext();
     QList<qint64> collectExpandedTaxa(const QModelIndex &parent = {}) const;
     void mutateTreePreservingState(const std::function<void()> &mutate);
     void updateMissingList();
@@ -117,6 +120,9 @@ private:
     model::TaxonomyTreeModel *m_treeModel = nullptr;
     QTreeView *m_treeView = nullptr;
     QComboBox *m_projectCombo = nullptr;
+    QLineEdit *m_treeSearch = nullptr;
+    QList<qint64> m_treeSearchHits;   // current search matches, best first
+    int m_treeSearchPos = 0;          // which hit is focused (Enter cycles)
     QCheckBox *m_photographedOnly = nullptr;
     taxonomy::ProjectBuilder *m_builder = nullptr;
     checklist::ChecklistImporter *m_checklistImporter = nullptr;

@@ -49,6 +49,12 @@ public:
     // taxon is not currently in the tree (e.g. filtered out). Column 0.
     QModelIndex indexForTaxon(qint64 inatId) const;
 
+    // iNat ids of taxa whose scientific or common name matches `text` (folded,
+    // case-insensitive), best matches first: a prefix on the scientific name,
+    // then a prefix on the common name, then any substring. Searches the whole
+    // project — including taxa the "photographed only" filter is hiding.
+    QList<qint64> findTaxa(const QString &text, int limit = 50) const;
+
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override;
     QModelIndex parent(const QModelIndex &child) const override;
     int rowCount(const QModelIndex &parent = {}) const override;
