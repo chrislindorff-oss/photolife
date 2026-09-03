@@ -177,4 +177,139 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
     return coverage;
 }
 
+int pickRepresentatives(const QString &connectionName, int projectId)
+{
+    QSqlDatabase db = QSqlDatabase::database(connectionName, false);
+    if (!db.isOpen())
+        return 0;
+
+    struct Best
+    {
+        qint64 captureId = 0;
+        double confidence = -1.0;
+        QString capturedOn;
+
+        bool betterThan(const Best &o) const
+        {
+            if (confidence != o.confidence)
+                return confidence > o.confidence;
+            return capturedOn > o.capturedOn;
+        }
+    };
+
+    QHash<qint64, std::optional<qint64>> parentOf;   // inat_id -> parent inat_id
+    QHash<qint64, Best> direct;
+
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        q.prepare(QStringLiteral(
+            "SELECT t.inat_id, t.parent_inat_id FROM project_taxon pt "
+            "JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
+        q.addBindValue(projectId);
+        if (!q.exec())
+            return 0;
+        while (q.next()) {
+            const qint64 id = q.value(0).toLongLong();
+            parentOf.insert(id, q.value(1).isNull() ? std::optional<qint64>()
+                                                    : std::optional<qint64>(q.value(1).toLongLong()));
+        }
+    }
+    if (parentOf.isEmpty())
+        return 0;
+
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        q.exec(QStringLiteral(
+            "SELECT t.inat_id, m.capture_id, m.confidence, c.captured_on "
+            "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
+            "JOIN taxon t ON t.id = m.taxon_id "
+            "WHERE m.status IN ('auto', 'confirmed')"));
+        while (q.next()) {
+            const qint64 id = q.value(0).toLongLong();
+            if (!parentOf.contains(id))
+                continue;
+            Best b{q.value(1).toLongLong(), q.value(2).toDouble(), q.value(3).toString()};
+            auto it = direct.find(id);
+            if (it == direct.end() || b.betterThan(*it))
+                direct.insert(id, b);
+        }
+    }
+
+    QHash<qint64, QList<qint64>> children;
+    QList<qint64> roots;
+    for (auto it = parentOf.constBegin(); it != parentOf.constEnd(); ++it) {
+        if (it.value() && parentOf.contains(*it.value()))
+            children[*it.value()].append(it.key());
+        else
+            roots.append(it.key());
+    }
+
+    QHash<qint64, Best> rollup;
+    QSet<qint64> visiting;
+    std::function<Best(qint64)> roll = [&](qint64 id) -> Best {
+        Best best = direct.value(id);
+        if (!visiting.contains(id)) {
+            visiting.insert(id);
+            for (qint64 child : children.value(id)) {
+                const Best cb = roll(child);
+                if (cb.captureId > 0 && cb.betterThan(best))
+                    best = cb;
+            }
+        }
+        if (best.captureId > 0)
+            rollup.insert(id, best);
+        return best;
+    };
+    for (qint64 r : roots)
+        roll(r);
+
+    if (!db.transaction())
+        return 0;
+    QSqlQuery del(db);
+    del.prepare(QStringLiteral("DELETE FROM representative WHERE project_id = ?"));
+    del.addBindValue(projectId);
+    del.exec();
+
+    int written = 0;
+    for (auto it = rollup.constBegin(); it != rollup.constEnd(); ++it) {
+        QSqlQuery ins(db);
+        ins.prepare(QStringLiteral(
+            "INSERT INTO representative (project_id, taxon_id, capture_id) "
+            "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), ?)"));
+        ins.addBindValue(projectId);
+        ins.addBindValue(qlonglong(it.key()));
+        ins.addBindValue(qlonglong(it.value().captureId));
+        if (ins.exec())
+            ++written;
+    }
+    db.commit();
+    return written;
+}
+
+RepresentativeImage representativeFor(const QString &connectionName, int projectId,
+                                      qint64 taxonInatId)
+{
+    RepresentativeImage image;
+    QSqlQuery q(QSqlDatabase::database(connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT c.id, "
+        "  (SELECT r.path FROM rendition r WHERE r.capture_id = c.id "
+        "     ORDER BY (r.kind = 'raw'), r.id LIMIT 1), "
+        "  (SELECT r.content_hash FROM rendition r WHERE r.capture_id = c.id "
+        "     ORDER BY (r.kind = 'raw'), r.id LIMIT 1) "
+        "FROM representative rep JOIN capture c ON c.id = rep.capture_id "
+        "JOIN taxon t ON t.id = rep.taxon_id "
+        "WHERE rep.project_id = ? AND t.inat_id = ?"));
+    q.addBindValue(projectId);
+    q.addBindValue(qlonglong(taxonInatId));
+    if (q.exec() && q.next()) {
+        image.captureId = q.value(0).toLongLong();
+        image.previewPath = q.value(1).toString();
+        image.previewHash = q.value(2).toString();
+    }
+    return image;
+}
+
 } // namespace pl::coverage

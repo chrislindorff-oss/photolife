@@ -7,6 +7,7 @@
 #include <QPixmap>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QStringList>
 
 namespace pl::model {
 namespace {
@@ -110,6 +111,14 @@ void CaptureListModel::setStatusFilter(const QString &status)
     reload();
 }
 
+void CaptureListModel::setTaxonScope(qint64 taxonInatId)
+{
+    if (m_taxonScope == taxonInatId)
+        return;
+    m_taxonScope = taxonInatId;
+    reload();
+}
+
 void CaptureListModel::reload()
 {
     beginResetModel();
@@ -117,20 +126,32 @@ void CaptureListModel::reload()
     m_rowsByHash.clear();
 
     if (m_db.isOpen()) {
-        QString having;
+        QStringList clauses;
         if (m_statusFilter == QLatin1String("auto"))
-            having = QStringLiteral(" WHERE match_status = 'auto'");
+            clauses << QStringLiteral("match_status = 'auto'");
         else if (m_statusFilter == QLatin1String("confirmed"))
-            having = QStringLiteral(" WHERE match_status = 'confirmed'");
+            clauses << QStringLiteral("match_status = 'confirmed'");
         else if (m_statusFilter == QLatin1String("pending"))
-            having = QStringLiteral(" WHERE match_status = 'pending' AND matched_id IS NOT NULL");
+            clauses << QStringLiteral("match_status = 'pending' AND matched_id IS NOT NULL");
         else if (m_statusFilter == QLatin1String("unmatched"))
-            having = QStringLiteral(
-                " WHERE match_status IS NULL OR (match_status = 'pending' AND matched_id IS NULL)");
+            clauses << QStringLiteral(
+                "(match_status IS NULL OR (match_status = 'pending' AND matched_id IS NULL))");
+
+        if (m_taxonScope > 0) {
+            clauses << QStringLiteral(
+                "matched_id IN (SELECT id FROM taxon WHERE inat_id IN ("
+                "  WITH RECURSIVE sub(x) AS (SELECT ? "
+                "    UNION ALL SELECT t.inat_id FROM taxon t JOIN sub ON t.parent_inat_id = sub.x) "
+                "  SELECT x FROM sub))");
+        }
+
+        const QString where =
+            clauses.isEmpty() ? QString()
+                              : QStringLiteral(" WHERE ") + clauses.join(QStringLiteral(" AND "));
 
         QSqlQuery q(QSqlDatabase::database(m_db.connectionName(), false));
         q.setForwardOnly(true);
-        q.exec(QStringLiteral(
+        q.prepare(QStringLiteral(
             "SELECT id, base_name, name_text, captured_on, date_source, path, preview_path, "
             "       preview_hash, match_status, matched_name FROM ("
             "  SELECT c.id, c.base_name, c.name_text, c.captured_on, c.date_source, f.path, "
@@ -144,8 +165,11 @@ void CaptureListModel::reload()
             "     SELECT id FROM capture_match WHERE capture_id = c.id "
             "     ORDER BY (decided_by = 'user') DESC, confidence DESC LIMIT 1) "
             "  LEFT JOIN taxon t ON t.id = m.taxon_id "
-            ")") + having + QStringLiteral(
+            ")") + where + QStringLiteral(
             " ORDER BY (captured_on IS NULL), captured_on DESC, id DESC"));
+        if (m_taxonScope > 0)
+            q.addBindValue(qlonglong(m_taxonScope));
+        q.exec();
 
         while (q.next()) {
             Row row;

@@ -22,6 +22,8 @@ private slots:
     void countsThreatenedSeparately();
     void infraspeciesPhotosCountForTheirSpecies();
     void onlyAutoAndConfirmedMatchesCount();
+    void picksHighestConfidenceRepresentative();
+    void representativeRollsUpToAncestors();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -183,6 +185,45 @@ void TestCoverageCalculator::onlyAutoAndConfirmedMatchesCount()
     const ProjectCoverage cov = computeCoverage(m_db->connectionName(), m_projectId);
     QCOMPARE(cov.speciesWithPhotos, 0);
     QCOMPARE(cov.captureCount, 0);
+}
+
+void TestCoverageCalculator::picksHighestConfidenceRepresentative()
+{
+    addTaxon(1, 0, QStringLiteral("genus"), QStringLiteral("Diuris"));
+    addTaxon(2, 1, QStringLiteral("species"), QStringLiteral("Diuris pardina"));
+
+    const int weak = captureInFolder(QStringLiteral("/a"), QStringLiteral("weak"));
+    const int strong = captureInFolder(QStringLiteral("/b"), QStringLiteral("strong"));
+
+    QSqlDatabase db = QSqlDatabase::database(m_db->connectionName(), false);
+    QSqlQuery q(db);
+    q.exec(QStringLiteral("INSERT INTO capture_match (capture_id, taxon_id, method, confidence, status) "
+                          "VALUES (%1, (SELECT id FROM taxon WHERE inat_id=2), 'file', 0.7, 'auto')")
+               .arg(weak));
+    q.exec(QStringLiteral("INSERT INTO capture_match (capture_id, taxon_id, method, confidence, status) "
+                          "VALUES (%1, (SELECT id FROM taxon WHERE inat_id=2), 'file', 1.0, 'auto')")
+               .arg(strong));
+
+    QCOMPARE(pickRepresentatives(m_db->connectionName(), m_projectId), 2);   // species + genus
+
+    const auto rep = representativeFor(m_db->connectionName(), m_projectId, 2);
+    QCOMPARE(rep.captureId, qint64(strong));
+}
+
+void TestCoverageCalculator::representativeRollsUpToAncestors()
+{
+    addTaxon(1, 0, QStringLiteral("family"), QStringLiteral("Orchidaceae"));
+    addTaxon(10, 1, QStringLiteral("genus"), QStringLiteral("Diuris"));
+    addTaxon(11, 10, QStringLiteral("species"), QStringLiteral("Diuris pardina"));
+
+    const int cap = captureInFolder(QStringLiteral("/a"), QStringLiteral("x"));
+    matchCapture(cap, 11, QStringLiteral("auto"));
+
+    pickRepresentatives(m_db->connectionName(), m_projectId);
+
+    QCOMPARE(representativeFor(m_db->connectionName(), m_projectId, 11).captureId, qint64(cap));
+    QCOMPARE(representativeFor(m_db->connectionName(), m_projectId, 10).captureId, qint64(cap));
+    QCOMPARE(representativeFor(m_db->connectionName(), m_projectId, 1).captureId, qint64(cap));
 }
 
 QTEST_GUILESS_MAIN(TestCoverageCalculator)

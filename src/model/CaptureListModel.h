@@ -48,6 +48,11 @@ public:
     void setStatusFilter(const QString &status);
     QString statusFilter() const { return m_statusFilter; }
 
+    // 0 = every capture; otherwise only captures matched to this taxon (by iNat
+    // id) or any of its descendants.
+    void setTaxonScope(qint64 taxonInatId);
+    qint64 taxonScope() const { return m_taxonScope; }
+
     int captureCount() const { return int(m_rows.size()); }
 
 private:
@@ -73,6 +78,7 @@ private:
     QHash<QString, QList<int>> m_rowsByHash;   // preview hash -> row indices
     QIcon m_placeholder;
     QString m_statusFilter;
+    qint64 m_taxonScope = 0;
 };
 
 } // namespace pl::model

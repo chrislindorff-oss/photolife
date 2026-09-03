@@ -57,4 +57,22 @@ struct ProjectCoverage
 // Read-only; give it an open connection name.
 ProjectCoverage computeCoverage(const QString &connectionName, int projectId);
 
+// Chooses a cover capture for every project taxon that has photos anywhere in
+// its subtree (best match confidence, then newest capture) and rewrites the
+// project's `representative` rows. Returns how many were written.
+int pickRepresentatives(const QString &connectionName, int projectId);
+
+struct RepresentativeImage
+{
+    qint64 captureId = 0;
+    QString previewPath;
+    QString previewHash;
+
+    bool isValid() const { return captureId > 0; }
+};
+
+// The cover capture chosen for a taxon in a project (empty if none).
+RepresentativeImage representativeFor(const QString &connectionName, int projectId,
+                                     qint64 taxonInatId);
+
 } // namespace pl::coverage
