@@ -3,6 +3,7 @@
 #include "app/Logging.h"
 #include "db/Database.h"
 #include "pl/Version.h"
+#include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
 #include "thumb/ThumbnailCache.h"
@@ -51,6 +52,9 @@ bool Application::initialize()
 
     m_scanService = std::make_unique<scan::ScanService>(dbPath);
 
+    m_libraryWatcher = std::make_unique<scan::LibraryWatcher>(*m_database);
+    m_libraryWatcher->setRoots(m_settings->watchedRoots());
+
     return true;
 }
 
@@ -74,6 +78,11 @@ Settings &Application::settings()
 scan::ScanService &Application::scanService()
 {
     return *m_scanService;
+}
+
+scan::LibraryWatcher &Application::libraryWatcher()
+{
+    return *m_libraryWatcher;
 }
 
 thumb::ThumbnailCache &Application::thumbnails()

@@ -4,6 +4,7 @@
 #include "db/Database.h"
 #include "model/CaptureListModel.h"
 #include "pl/Version.h"
+#include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
 #include "thumb/ThumbnailCache.h"
@@ -38,6 +39,13 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     connect(&scanner, &scan::ScanService::started, this, [this] { setScanUiRunning(true); });
     connect(&scanner, &scan::ScanService::progress, this, &MainWindow::onScanProgress);
     connect(&scanner, &scan::ScanService::finished, this, &MainWindow::onScanFinished);
+
+    connect(&m_app.libraryWatcher(), &scan::LibraryWatcher::changeDetected, this, [this] {
+        if (!m_app.scanService().isRunning()) {
+            statusBar()->showMessage(tr("Library folders changed — rescanning…"), 4000);
+            startScan();
+        }
+    });
 
     m_model->reload();
     updateEmptyState();
@@ -139,6 +147,7 @@ void MainWindow::addWatchedFolder()
     if (!roots.contains(clean)) {
         roots.append(clean);
         m_app.settings().setWatchedRoots(roots);
+        m_app.libraryWatcher().setRoots(roots);
     }
 
     updateEmptyState();
@@ -181,6 +190,7 @@ void MainWindow::onScanFinished(const scan::ScanSummary &summary)
     setScanUiRunning(false);
     m_model->reload();
     updateEmptyState();
+    m_app.libraryWatcher().refresh();
 
     if (!summary.ok()) {
         statusBar()->showMessage(tr("Scan failed: %1").arg(summary.error), 10000);

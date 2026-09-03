@@ -8,6 +8,7 @@ qt_add_library(photolife_core STATIC
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp
     scan/FilenameParser.h   scan/FilenameParser.cpp
+    scan/LibraryWatcher.h   scan/LibraryWatcher.cpp
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
