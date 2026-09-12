@@ -58,6 +58,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libraw-dev libjpeg-turbo8-dev libexiv2-dev
 
+      # Qt is installed as the msvc2019_64 build below, and vcpkg's default
+      # triplet builds exiv2 with MSVC too -- without this, CMake falls back
+      # to whatever compiler happens to be first on PATH (MinGW GCC on this
+      # runner), which cannot link against either of those MSVC-ABI libraries.
+      - name: Set up MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Ninja (unlike the "Visual Studio" generator) has no special-cased
+      # MSVC discovery -- it searches like Unix Makefiles would, and this
+      # runner's pre-installed MinGW g++ can otherwise still win by being a
+      # name CMake's generic compiler search tries regardless of PATH order.
+      - name: Force MSVC as the compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          echo "CC=cl" >> $env:GITHUB_ENV
+          echo "CXX=cl" >> $env:GITHUB_ENV
+
       # exiv2 is a required dependency (see src/CMakeLists.txt) with no
       # official Windows package -- vcpkg builds it, and pkgconf (a
       # pkg-config-compatible tool) so CMake's FindPkgConfig can locate it

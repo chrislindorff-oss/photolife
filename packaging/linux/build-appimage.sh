@@ -44,7 +44,16 @@ echo ">> bundling Qt and packing (version $VERSION)"
 export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake)}"
 export VERSION
 export OUTPUT="PhotoLife-${VERSION}-x86_64.AppImage"
-export EXTRA_QT_PLUGINS="sqldrivers;imageformats;tls"
+
+# Only the SQLite driver, staged by hand, rather than the whole "sqldrivers"
+# category: this app never uses any other Qt SQL driver, and requesting the
+# category pulls in Qt's Mimer SQL plugin too -- which depends on the
+# proprietary libmimerapi.so, not present on this (or most) machines, and
+# fails the whole deploy step trying to resolve it.
+QT_PLUGIN_DIR="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
+mkdir -p "$APPDIR/usr/plugins/sqldrivers"
+cp "$QT_PLUGIN_DIR/sqldrivers/libqsqlite.so" "$APPDIR/usr/plugins/sqldrivers/"
+export EXTRA_QT_PLUGINS="imageformats;tls"
 
 cd "$BUILD_DIR"
 "$TOOLS_DIR/linuxdeploy" \
