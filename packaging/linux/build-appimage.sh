@@ -45,14 +45,16 @@ export QMAKE="${QMAKE:-$(command -v qmake6 || command -v qmake)}"
 export VERSION
 export OUTPUT="PhotoLife-${VERSION}-x86_64.AppImage"
 
-# Only the SQLite driver, staged by hand, rather than the whole "sqldrivers"
-# category: this app never uses any other Qt SQL driver, and requesting the
-# category pulls in Qt's Mimer SQL plugin too -- which depends on the
-# proprietary libmimerapi.so, not present on this (or most) machines, and
-# fails the whole deploy step trying to resolve it.
+# linuxdeploy-plugin-qt auto-bundles the *entire* sqldrivers directory the
+# moment it detects the binary links QtSql, regardless of EXTRA_QT_PLUGINS
+# -- including Qt's Mimer SQL driver, which depends on the proprietary
+# libmimerapi.so that isn't installed here (or on most machines) and isn't
+# needed, since this app only ever uses SQLite. EXTRA_QT_PLUGINS has no
+# lever to exclude one driver from an auto-bundled category, so every other
+# driver is removed from the *source* Qt install's plugin directory before
+# linuxdeploy ever scans it -- safe since this is a disposable build tree.
 QT_PLUGIN_DIR="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
-mkdir -p "$APPDIR/usr/plugins/sqldrivers"
-cp "$QT_PLUGIN_DIR/sqldrivers/libqsqlite.so" "$APPDIR/usr/plugins/sqldrivers/"
+find "$QT_PLUGIN_DIR/sqldrivers" -name 'libqsql*.so' ! -name 'libqsqlite.so' -delete
 export EXTRA_QT_PLUGINS="imageformats;tls"
 
 cd "$BUILD_DIR"

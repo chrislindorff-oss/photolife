@@ -98,7 +98,12 @@ jobs:
         run: |
           $dist = "dist"
           New-Item -ItemType Directory -Force $dist | Out-Null
-          Copy-Item build/src/PhotoLife.exe $dist/
+          # qt_standard_project_setup() (called from the top-level
+          # CMakeLists.txt) consolidates every executable's output to the
+          # top of the build directory on Windows specifically, so it lands
+          # next to any DLLs copied alongside it -- unlike the per-subdirectory
+          # default (e.g. build/src/...) that applies on Linux/macOS.
+          Copy-Item build/PhotoLife.exe $dist/
           & windeployqt --release --no-translations --sql --no-system-d3d-compiler `
             --no-opengl-sw "$dist/PhotoLife.exe"
           # windeployqt only bundles Qt's own DLLs -- exiv2 and its transitive
