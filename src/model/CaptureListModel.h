@@ -32,6 +32,31 @@ public:
         PreviewPathRole,
         MatchStatusRole,   // "auto" | "pending" | "unmatched" | "confirmed"
         MatchedNameRole,
+        DisplayNameRole,   // name_text, falling back to the raw filename — independent
+                          // of the configurable caption shown under the grid thumbnail
+        ExtRole,           // the shown rendition's file extension, e.g. "jpg" | "cr2"
+        HasGpsRole,        // true when the capture's EXIF carried GPS coordinates
+        LatitudeRole,      // valid only when HasGpsRole is true
+        LongitudeRole,     // valid only when HasGpsRole is true
+        IsBestShotRole,    // true when the user has starred this capture as a
+                          // best shot of its identified species
+        ShowFileTypeBadgeRole,   // true when File Type is checked (drawn as an
+                                 // on-image badge, not a Qt::DisplayRole line)
+        FullCaptionRole,   // every checked field (file type included), one per
+                          // line — for the full-size viewer, which has room
+                          // for real text and no on-image badge of its own
+        LocalityRole,      // reverse-geocoded "Town, State, Country", or empty
+    };
+
+    // Which fields the Qt::DisplayRole caption (shown under each grid thumbnail)
+    // combines, one per line. Bits may be OR'd together; Name is the default.
+    enum CaptionField {
+        CaptionName     = 1 << 0,
+        CaptionDate     = 1 << 1,
+        CaptionFilename = 1 << 2,
+        CaptionFileType = 1 << 3,
+        CaptionTaxon    = 1 << 4,
+        CaptionLocality = 1 << 5,
     };
 
     CaptureListModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
@@ -53,6 +78,31 @@ public:
     void setTaxonScope(qint64 taxonInatId);
     qint64 taxonScope() const { return m_taxonScope; }
 
+    // When > 0, results are confined to taxa that belong to this reference tree
+    // (project_taxon) — on its own with no taxon scope, and intersected with the
+    // subtree when a taxon scope is also set. Without it, selecting an ancestor
+    // node shared by several trees (or the synthetic "Life" root a tree shows
+    // above its real scope) would pull in every project's photos under that
+    // ancestor, and clearing the selection would fall back to the whole library.
+    void setProjectScope(int projectId);
+    int projectScope() const { return m_projectScope; }
+
+    // When true, the grid is restricted to captures the user has starred as a
+    // best shot (the best_shot table). Combines with the status and taxon
+    // filters.
+    void setBestShotOnly(bool on);
+    bool bestShotOnly() const { return m_bestShotOnly; }
+
+    // Patches the starred state of the given captures in place (no model reset),
+    // for a snappy repaint of the star overlay after the user stars/unstars
+    // from the grid. Rows not currently loaded are ignored.
+    void applyBestShot(const QList<int> &captureIds, bool on);
+
+    // OR of CaptionField bits controlling the grid caption. Purely a display
+    // setting — no re-query needed, so this just repaints.
+    void setCaptionFields(int fields);
+    int captionFields() const { return m_captionFields; }
+
     int captureCount() const { return int(m_rows.size()); }
 
 private:
@@ -66,8 +116,14 @@ private:
         QString dateSource;
         QString previewPath;
         QString previewHash;
+        QString ext;
         QString matchStatus;
         QString matchedName;
+        bool hasGps = false;
+        double latitude = 0.0;
+        double longitude = 0.0;
+        bool isBestShot = false;
+        QString locality;
     };
 
     void onThumbnailReady(const QString &contentHash, int longestEdge);
@@ -79,6 +135,9 @@ private:
     QIcon m_placeholder;
     QString m_statusFilter;
     qint64 m_taxonScope = 0;
+    int m_projectScope = 0;
+    bool m_bestShotOnly = false;
+    int m_captionFields = CaptionName;
 };
 
 } // namespace pl::model

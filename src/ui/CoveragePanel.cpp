@@ -2,6 +2,7 @@
 
 #include <QFormLayout>
 #include <QLabel>
+#include <QLocale>
 #include <QProgressBar>
 #include <QVBoxLayout>
 
@@ -25,6 +26,8 @@ CoveragePanel::CoveragePanel(QWidget *parent)
     m_threatened = new QLabel(this);
     m_newest = new QLabel(this);
     m_newest->setEnabled(false);
+    m_cacheUsage = new QLabel(this);
+    m_cacheUsage->setEnabled(false);
 
     auto *tierBox = new QWidget(this);
     m_tiers = new QFormLayout(tierBox);
@@ -38,6 +41,7 @@ CoveragePanel::CoveragePanel(QWidget *parent)
     layout->addWidget(m_threatened);
     layout->addWidget(tierBox);
     layout->addWidget(m_newest);
+    layout->addWidget(m_cacheUsage);
     layout->addStretch(1);
 
     clear();
@@ -49,6 +53,7 @@ void CoveragePanel::clear()
     m_bar->setValue(0);
     m_threatened->clear();
     m_newest->clear();
+    m_cacheUsage->clear();
     while (m_tiers->rowCount() > 0)
         m_tiers->removeRow(0);
 }
@@ -63,6 +68,7 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
         m_bar->setValue(0);
         m_threatened->clear();
         m_newest->clear();
+        m_cacheUsage->clear();
         return;
     }
 
@@ -91,6 +97,18 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
     m_newest->setText(coverage.newestCapture.isEmpty()
                           ? tr("No dated captures.")
                           : tr("Most recent capture: %1").arg(coverage.newestCapture));
+}
+
+void CoveragePanel::setCacheUsage(int cachedCount, int totalWithUrl, qint64 bytes)
+{
+    if (totalWithUrl == 0) {
+        m_cacheUsage->setText(tr("No reference photos fetched yet."));
+        return;
+    }
+    m_cacheUsage->setText(tr("Reference photo cache: %1 of %2 downloaded (%3)")
+                              .arg(cachedCount)
+                              .arg(totalWithUrl)
+                              .arg(QLocale().formattedDataSize(bytes)));
 }
 
 } // namespace pl

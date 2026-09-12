@@ -183,4 +183,90 @@ void INatClient::speciesCounts(qint64 taxonId, qint64 placeId, int page, int per
     });
 }
 
+void INatClient::observationCount(qint64 taxonId, qint64 placeId,
+                                  std::function<void(Outcome<int>)> done)
+{
+    QUrl url(m_baseUrl + QStringLiteral("/observations"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("taxon_id"), QString::number(taxonId));
+    if (placeId > 0)
+        q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    q.addQueryItem(QStringLiteral("verifiable"), QStringLiteral("true"));
+    q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("0"));
+    url.setQuery(q);
+
+    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+        Outcome<int> out;
+        if (!resp.error.isEmpty()) {
+            out.error = resp.error;
+            done(out);
+            return;
+        }
+        if (!resp.ok()) {
+            out.error = QStringLiteral("HTTP %1").arg(resp.status);
+            done(out);
+            return;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+        if (!doc.isObject()) {
+            out.error = QStringLiteral("invalid JSON: %1").arg(parseError.errorString());
+            done(out);
+            return;
+        }
+        out.value = doc.object().value(QStringLiteral("total_results")).toInt();
+        done(out);
+    });
+}
+
+void INatClient::fetchObservations(const QString &userLogin, const QList<qint64> &taxonIds,
+                                   qint64 placeId, int page,
+                                   std::function<void(Outcome<ObservationPage>)> done)
+{
+    QStringList ids;
+    ids.reserve(taxonIds.size());
+    for (qint64 id : taxonIds)
+        ids << QString::number(id);
+
+    QUrl url(m_baseUrl + QStringLiteral("/observations"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("user_login"), userLogin);
+    q.addQueryItem(QStringLiteral("taxon_id"), ids.join(QLatin1Char(',')));
+    if (placeId > 0)
+        q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
+    q.addQueryItem(QStringLiteral("page"), QString::number(page));
+    q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("200"));
+    url.setQuery(q);
+
+    m_http.get(
+        url,
+        [done = std::move(done)](HttpResponse resp) {
+            Outcome<ObservationPage> out;
+            if (!resp.error.isEmpty()) {
+                out.error = resp.error;
+                done(out);
+                return;
+            }
+            if (!resp.ok()) {
+                out.error = QStringLiteral("HTTP %1").arg(resp.status);
+                done(out);
+                return;
+            }
+            QJsonParseError parseError;
+            const QJsonDocument doc = QJsonDocument::fromJson(resp.body, &parseError);
+            if (!doc.isObject()) {
+                out.error = QStringLiteral("invalid JSON: %1").arg(parseError.errorString());
+                done(out);
+                return;
+            }
+            const QJsonObject root = doc.object();
+            out.value.totalResults = root.value(QStringLiteral("total_results")).toInt();
+            for (const QJsonValue &v : root.value(QStringLiteral("results")).toArray())
+                out.value.results.append(inat::parseObservation(v.toObject()));
+            done(out);
+        },
+        m_accessToken);
+}
+
 } // namespace pl::net

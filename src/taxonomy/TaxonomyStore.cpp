@@ -21,16 +21,29 @@ QVariant opt(const std::optional<double> &v)
     return v ? QVariant(*v) : QVariant();
 }
 
-bool isLeafRank(const QString &rank)
+} // namespace
+
+bool TaxonomyStore::isLeafRank(const QString &rank)
 {
     static const QStringList leaf = {
-        QStringLiteral("species"), QStringLiteral("subspecies"), QStringLiteral("variety"),
-        QStringLiteral("form"),    QStringLiteral("hybrid"),     QStringLiteral("infrahybrid"),
+        QStringLiteral("species"),    QStringLiteral("subspecies"), QStringLiteral("variety"),
+        QStringLiteral("form"),       QStringLiteral("hybrid"),     QStringLiteral("infrahybrid"),
+        QStringLiteral("genushybrid"),
     };
     return leaf.contains(rank.toLower());
 }
 
-} // namespace
+// Ranks that can appear as a direct child of a species: the infraspecific
+// ranks proper, plus intraspecific hybrid formulas. Excludes "genushybrid",
+// which hangs off a genus, not a species.
+bool TaxonomyStore::isInfraspecificRank(const QString &rank)
+{
+    static const QStringList infra = {
+        QStringLiteral("subspecies"), QStringLiteral("variety"),
+        QStringLiteral("form"),       QStringLiteral("hybrid"), QStringLiteral("infrahybrid"),
+    };
+    return infra.contains(rank.toLower());
+}
 
 TaxonomyStore::TaxonomyStore(QString connectionName)
     : m_connectionName(std::move(connectionName))
@@ -81,12 +94,16 @@ int TaxonomyStore::upsertTaxon(const Taxon &taxon)
     QSqlQuery up(db);
     up.prepare(QStringLiteral(
         "INSERT INTO taxon (inat_id, parent_inat_id, rank, rank_level, name, common_name, "
-        "  ancestry, is_active, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+        "  ancestry, is_active, photo_url, photo_attribution, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
         "ON CONFLICT(inat_id) DO UPDATE SET parent_inat_id = excluded.parent_inat_id, "
         "  rank = excluded.rank, rank_level = excluded.rank_level, name = excluded.name, "
         "  common_name = excluded.common_name, ancestry = excluded.ancestry, "
-        "  is_active = excluded.is_active, fetched_at = excluded.fetched_at"));
+        "  is_active = excluded.is_active, fetched_at = excluded.fetched_at, "
+        // Keep an existing photo when this upsert carries none (most callers
+        // don't request default_photo); a non-empty value always wins.
+        "  photo_url = COALESCE(excluded.photo_url, taxon.photo_url), "
+        "  photo_attribution = COALESCE(excluded.photo_attribution, taxon.photo_attribution)"));
     up.addBindValue(qlonglong(taxon.inatId));
     up.addBindValue(opt(taxon.parentInatId));
     up.addBindValue(taxon.rank);
@@ -95,6 +112,8 @@ int TaxonomyStore::upsertTaxon(const Taxon &taxon)
     up.addBindValue(taxon.commonName.isEmpty() ? QVariant() : taxon.commonName);
     up.addBindValue(taxon.ancestry.isEmpty() ? QVariant() : taxon.ancestry);
     up.addBindValue(taxon.isActive ? 1 : 0);
+    up.addBindValue(taxon.photoUrl.isEmpty() ? QVariant() : taxon.photoUrl);
+    up.addBindValue(taxon.photoAttribution.isEmpty() ? QVariant() : taxon.photoAttribution);
     if (!up.exec())
         return -1;
 
@@ -228,6 +247,58 @@ bool TaxonomyStore::setProjectRefreshedNow(int projectId)
     return q.exec();
 }
 
+bool TaxonomyStore::deleteProject(int projectId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("DELETE FROM project WHERE id = ?"));
+    q.addBindValue(projectId);
+    return q.exec();
+}
+
+QList<qint64> TaxonomyStore::projectSpeciesNeedingInfraCheck(int projectId,
+                                                             qint64 scopeInatId) const
+{
+    QList<qint64> ids;
+    // A blanket sweep skips species already checked (so it is resumable); an
+    // explicitly scoped request re-checks everything under the chosen taxon.
+    QString sql = QStringLiteral(
+        "SELECT t.inat_id FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "WHERE pt.project_id = ? AND t.rank = 'species'");
+    if (scopeInatId <= 0)
+        sql += QStringLiteral(" AND pt.infra_checked = 0");
+    if (scopeInatId > 0) {
+        sql += QStringLiteral(
+            " AND t.inat_id IN ("
+            "  WITH RECURSIVE sub(x) AS (SELECT ? "
+            "    UNION ALL SELECT c.inat_id FROM taxon c JOIN sub ON c.parent_inat_id = sub.x) "
+            "  SELECT x FROM sub)");
+    }
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(sql);
+    q.addBindValue(projectId);
+    if (scopeInatId > 0)
+        q.addBindValue(qlonglong(scopeInatId));
+    if (!q.exec())
+        return ids;
+    while (q.next())
+        ids.append(q.value(0).toLongLong());
+    return ids;
+}
+
+bool TaxonomyStore::markInfraChecked(int projectId, qint64 speciesInatId)
+{
+    const auto local = taxonLocalId(speciesInatId);
+    if (!local)
+        return false;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "UPDATE project_taxon SET infra_checked = 1 WHERE project_id = ? AND taxon_id = ?"));
+    q.addBindValue(projectId);
+    q.addBindValue(qlonglong(*local));
+    return q.exec();
+}
+
 bool TaxonomyStore::addProjectTaxon(int projectId, qint64 taxonInatId, bool inRegion,
                                     bool fromChecklist)
 {
@@ -288,7 +359,8 @@ std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
 {
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
-        "SELECT name, display_name, admin_level FROM place WHERE inat_id = ?"));
+        "SELECT name, display_name, admin_level, bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng "
+        "FROM place WHERE inat_id = ?"));
     q.addBindValue(qlonglong(inatId));
     if (!q.exec() || !q.next())
         return std::nullopt;
@@ -299,6 +371,14 @@ std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
     p.displayName = q.value(1).toString();
     if (!q.value(2).isNull())
         p.adminLevel = q.value(2).toInt();
+    if (!q.value(3).isNull())
+        p.bboxSwLat = q.value(3).toDouble();
+    if (!q.value(4).isNull())
+        p.bboxSwLng = q.value(4).toDouble();
+    if (!q.value(5).isNull())
+        p.bboxNeLat = q.value(5).toDouble();
+    if (!q.value(6).isNull())
+        p.bboxNeLng = q.value(6).toDouble();
     return p;
 }
 
@@ -310,6 +390,23 @@ std::optional<qint64> TaxonomyStore::taxonLocalId(qint64 inatId) const
     if (!q.exec() || !q.next())
         return std::nullopt;
     return q.value(0).toLongLong();
+}
+
+TaxonomyStore::TaxonPhoto TaxonomyStore::taxonPhoto(qint64 inatId) const
+{
+    TaxonPhoto out;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT name, common_name, photo_url, photo_attribution FROM taxon WHERE inat_id = ?"));
+    q.addBindValue(qlonglong(inatId));
+    if (!q.exec() || !q.next())
+        return out;
+    out.found = true;
+    out.name = q.value(0).toString();
+    out.commonName = q.value(1).toString();
+    out.photoUrl = q.value(2).toString();
+    out.attribution = q.value(3).toString();
+    return out;
 }
 
 int TaxonomyStore::taxonCount() const
@@ -328,6 +425,27 @@ std::optional<int> TaxonomyStore::projectIdByName(const QString &name) const
     if (!q.exec() || !q.next())
         return std::nullopt;
     return q.value(0).toInt();
+}
+
+std::optional<qint64> TaxonomyStore::projectPlaceInatId(int projectId) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("SELECT place_inat_id FROM project WHERE id = ?"));
+    q.addBindValue(projectId);
+    if (!q.exec() || !q.next() || q.value(0).isNull())
+        return std::nullopt;
+    return q.value(0).toLongLong();
+}
+
+std::optional<geo::GeoBox> TaxonomyStore::projectLocalityBox(int projectId) const
+{
+    const auto placeId = projectPlaceInatId(projectId);
+    if (!placeId)
+        return std::nullopt;
+    const auto place = placeByInatId(*placeId);
+    if (!place || !place->bboxSwLat || !place->bboxSwLng || !place->bboxNeLat || !place->bboxNeLng)
+        return std::nullopt;
+    return geo::GeoBox{*place->bboxSwLat, *place->bboxSwLng, *place->bboxNeLat, *place->bboxNeLng};
 }
 
 QList<qint64> TaxonomyStore::projectTaxonInatIds(int projectId) const
@@ -367,10 +485,69 @@ QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
         n.name = q.value(3).toString();
         n.commonName = q.value(4).toString();
         n.inRegion = q.value(5).toInt() != 0;
-        n.isLeafRank = isLeafRank(n.rank);
+        n.isLeafRank = TaxonomyStore::isLeafRank(n.rank);
         nodes.append(n);
     }
     return nodes;
+}
+
+QList<TaxonomyStore::LeafPhoto> TaxonomyStore::projectLeafPhotos(int projectId,
+                                                                qint64 scopeInatId) const
+{
+    QList<LeafPhoto> out;
+    QString sql = QStringLiteral(
+        "SELECT t.inat_id, t.name, t.common_name, t.rank, t.photo_url, t.photo_attribution "
+        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "WHERE pt.project_id = ?");
+    if (scopeInatId > 0) {
+        sql += QStringLiteral(
+            " AND t.inat_id IN ("
+            "  WITH RECURSIVE sub(x) AS (SELECT ? "
+            "    UNION ALL SELECT c.inat_id FROM taxon c JOIN sub ON c.parent_inat_id = sub.x) "
+            "  SELECT x FROM sub)");
+    }
+    sql += QStringLiteral(" ORDER BY t.name");
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(sql);
+    q.addBindValue(projectId);
+    if (scopeInatId > 0)
+        q.addBindValue(qlonglong(scopeInatId));
+    if (!q.exec())
+        return out;
+
+    while (q.next()) {
+        const QString rank = q.value(3).toString();
+        if (!isLeafRank(rank))
+            continue;
+        LeafPhoto p;
+        p.inatId = q.value(0).toLongLong();
+        p.name = q.value(1).toString();
+        p.commonName = q.value(2).toString();
+        p.rank = rank;
+        p.photoUrl = q.value(4).toString();
+        p.attribution = q.value(5).toString();
+        out.append(p);
+    }
+    return out;
+}
+
+QList<qint64> TaxonomyStore::projectLeafTaxaMissingPhoto(int projectId) const
+{
+    QList<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT t.inat_id, t.rank FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "WHERE pt.project_id = ? AND (t.photo_url IS NULL OR t.photo_url = '') "
+        "ORDER BY t.inat_id"));
+    q.addBindValue(projectId);
+    if (!q.exec())
+        return ids;
+    while (q.next()) {
+        if (isLeafRank(q.value(1).toString()))
+            ids.append(q.value(0).toLongLong());
+    }
+    return ids;
 }
 
 } // namespace pl::taxonomy

@@ -9,7 +9,9 @@
 
 namespace pl::taxonomy {
 namespace {
-constexpr int kBatchSize = 30;   // iNat allows up to 30 ids per /taxa call
+constexpr int kBatchSize = 30;      // iNat allows up to 30 ids per /taxa call
+constexpr int kFirstConfirmAt = 10000;   // ask the user before going past this
+constexpr int kConfirmEvery = 5000;      // then re-ask every this many species
 } // namespace
 
 ProjectBuilder::ProjectBuilder(pl::net::INatClient &inat, TaxonomyStore &store, QObject *parent)
@@ -29,6 +31,9 @@ void ProjectBuilder::start(const Request &request)
     m_projectId = -1;
     m_speciesTotal = 0;
     m_speciesSeen = 0;
+    m_nextConfirmAt = kFirstConfirmAt;
+    m_pendingPage = 0;
+    m_awaitingConfirm = false;
     m_stored.clear();
     m_neededAncestors.clear();
     m_ancestorBatches.clear();
@@ -57,6 +62,13 @@ bool ProjectBuilder::checkCancelled()
 
 void ProjectBuilder::resolvePlace()
 {
+    if (m_request.confirmedPlace) {
+        m_store.upsertPlace(*m_request.confirmedPlace);
+        m_placeId = m_request.confirmedPlace->inatId;
+        resolveRootTaxon();
+        return;
+    }
+
     if (m_request.placeQuery.trimmed().isEmpty()) {
         resolveRootTaxon();
         return;
@@ -95,6 +107,12 @@ void ProjectBuilder::resolveRootTaxon()
 {
     if (checkCancelled())
         return;
+
+    if (m_request.confirmedTaxon) {
+        useRootTaxon(*m_request.confirmedTaxon);
+        return;
+    }
+
     emit progress(tr("Resolving taxon"), 0, 0);
     m_inat.searchTaxa(m_request.taxonQuery, m_request.rank,
                       [this](pl::net::Outcome<QList<Taxon>> out) {
@@ -119,22 +137,27 @@ void ProjectBuilder::resolveRootTaxon()
             return;
         }
 
-        m_rootTaxonId = chosen->inatId;
-        m_store.upsertTaxon(*chosen);
-        m_stored.insert(m_rootTaxonId);
-
-        m_projectId = m_store.ensureProject(
-            m_request.projectName, m_rootTaxonId,
-            m_placeId > 0 ? std::optional<qint64>(m_placeId) : std::nullopt,
-            QStringLiteral("inat"));
-        if (m_projectId < 0) {
-            fail(tr("could not create the project"));
-            return;
-        }
-        m_store.addProjectTaxon(m_projectId, m_rootTaxonId, false, false);
-
-        fetchRootDetail();
+        useRootTaxon(*chosen);
     });
+}
+
+void ProjectBuilder::useRootTaxon(const Taxon &taxon)
+{
+    m_rootTaxonId = taxon.inatId;
+    m_store.upsertTaxon(taxon);
+    m_stored.insert(m_rootTaxonId);
+
+    m_projectId = m_store.ensureProject(
+        m_request.projectName, m_rootTaxonId,
+        m_placeId > 0 ? std::optional<qint64>(m_placeId) : std::nullopt,
+        QStringLiteral("inat"));
+    if (m_projectId < 0) {
+        fail(tr("could not create the project"));
+        return;
+    }
+    m_store.addProjectTaxon(m_projectId, m_rootTaxonId, false, false);
+
+    fetchRootDetail();
 }
 
 void ProjectBuilder::fetchRootDetail()
@@ -186,15 +209,43 @@ void ProjectBuilder::fetchSpeciesPage(int page)
 
         emit progress(tr("Fetching species"), m_speciesSeen, m_speciesTotal);
 
-        const int perPage = qMax(1, out.value.perPage);
-        const bool more = !out.value.results.isEmpty()
-                          && m_speciesSeen < m_speciesTotal
-                          && qint64(page) * perPage < 10000;
-        if (more)
-            fetchSpeciesPage(page + 1);
-        else
+        const bool more = !out.value.results.isEmpty() && m_speciesSeen < m_speciesTotal;
+        if (!more) {
             fillAncestors();
+            return;
+        }
+
+        // Large trees mean thousands of API requests, so check in with the user
+        // at 10,000 species and every 1,000 after that before carrying on.
+        if (m_speciesSeen >= m_nextConfirmAt) {
+            m_awaitingConfirm = true;
+            m_pendingPage = page + 1;
+            emit progress(tr("Waiting to continue"), m_speciesSeen, m_speciesTotal);
+            emit confirmMoreSpecies(m_speciesSeen, m_speciesTotal);
+            return;
+        }
+
+        fetchSpeciesPage(page + 1);
     });
+}
+
+void ProjectBuilder::continueFetching()
+{
+    if (!m_awaitingConfirm)
+        return;
+    m_awaitingConfirm = false;
+    m_nextConfirmAt += kConfirmEvery;
+    fetchSpeciesPage(m_pendingPage);
+}
+
+void ProjectBuilder::stopFetching()
+{
+    if (!m_awaitingConfirm)
+        return;
+    m_awaitingConfirm = false;
+    // The user chose to stop here — this is a normal finish, not a failure.
+    // Fill the intermediate ranks so the partial tree is still connected.
+    fillAncestors();
 }
 
 void ProjectBuilder::fillAncestors()

@@ -2,10 +2,22 @@
 qt_add_library(photolife_core STATIC
     app/Application.h        app/Application.cpp
     app/Logging.h           app/Logging.cpp
+    app/StorageStats.h      app/StorageStats.cpp
+    catalogue/BestShotStore.h catalogue/BestShotStore.cpp
     checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
+    geo/GeoBox.h            geo/GeoBox.cpp
+    geo/LocalityFetcher.h   geo/LocalityFetcher.cpp
+    geo/LocalityStore.h     geo/LocalityStore.cpp
+    geo/PinClusterer.h      geo/PinClusterer.cpp
+    geo/WebMercator.h       geo/WebMercator.cpp
+    inat/ExifWriter.h        inat/ExifWriter.cpp
+    inat/InatDownloadModel.h inat/InatDownloadModel.cpp
+    inat/InatImportService.h inat/InatImportService.cpp
+    inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
+    inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
     match/CandidateFinder.h match/CandidateFinder.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
     match/MatchReviewer.h   match/MatchReviewer.cpp
@@ -15,15 +27,22 @@ qt_add_library(photolife_core STATIC
     match/TaxonResolver.h   match/TaxonResolver.cpp
     match/TextSimilarity.h  match/TextSimilarity.cpp
     model/CaptureListModel.h model/CaptureListModel.cpp
+    model/ReferencePhotoModel.h model/ReferencePhotoModel.cpp
+    model/ReviewQueueGroupModel.h model/ReviewQueueGroupModel.cpp
     model/ReviewQueueModel.h model/ReviewQueueModel.cpp
     model/TaxonomyTreeModel.h model/TaxonomyTreeModel.cpp
+    net/GeocodeClient.h     net/GeocodeClient.cpp
+    net/GeocodeParse.h      net/GeocodeParse.cpp
     net/HttpClient.h        net/HttpClient.cpp
+    net/PhotoCache.h        net/PhotoCache.cpp
     net/INatClient.h        net/INatClient.cpp
     net/INatParse.h         net/INatParse.cpp
     net/QtNetworkTransport.h net/QtNetworkTransport.cpp
+    net/TileCache.h         net/TileCache.cpp
     net/Transport.h
     net/UpdateChecker.h     net/UpdateChecker.cpp
     raw/RawPreview.h        raw/RawPreview.cpp
+    scan/CatalogueMaintenance.h scan/CatalogueMaintenance.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp
@@ -32,7 +51,9 @@ qt_add_library(photolife_core STATIC
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
+    taxonomy/InfraspecificFiller.h taxonomy/InfraspecificFiller.cpp
     taxonomy/ProjectBuilder.h taxonomy/ProjectBuilder.cpp
+    taxonomy/ReferencePhotoFetcher.h taxonomy/ReferencePhotoFetcher.cpp
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
     taxonomy/TaxonomyTypes.h
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
@@ -41,8 +62,13 @@ qt_add_library(photolife_core STATIC
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
+    ui/MapView.h            ui/MapView.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
+    ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp
+    ui/ReferencePhotoDialog.h ui/ReferencePhotoDialog.cpp
     ui/ReviewPane.h         ui/ReviewPane.cpp
+    ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp
+    ui/TaxonPickerDialog.h  ui/TaxonPickerDialog.cpp
 )
 
 configure_file(Version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/pl/Version.h" @ONLY)
@@ -76,6 +102,16 @@ else()
     message(STATUS "LibRaw not found: RAW-only captures will show a placeholder")
 endif()
 
+# exiv2 writes the EXIF metadata (author, GPS, date, taxon) embedded into
+# photos downloaded from iNaturalist -- unlike LibRaw, this is a required
+# dependency: install libexiv2-dev (Linux), exiv2 (Homebrew), or vcpkg's
+# exiv2 port, then reconfigure.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(Exiv2 REQUIRED IMPORTED_TARGET exiv2)
+target_link_libraries(photolife_core PRIVATE PkgConfig::Exiv2)
+target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_EXIV2)
+message(STATUS "exiv2 ${Exiv2_VERSION}: EXIF writing enabled")
+
 # Schema migrations and the help pages are compiled in so the binary is
 # self-contained.
 qt_add_resources(photolife_core "photolife_migrations"
@@ -85,6 +121,14 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/003_matching.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/004_infraspecific.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/005_geolocation.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/006_geo_backfill.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/007_taxon_photos.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/008_recheck_infraspecific.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/009_best_shots.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/010_locality_cache.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/011_inat_import.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

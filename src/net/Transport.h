@@ -22,6 +22,7 @@ public:
         QByteArray userAgent;
         QString ifNoneMatch;      // -> If-None-Match
         QString ifModifiedSince;  // -> If-Modified-Since
+        QString bearerToken;      // -> Authorization: Bearer <token>, when set
     };
 
     struct Reply

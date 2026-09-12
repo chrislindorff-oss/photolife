@@ -48,6 +48,7 @@ public:
 
     int queueCount() const { return int(m_rows.size()); }
     int pendingInFolder(int folderId) const;
+    int pendingUnderFolder(const QString &folderPath) const;
 
 private:
     struct Row

@@ -1,9 +1,13 @@
 #pragma once
 
+#include "taxonomy/TaxonomyTypes.h"
+
 #include <QList>
 #include <QObject>
 #include <QSet>
 #include <QString>
+
+#include <optional>
 
 namespace pl::net {
 class INatClient;
@@ -32,6 +36,11 @@ public:
         QString rank;         // optional, e.g. "family"
         QString placeQuery;   // e.g. "Victoria, Australia"; empty = global
         int perPage = 200;
+
+        // When set, used as-is instead of searching/guessing: the caller has
+        // already confirmed this is the right match (e.g. via a picker UI).
+        std::optional<Place> confirmedPlace;
+        std::optional<Taxon> confirmedTaxon;
     };
 
     ProjectBuilder(pl::net::INatClient &inat, TaxonomyStore &store, QObject *parent = nullptr);
@@ -40,13 +49,25 @@ public:
     void cancel() { m_cancelled = true; }
     bool isRunning() const { return m_running; }
 
+    // Answer to confirmMoreSpecies(): keep pulling the next 1,000 species, or
+    // stop here and finalise the tree with what has been fetched so far. Calling
+    // either when the builder is not waiting for an answer is a no-op.
+    void continueFetching();
+    void stopFetching();
+
 signals:
     void progress(const QString &phase, int done, int total);
+
+    // The species list has passed a checkpoint (10,000, then every 5,000) and
+    // more remain. The build is paused until continueFetching() / stopFetching().
+    void confirmMoreSpecies(int fetched, int estimatedTotal);
+
     void finished(bool ok, const QString &error, int projectId);
 
 private:
     void resolvePlace();
     void resolveRootTaxon();
+    void useRootTaxon(const Taxon &taxon);
     void fetchRootDetail();
     void fetchSpeciesPage(int page);
     void fillAncestors();
@@ -68,6 +89,9 @@ private:
 
     int m_speciesTotal = 0;
     int m_speciesSeen = 0;
+    int m_nextConfirmAt = 0;     // species count at which to next ask the user
+    int m_pendingPage = 0;       // species page to resume on continueFetching()
+    bool m_awaitingConfirm = false;
 
     QSet<qint64> m_stored;                 // taxa written this run (inat ids)
     QSet<qint64> m_neededAncestors;

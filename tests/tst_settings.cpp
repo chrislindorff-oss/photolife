@@ -19,6 +19,9 @@ private slots:
     void databasePathDefaultsToAppData();
     void databasePathHonoursOverride();
     void windowStateRoundTrip();
+    void captureCaptionFieldsDefaultsToNameOnly();
+    void captureCaptionFieldsRoundTrip();
+    void inatSettingsDefaultEmptyAndRoundTrip();
 
 private:
     // Wipes any values a previous test wrote to the (test-mode) store.
@@ -77,6 +80,33 @@ void TestSettings::windowStateRoundTrip()
     Settings reader;
     QCOMPARE(reader.mainWindowGeometry(), geometry);
     QCOMPARE(reader.mainWindowState(), state);
+}
+
+void TestSettings::captureCaptionFieldsDefaultsToNameOnly()
+{
+    QCOMPARE(Settings().captureCaptionFields(), 1);   // CaptionName
+}
+
+void TestSettings::captureCaptionFieldsRoundTrip()
+{
+    Settings writer;
+    writer.setCaptureCaptionFields(0b10110);   // taxon + date + filetype, say
+
+    QCOMPARE(Settings().captureCaptionFields(), 0b10110);
+}
+
+void TestSettings::inatSettingsDefaultEmptyAndRoundTrip()
+{
+    QVERIFY(Settings().inatUsername().isEmpty());
+    QVERIFY(Settings().inatApiToken().isEmpty());
+
+    Settings writer;
+    writer.setInatUsername(QStringLiteral("some_observer"));
+    writer.setInatApiToken(QStringLiteral("test-token-value"));
+
+    Settings reader;
+    QCOMPARE(reader.inatUsername(), QStringLiteral("some_observer"));
+    QCOMPARE(reader.inatApiToken(), QStringLiteral("test-token-value"));
 }
 
 QTEST_GUILESS_MAIN(TestSettings)

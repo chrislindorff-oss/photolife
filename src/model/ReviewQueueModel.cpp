@@ -158,6 +158,17 @@ int ReviewQueueModel::pendingInFolder(int folderId) const
     return n;
 }
 
+int ReviewQueueModel::pendingUnderFolder(const QString &folderPath) const
+{
+    int n = 0;
+    const QString prefix = folderPath + QLatin1Char('/');
+    for (const Row &row : m_rows) {
+        if (row.folderPath == folderPath || row.folderPath.startsWith(prefix))
+            ++n;
+    }
+    return n;
+}
+
 void ReviewQueueModel::onThumbnailReady(const QString &contentHash, int longestEdge)
 {
     if (longestEdge != kThumbPx)

@@ -3,6 +3,7 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QWidget>
+#include <QAction>
 #include <QTabWidget>
 #include <QTreeView>
 
@@ -69,6 +70,11 @@ int runHeadlessBuild(pl::Application &app, const pl::taxonomy::ProjectBuilder::R
 
     pl::taxonomy::TaxonomyStore store(app.database().connectionName());
     pl::taxonomy::ProjectBuilder builder(app.inat(), store);
+
+    // No interactive user in a headless build — keep pulling species past every
+    // checkpoint.
+    QObject::connect(&builder, &pl::taxonomy::ProjectBuilder::confirmMoreSpecies,
+                     &builder, [&builder](int, int) { builder.continueFetching(); });
 
     QObject::connect(&builder, &pl::taxonomy::ProjectBuilder::progress,
                      [](const QString &phase, int done, int total) {
@@ -275,9 +281,30 @@ int main(int argc, char *argv[])
         const QString out = parser.value(screenshotOption);
         const int tab = parser.value(tabOption).toInt();
         QTimer::singleShot(1000, [&] {
+            // --tab numbering matches the seven logical screens (kept stable across the
+            // Reference Tree / All Library Photos / Review Unmatched view-mode split, and
+            // across the Map tab's insertion into the Reference Tree tab row):
+            //   0 Photos of Tree Selection, 1 All Library Photos, 2 Review Unmatched,
+            //   3 Missing Species, 4 Reference Photos, 5 My Best Shots, 6 Map.
+            // Values are indices within the Reference Tree mode's QTabWidget.
+            static const int kTreeTabIndex[] = {0, -1, -1, 2, 3, 4, 1};
             for (QWidget *w : QApplication::topLevelWidgets()) {
-                if (auto *tabs = w->findChild<QTabWidget *>())
-                    tabs->setCurrentIndex(tab);
+                auto *treeAction = w->findChild<QAction *>(QStringLiteral("viewTreeAction"));
+                auto *libraryAction = w->findChild<QAction *>(QStringLiteral("viewLibraryAction"));
+                auto *reviewAction = w->findChild<QAction *>(QStringLiteral("viewReviewAction"));
+                auto *tabs = w->findChild<QTabWidget *>();
+                if (tab == 1) {
+                    if (libraryAction)
+                        libraryAction->setChecked(true);
+                } else if (tab == 2) {
+                    if (reviewAction)
+                        reviewAction->setChecked(true);
+                } else {
+                    if (treeAction)
+                        treeAction->setChecked(true);
+                    if (tabs && tab >= 0 && tab < 7 && kTreeTabIndex[tab] >= 0)
+                        tabs->setCurrentIndex(kTreeTabIndex[tab]);
+                }
                 if (tab == 0) {
                     if (auto *tree = w->findChild<QTreeView *>()) {
                         tree->expandAll();

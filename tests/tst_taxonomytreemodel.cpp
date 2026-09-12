@@ -41,6 +41,7 @@ private slots:
     void indexForTaxonReflectsVisibility();
     void filterToggleKeepsExpansionAndSelection();
     void findTaxaMatchesNameAndCommonName();
+    void hiddenRanksReparentChildrenToNearestVisibleAncestor();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -262,6 +263,32 @@ void TestTaxonomyTreeModel::findTaxaMatchesNameAndCommonName()
     QCOMPARE(model.findTaxa(QStringLiteral("pterostylis")).first(), qint64(801));
 
     QVERIFY(model.findTaxa(QStringLiteral("nothing here")).isEmpty());
+}
+
+void TestTaxonomyTreeModel::hiddenRanksReparentChildrenToNearestVisibleAncestor()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::Fatal);
+    model.setProject(m_projectId);
+
+    QCOMPARE(model.availableRanks(),
+             QStringList({QStringLiteral("family"), QStringLiteral("genus"),
+                          QStringLiteral("species")}));
+
+    model.setHiddenRanks({QStringLiteral("genus")});
+
+    QCOMPARE(model.rowCount(), 1);   // family is still the sole root
+    const QModelIndex family = model.index(0, 0);
+    QCOMPARE(model.data(family, Qt::DisplayRole).toString(), QStringLiteral("Orchidaceae"));
+    QCOMPARE(model.rowCount(family), 2);           // both species now sit directly under family
+    QVERIFY(!model.indexForTaxon(800).isValid());  // Diuris (genus) no longer materialized
+    QVERIFY(!model.indexForTaxon(801).isValid());  // Pterostylis likewise
+    QVERIFY(model.indexForTaxon(900).isValid());
+    QCOMPARE(model.parent(model.indexForTaxon(900)), family);
+
+    model.setHiddenRanks({});   // invalidates `family`; re-fetch before touching the model again
+    QVERIFY(model.indexForTaxon(800).isValid());   // genus level restored
+    QCOMPARE(model.rowCount(model.index(0, 0)), 2);
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

@@ -61,6 +61,27 @@ void TaxonomyTreeModel::setPhotographedOnly(bool on)
     rebuild();
 }
 
+QStringList TaxonomyTreeModel::availableRanks() const
+{
+    QStringList ranks;
+    QSet<QString> seen;
+    for (const taxonomy::TreeNode &tn : m_flat) {
+        if (!seen.contains(tn.rank)) {
+            seen.insert(tn.rank);
+            ranks << tn.rank;
+        }
+    }
+    return ranks;
+}
+
+void TaxonomyTreeModel::setHiddenRanks(const QSet<QString> &ranks)
+{
+    if (m_hiddenRanks == ranks)
+        return;
+    m_hiddenRanks = ranks;
+    rebuild();
+}
+
 void TaxonomyTreeModel::rebuild()
 {
     beginResetModel();
@@ -76,26 +97,33 @@ void TaxonomyTreeModel::rebuild()
         return m_coverage.byTaxon.value(inatId).subtreeHasPhotos;
     };
 
-    std::vector<std::unique_ptr<Node>> pending;
-    pending.reserve(m_flat.size());
+    // m_flat is ordered parents-before-children (by rank_level), so a single
+    // pass can resolve each kept taxon's display parent as we go. A taxon whose
+    // own rank is hidden isn't materialized as a Node; instead its resolved
+    // parent is recorded as whatever its own resolved parent was, so its
+    // children skip straight past it (e.g. hiding "genus" moves species up to
+    // sit directly under family).
+    QHash<qint64, Node *> resolvedParent;
+
     for (const taxonomy::TreeNode &tn : m_flat) {
         if (!keep(tn.inatId))
             continue;
+
+        Node *base = m_root.get();
+        if (tn.parentInatId)
+            base = resolvedParent.value(*tn.parentInatId, m_root.get());
+
+        if (m_hiddenRanks.contains(tn.rank)) {
+            resolvedParent.insert(tn.inatId, base);
+            continue;
+        }
+
         auto node = std::make_unique<Node>();
         node->data = tn;
+        node->parent = base;
         m_byId.insert(tn.inatId, node.get());
-        pending.push_back(std::move(node));
-    }
-
-    // m_flat is ordered parents-before-children (by rank_level).
-    for (auto &node : pending) {
-        Node *parent = m_root.get();
-        if (node->data.parentInatId) {
-            if (Node *found = m_byId.value(*node->data.parentInatId, nullptr))
-                parent = found;
-        }
-        node->parent = parent;
-        parent->children.push_back(std::move(node));
+        resolvedParent.insert(tn.inatId, node.get());
+        base->children.push_back(std::move(node));
     }
 
     endResetModel();
@@ -258,6 +286,8 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
     }
     case InatIdRole:
         return t.inatId;
+    case NameRole:
+        return t.name;
     case RankRole:
         return t.rank;
     case InRegionRole:

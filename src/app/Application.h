@@ -23,10 +23,16 @@ class ThumbnailCache;
 namespace net {
 class HttpClient;
 class INatClient;
+class GeocodeClient;
+class PhotoCache;
+class TileCache;
 class UpdateChecker;
 }
 namespace taxonomy {
 class TaxonomyStore;
+}
+namespace inat {
+class InatPhotoDownloader;
 }
 
 // Owns process-wide state: settings, the open database, the thumbnail cache,
@@ -54,7 +60,11 @@ public:
     thumb::ThumbnailCache &thumbnails();
     taxonomy::TaxonomyStore &taxonomyStore();
     net::INatClient &inat();
+    net::GeocodeClient &geocoder();
+    net::PhotoCache &photoCache();
+    net::TileCache &tileCache();
     net::UpdateChecker &updateChecker();
+    inat::InatPhotoDownloader &inatPhotoDownloader();
 
 private:
     std::unique_ptr<Settings> m_settings;
@@ -66,7 +76,12 @@ private:
     std::unique_ptr<taxonomy::TaxonomyStore> m_taxonomyStore;
     std::unique_ptr<net::HttpClient> m_http;
     std::unique_ptr<net::INatClient> m_inat;
+    std::unique_ptr<net::HttpClient> m_geocodeHttp;
+    std::unique_ptr<net::GeocodeClient> m_geocoder;
+    std::unique_ptr<net::PhotoCache> m_photoCache;
+    std::unique_ptr<net::TileCache> m_tileCache;
     std::unique_ptr<net::UpdateChecker> m_updateChecker;
+    std::unique_ptr<inat::InatPhotoDownloader> m_inatPhotoDownloader;
     std::unique_ptr<MainWindow> m_mainWindow;
 };
 

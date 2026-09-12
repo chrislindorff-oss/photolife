@@ -17,9 +17,9 @@ HttpClient::HttpClient(std::unique_ptr<Transport> transport, pl::taxonomy::Taxon
 
 HttpClient::~HttpClient() = default;
 
-void HttpClient::get(const QUrl &url, Handler handler)
+void HttpClient::get(const QUrl &url, Handler handler, const QString &bearerToken)
 {
-    m_queue.enqueue({url, std::move(handler), 0});
+    m_queue.enqueue({url, std::move(handler), 0, bearerToken});
     pump();
 }
 
@@ -65,13 +65,15 @@ void HttpClient::dispatch(Job job)
     m_lastDispatchMs = QDateTime::currentMSecsSinceEpoch();
 
     const QString urlKey = job.url.toString(QUrl::FullyEncoded);
+    const bool authenticated = !job.bearerToken.isEmpty();
 
     Transport::Request req;
     req.url = job.url;
     req.userAgent = m_userAgent;
+    req.bearerToken = job.bearerToken;
 
     std::optional<pl::taxonomy::TaxonomyStore::CacheEntry> cached;
-    if (m_cache) {
+    if (m_cache && !authenticated) {
         cached = m_cache->cachedResponse(urlKey);
         if (cached) {
             req.ifNoneMatch = cached->etag;
@@ -79,7 +81,8 @@ void HttpClient::dispatch(Job job)
         }
     }
 
-    m_transport->send(req, [this, job = std::move(job), urlKey, cached](Transport::Reply reply) mutable {
+    m_transport->send(req, [this, job = std::move(job), urlKey, cached, authenticated](
+                               Transport::Reply reply) mutable {
         // 304: serve the cached body.
         if (reply.status == 304 && cached) {
             HttpResponse resp;
@@ -113,7 +116,7 @@ void HttpClient::dispatch(Job job)
         resp.body = reply.body;
         resp.error = reply.error;
 
-        if (m_cache && reply.status == 200) {
+        if (m_cache && !authenticated && reply.status == 200) {
             m_cache->storeResponse(urlKey, reply.etag, reply.lastModified, reply.status,
                                    reply.body);
         }

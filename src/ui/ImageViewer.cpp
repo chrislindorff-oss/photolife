@@ -1,5 +1,6 @@
 #include "ui/ImageViewer.h"
 
+#include <QDesktopServices>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QImageReader>
@@ -8,6 +9,7 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace pl {
@@ -40,8 +42,35 @@ ImageViewer::ImageViewer(QWidget *parent)
     connect(prev, &QPushButton::clicked, this, [this] { step(-1); });
     connect(next, &QPushButton::clicked, this, [this] { step(1); });
 
+    m_bestShot = new QPushButton(this);
+    m_bestShot->hide();
+    connect(m_bestShot, &QPushButton::clicked, this, [this] {
+        if (m_items.isEmpty())
+            return;
+        const Item &item = m_items.at(m_index);
+        if (item.captureId > 0 && item.canBestShot)
+            emit bestShotToggleRequested(item.captureId, !item.bestShot);
+    });
+
+    m_viewOnMap = new QPushButton(tr("View on Map"), this);
+    m_viewOnMap->hide();
+    connect(m_viewOnMap, &QPushButton::clicked, this, [this] {
+        if (m_items.isEmpty())
+            return;
+        const Item &item = m_items.at(m_index);
+        if (!item.hasGps)
+            return;
+        QDesktopServices::openUrl(QUrl(QStringLiteral(
+            "https://www.openstreetmap.org/?mlat=%1&mlon=%2#map=16/%1/%2")
+            .arg(item.latitude, 0, 'f', 6)
+            .arg(item.longitude, 0, 'f', 6)));
+    });
+
     auto *nav = new QHBoxLayout;
     nav->addWidget(prev);
+    nav->addStretch(1);
+    nav->addWidget(m_bestShot);
+    nav->addWidget(m_viewOnMap);
     nav->addStretch(1);
     nav->addWidget(m_counter);
     nav->addStretch(1);
@@ -84,6 +113,8 @@ void ImageViewer::showCurrent()
         m_image->setText(tr("No image."));
         m_caption->clear();
         m_counter->clear();
+        m_bestShot->hide();
+        m_viewOnMap->hide();
         return;
     }
 
@@ -101,7 +132,45 @@ void ImageViewer::showCurrent()
 
     m_caption->setText(item.caption);
     m_counter->setText(tr("%1 of %2").arg(m_index + 1).arg(m_items.size()));
-    setWindowTitle(item.caption.isEmpty() ? tr("Photo") : item.caption);
+    setWindowTitle(item.title.isEmpty() ? tr("Photo") : item.title);
+    updateBestShotButton();
+    updateMapButton();
+}
+
+void ImageViewer::updateMapButton()
+{
+    if (m_items.isEmpty()) {
+        m_viewOnMap->hide();
+        return;
+    }
+    m_viewOnMap->setVisible(m_items.at(m_index).hasGps);
+}
+
+void ImageViewer::updateBestShotButton()
+{
+    if (m_items.isEmpty()) {
+        m_bestShot->hide();
+        return;
+    }
+    const Item &item = m_items.at(m_index);
+    m_bestShot->setVisible(item.captureId > 0);
+    m_bestShot->setEnabled(item.canBestShot);
+    if (!item.canBestShot)
+        m_bestShot->setText(tr("☆ Identify to add a best shot"));
+    else
+        m_bestShot->setText(item.bestShot ? tr("★ Remove from Best Shots")
+                                          : tr("☆ Add to Best Shots"));
+}
+
+void ImageViewer::markBestShot(qint64 captureId, bool on)
+{
+    if (captureId <= 0)
+        return;
+    for (Item &item : m_items) {
+        if (item.captureId == captureId)
+            item.bestShot = on;
+    }
+    updateBestShotButton();
 }
 
 void ImageViewer::rescale()

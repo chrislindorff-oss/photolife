@@ -6,6 +6,8 @@
 #include <QAbstractItemModel>
 #include <QHash>
 #include <QList>
+#include <QSet>
+#include <QString>
 
 #include <memory>
 
@@ -30,6 +32,7 @@ public:
         SpeciesWithPhotosRole,
         HasPhotosRole,
         StatusRole,
+        NameRole,       // accepted scientific name only (no common-name suffix)
     };
 
     explicit TaxonomyTreeModel(pl::Database &db, QObject *parent = nullptr);
@@ -44,6 +47,16 @@ public:
     // When on, hides every taxon with no photographed species in its subtree.
     void setPhotographedOnly(bool on);
     bool photographedOnly() const { return m_photographedOnly; }
+
+    // The distinct ranks present in the current project's tree, coarsest first
+    // (kingdom, phylum, ... species, subspecies, ...).
+    QStringList availableRanks() const;
+
+    // Ranks in this set are hidden: their taxa are removed from the tree and
+    // their children are reparented to the nearest visible ancestor, so hiding
+    // e.g. "genus" moves species up to sit directly under family.
+    void setHiddenRanks(const QSet<QString> &ranks);
+    QSet<QString> hiddenRanks() const { return m_hiddenRanks; }
 
     // The index of a taxon by its iNaturalist id, or an invalid index when the
     // taxon is not currently in the tree (e.g. filtered out). Column 0.
@@ -81,6 +94,7 @@ private:
     QHash<qint64, Node *> m_byId;           // live nodes by iNat id, rebuilt each rebuild()
     pl::coverage::ProjectCoverage m_coverage;
     bool m_photographedOnly = false;
+    QSet<QString> m_hiddenRanks;
 };
 
 } // namespace pl::model

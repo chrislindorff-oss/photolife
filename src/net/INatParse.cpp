@@ -55,6 +55,20 @@ pl::taxonomy::Taxon parseTaxon(const QJsonObject &obj)
     else if (const QList<qint64> chain = ancestryIds(t.ancestry); !chain.isEmpty())
         t.parentInatId = chain.last();
 
+    // default_photo carries several sized URLs; prefer a mid-size one for the
+    // Reference Photos grid, falling back to whatever is present.
+    const QJsonObject photo = obj.value(QStringLiteral("default_photo")).toObject();
+    if (!photo.isEmpty()) {
+        for (const char *key : {"medium_url", "small_url", "square_url", "url"}) {
+            const QString u = photo.value(QLatin1String(key)).toString();
+            if (!u.isEmpty()) {
+                t.photoUrl = u;
+                break;
+            }
+        }
+        t.photoAttribution = photo.value(QStringLiteral("attribution")).toString();
+    }
+
     if (!t.commonName.isEmpty())
         t.vernacular.append(t.commonName);
 
@@ -115,6 +129,72 @@ pl::taxonomy::Place parsePlace(const QJsonObject &obj)
         }
     }
     return p;
+}
+
+pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
+{
+    pl::taxonomy::Observation o;
+    o.id = optId(obj.value(QStringLiteral("id"))).value_or(0);
+    o.observedOn = obj.value(QStringLiteral("observed_on")).toString();
+    o.placeGuess = obj.value(QStringLiteral("place_guess")).toString();
+
+    const QJsonObject taxon = obj.value(QStringLiteral("taxon")).toObject();
+    if (!taxon.isEmpty())
+        o.taxonInatId = optId(taxon.value(QStringLiteral("id"))).value_or(0);
+
+    // Same [lng, lat] GeoJSON point convention already used for a place's
+    // bounding box above. Absent (geoprivacy-obscured with no public
+    // fallback, or simply not recorded) rather than (0, 0) when missing.
+    const QJsonObject geojson = obj.value(QStringLiteral("geojson")).toObject();
+    const QJsonArray point = geojson.value(QStringLiteral("coordinates")).toArray();
+    if (point.size() == 2) {
+        o.longitude = point.at(0).toDouble();
+        o.latitude = point.at(1).toDouble();
+    }
+
+    const QJsonArray photos = obj.value(QStringLiteral("photos")).toArray();
+    for (const QJsonValue &photoValue : photos) {
+        const QJsonObject photoObj = photoValue.toObject();
+        pl::taxonomy::ObservationPhoto photo;
+        photo.id = optId(photoObj.value(QStringLiteral("id"))).value_or(0);
+
+        // Prefer an explicit sized field if the response included one (some
+        // Photo shapes do, like default_photo's medium_url/etc.); the base
+        // "url" iNat always includes is normally the smallest ("square").
+        const QString base = photoObj.value(QStringLiteral("url")).toString();
+        auto explicitUrl = [&](std::initializer_list<const char *> keys) -> QString {
+            for (const char *key : keys) {
+                const QString u = photoObj.value(QLatin1String(key)).toString();
+                if (!u.isEmpty())
+                    return u;
+            }
+            return {};
+        };
+        // Derives a different size from the default "url" via iNat's
+        // size-suffix URL convention (".../photos/<id>/square.jpg" etc.).
+        auto derivedUrl = [&](const char *targetSize) -> QString {
+            for (const char *size : {"square", "small", "medium", "large", "original"}) {
+                if (base.contains(QLatin1String(size)))
+                    return QString(base).replace(QLatin1String(size),
+                                                 QLatin1String(targetSize));
+            }
+            return {};
+        };
+
+        photo.previewUrl = explicitUrl({"small_url", "square_url", "medium_url"});
+        if (photo.previewUrl.isEmpty())
+            photo.previewUrl = !base.isEmpty() ? base : derivedUrl("small");
+
+        photo.downloadUrl = explicitUrl({"original_url", "large_url", "medium_url"});
+        if (photo.downloadUrl.isEmpty())
+            photo.downloadUrl = derivedUrl("original");
+        if (photo.downloadUrl.isEmpty())
+            photo.downloadUrl = base;
+
+        if (!photo.previewUrl.isEmpty() || !photo.downloadUrl.isEmpty())
+            o.photos.append(photo);
+    }
+    return o;
 }
 
 } // namespace pl::net::inat

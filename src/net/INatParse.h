@@ -20,4 +20,12 @@ pl::taxonomy::Taxon parseTaxon(const QJsonObject &obj);
 // from "bounding_box_geojson" when present.
 pl::taxonomy::Place parsePlace(const QJsonObject &obj);
 
+// Parses one observation object from GET /v1/observations. Each photo's url
+// is upgraded from whatever size iNat returned to the largest size that
+// substitution can reach ("original", falling back down through "large" /
+// "medium" / "small" / "square"), since observation photo objects don't
+// reliably include every size as a separate field the way a taxon's
+// default_photo does.
+pl::taxonomy::Observation parseObservation(const QJsonObject &obj);
+
 } // namespace pl::net::inat

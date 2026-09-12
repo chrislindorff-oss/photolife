@@ -3,6 +3,8 @@
 #include <QDateTime>
 #include <QString>
 
+#include <optional>
+
 class QByteArray;
 class QIODevice;
 
@@ -15,8 +17,11 @@ struct ExifData
     QDateTime dateTimeOriginal;   // tag 0x9003, the moment the shutter fired
     QString cameraMake;           // tag 0x010F
     QString cameraModel;          // tag 0x0110
+    std::optional<double> latitude;    // decimal degrees, +N/-S (GPS IFD)
+    std::optional<double> longitude;   // decimal degrees, +E/-W (GPS IFD)
 
     bool hasDate() const { return dateTimeOriginal.isValid(); }
+    bool hasGps() const { return latitude.has_value() && longitude.has_value(); }
 };
 
 // Reads EXIF from a JPEG (APP1/Exif segment). Returns a default-constructed

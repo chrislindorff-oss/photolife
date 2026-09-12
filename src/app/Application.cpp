@@ -3,8 +3,12 @@
 #include "app/Logging.h"
 #include "db/Database.h"
 #include "pl/Version.h"
+#include "inat/InatPhotoDownloader.h"
+#include "net/GeocodeClient.h"
 #include "net/HttpClient.h"
 #include "net/INatClient.h"
+#include "net/PhotoCache.h"
+#include "net/TileCache.h"
 #include "match/MatchService.h"
 #include "net/QtNetworkTransport.h"
 #include "net/UpdateChecker.h"
@@ -69,12 +73,32 @@ bool Application::initialize()
     m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
     m_http = std::make_unique<net::HttpClient>(
         std::make_unique<net::QtNetworkTransport>(), m_taxonomyStore.get());
-    m_http->setUserAgent(QStringLiteral("%1/%2 (+%3)")
-                             .arg(QString::fromLatin1(kAppName),
-                                  QString::fromLatin1(kAppVersion),
-                                  QString::fromLatin1(kOrgDomain))
-                             .toUtf8());
+    const QByteArray userAgent = QStringLiteral("%1/%2 (+%3)")
+                                     .arg(QString::fromLatin1(kAppName),
+                                          QString::fromLatin1(kAppVersion),
+                                          QString::fromLatin1(kOrgDomain))
+                                     .toUtf8();
+    m_http->setUserAgent(userAgent);
     m_inat = std::make_unique<net::INatClient>(*m_http);
+
+    // A second, independently-throttled HttpClient for Nominatim: its usage
+    // policy (max 1 request/second) is stricter than -- and unrelated to --
+    // iNaturalist's, so it gets its own queue rather than sharing m_http's.
+    // No conditional-GET cache needed here: geocode_cache already dedupes by
+    // rounded coordinate before a request is ever made.
+    m_geocodeHttp =
+        std::make_unique<net::HttpClient>(std::make_unique<net::QtNetworkTransport>(), nullptr);
+    m_geocodeHttp->setUserAgent(userAgent);
+    m_geocodeHttp->setMinRequestIntervalMs(1000);
+    m_geocoder = std::make_unique<net::GeocodeClient>(*m_geocodeHttp);
+
+    m_photoCache = std::make_unique<net::PhotoCache>(
+        QDir(dataDir).filePath(QStringLiteral("reference-photos")), userAgent);
+
+    m_tileCache = std::make_unique<net::TileCache>(
+        QDir(dataDir).filePath(QStringLiteral("tiles")), userAgent);
+
+    m_inatPhotoDownloader = std::make_unique<inat::InatPhotoDownloader>(userAgent);
 
     m_updateChecker = std::make_unique<net::UpdateChecker>(*m_http);
     m_updateChecker->setRepo(QString::fromLatin1(kReleasesRepo));
@@ -130,9 +154,29 @@ net::INatClient &Application::inat()
     return *m_inat;
 }
 
+net::GeocodeClient &Application::geocoder()
+{
+    return *m_geocoder;
+}
+
+net::PhotoCache &Application::photoCache()
+{
+    return *m_photoCache;
+}
+
+net::TileCache &Application::tileCache()
+{
+    return *m_tileCache;
+}
+
 net::UpdateChecker &Application::updateChecker()
 {
     return *m_updateChecker;
+}
+
+inat::InatPhotoDownloader &Application::inatPhotoDownloader()
+{
+    return *m_inatPhotoDownloader;
 }
 
 } // namespace pl

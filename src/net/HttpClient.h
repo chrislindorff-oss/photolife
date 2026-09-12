@@ -45,7 +45,13 @@ public:
     void setRetryBaseDelayMs(int ms) { m_retryBaseMs = ms; }
 
     using Handler = std::function<void(HttpResponse)>;
-    void get(const QUrl &url, Handler handler);
+    // `bearerToken`, when non-empty, is sent as `Authorization: Bearer` and
+    // makes this one request bypass the conditional-GET cache entirely (both
+    // read and write) -- the cache is keyed purely on URL, so an
+    // authenticated and an unauthenticated request to the same URL must never
+    // share a cached response (e.g. iNaturalist reveals different data, such
+    // as true vs. geoprivacy-obscured coordinates, depending on auth).
+    void get(const QUrl &url, Handler handler, const QString &bearerToken = QString());
 
     int queuedCount() const { return int(m_queue.size()); }
     bool isBusy() const { return m_inFlight || !m_queue.isEmpty(); }
@@ -59,6 +65,7 @@ private:
         QUrl url;
         Handler handler;
         int attempt = 0;
+        QString bearerToken;
     };
 
     void pump();

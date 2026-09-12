@@ -3,6 +3,7 @@
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QUrlQuery>
 
 #include "FakeTransport.h"
 #include "db/Database.h"
@@ -76,6 +77,8 @@ private slots:
     void buildsConnectedTree();
     void speciesListErrorFailsTheBuild();
     void cancellationStopsTheBuild();
+    void usesConfirmedMatchesWithoutSearching();
+    void largeSpeciesListChecksInWithTheUser();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -196,6 +199,100 @@ void TestProjectBuilder::cancellationStopsTheBuild()
 
     QCOMPARE(spy.at(0).at(0).toBool(), false);
     QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("cancelled"));
+}
+
+void TestProjectBuilder::usesConfirmedMatchesWithoutSearching()
+{
+    wire([](const Transport::Request &req, int) -> Transport::Reply {
+        const QString path = req.url.path();
+        if (path.endsWith(QLatin1String("/places/autocomplete"))
+            || (path.endsWith(QLatin1String("/taxa")) && req.url.toString().contains(QLatin1String("q="))))
+            return FakeTransport::httpStatus(500);   // must not be called: a match was already confirmed
+        return route(req);
+    });
+
+    Place place;
+    place.inatId = 6744;
+    place.name = QStringLiteral("Victoria");
+    place.displayName = QStringLiteral("Victoria, AU");
+    place.adminLevel = 10;
+
+    Taxon taxon;
+    taxon.inatId = 47217;
+    taxon.rank = QStringLiteral("family");
+    taxon.rankLevel = 30;
+    taxon.name = QStringLiteral("Orchidaceae");
+    taxon.isActive = true;
+    taxon.ancestry = QStringLiteral("48460/47126");
+
+    ProjectBuilder::Request r = request();
+    r.confirmedPlace = place;
+    r.confirmedTaxon = taxon;
+
+    QSignalSpy spy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(r);
+    QVERIFY(spy.wait(5000));
+
+    QCOMPARE(spy.at(0).at(0).toBool(), true);   // ok
+    const int projectId = spy.at(0).at(2).toInt();
+    QVERIFY(projectId > 0);
+    QCOMPARE(m_store->taxonCount(), 7);
+    QVERIFY(m_store->placeByInatId(6744).has_value());
+}
+
+void TestProjectBuilder::largeSpeciesListChecksInWithTheUser()
+{
+    constexpr int kTotal = 20000;
+
+    wire([kTotal](const Transport::Request &req, int) -> Transport::Reply {
+        const QString path = req.url.path();
+        if (path.contains(QLatin1String("/observations/species_counts"))) {
+            const QUrlQuery q(req.url);
+            const int page = q.queryItemValue(QStringLiteral("page")).toInt();
+            const int perPage = q.queryItemValue(QStringLiteral("per_page")).toInt();
+            const int start = (page - 1) * perPage;
+            QStringList rows;
+            for (int i = start; i < qMin(start + perPage, kTotal); ++i) {
+                const qint64 id = 100000 + i;
+                rows << QStringLiteral(
+                    "{\"count\":1,\"taxon\":{\"id\":%1,\"rank\":\"species\","
+                    "\"rank_level\":10,\"name\":\"Testus sp%1\","
+                    "\"ancestry\":\"48460/47126/47217/800\"}}").arg(id);
+            }
+            return FakeTransport::ok(
+                QStringLiteral("{\"total_results\":%1,\"page\":%2,\"per_page\":%3,\"results\":[%4]}")
+                    .arg(kTotal).arg(page).arg(perPage).arg(rows.join(QLatin1Char(',')))
+                    .toUtf8());
+        }
+        return route(req);
+    });
+
+    ProjectBuilder::Request r = request();
+    r.perPage = 5000;   // 2 pages to reach the 10,000 checkpoint
+
+    QSignalSpy confirmSpy(m_builder.get(), &ProjectBuilder::confirmMoreSpecies);
+    QSignalSpy finishSpy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(r);
+
+    // First check-in at 10,000, with the estimated total, and the build paused.
+    QVERIFY(confirmSpy.wait(5000));
+    QCOMPARE(confirmSpy.at(0).at(0).toInt(), 10000);
+    QCOMPARE(confirmSpy.at(0).at(1).toInt(), kTotal);
+    QVERIFY(m_builder->isRunning());
+    QVERIFY(finishSpy.isEmpty());
+
+    // Keep going -> next check-in 5,000 species later.
+    m_builder->continueFetching();
+    QVERIFY(confirmSpy.wait(5000));
+    QCOMPARE(confirmSpy.at(1).at(0).toInt(), 15000);
+
+    // Stop here -> a normal, successful finish with the partial tree kept.
+    m_builder->stopFetching();
+    QVERIFY(finishSpy.wait(5000));
+    QCOMPARE(finishSpy.at(0).at(0).toBool(), true);
+    const int projectId = finishSpy.at(0).at(2).toInt();
+    QVERIFY(projectId > 0);
+    QVERIFY(m_store->projectTaxonInatIds(projectId).size() >= 15000);
 }
 
 QTEST_GUILESS_MAIN(TestProjectBuilder)

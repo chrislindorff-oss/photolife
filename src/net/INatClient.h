@@ -47,6 +47,12 @@ struct TaxonDetail
     QList<pl::taxonomy::Taxon> children;
 };
 
+struct ObservationPage
+{
+    int totalResults = 0;
+    QList<pl::taxonomy::Observation> results;
+};
+
 // Typed, read-only wrapper over the anonymous iNaturalist v1 API. All calls go
 // through the shared HttpClient, so they inherit its rate limiting, retries and
 // ETag caching. Results come back on the HttpClient's thread.
@@ -59,6 +65,13 @@ public:
 
     void setBaseUrl(const QString &baseUrl) { m_baseUrl = baseUrl; }
     QString baseUrl() const { return m_baseUrl; }
+
+    // A personal API token (from inaturalist.org/users/api_token), sent as a
+    // Bearer token on every call this client makes from here on. Empty (the
+    // default) means anonymous, public-API-only requests. See HttpClient::get()
+    // for why an authenticated call never touches the conditional-GET cache.
+    void setAccessToken(const QString &token) { m_accessToken = token; }
+    QString accessToken() const { return m_accessToken; }
 
     // GET /v1/places/autocomplete?q=
     void resolvePlaces(const QString &query,
@@ -79,9 +92,28 @@ public:
     void speciesCounts(qint64 taxonId, qint64 placeId, int page, int perPage,
                        std::function<void(Outcome<SpeciesCountsPage>)> done);
 
+    // GET /v1/observations?taxon_id=&place_id=&verifiable=true&per_page=0
+    // Just the verifiable-observation count for a taxon in a place (0 = no place
+    // filter) — enough to tell whether a taxon actually occurs there.
+    void observationCount(qint64 taxonId, qint64 placeId,
+                          std::function<void(Outcome<int>)> done);
+
+    // GET /v1/observations?user_login=&taxon_id=<comma list>&place_id=&photos=true&page=
+    // `taxonIds` is one page's worth of ids -- callers batch large taxon lists
+    // themselves (see ReferencePhotoFetcher's 30-at-a-time precedent). `placeId`
+    // restricts results to that place (0 = no place filter), the same
+    // convention as speciesCounts()/observationCount() above. Sends the
+    // configured access token, if any, so the results reflect what that user
+    // can actually see (true coordinates on their own geoprivacy-obscured
+    // observations, otherwise the public, possibly-obscured view).
+    void fetchObservations(const QString &userLogin, const QList<qint64> &taxonIds,
+                           qint64 placeId, int page,
+                           std::function<void(Outcome<ObservationPage>)> done);
+
 private:
     HttpClient &m_http;
     QString m_baseUrl = QStringLiteral("https://api.inaturalist.org/v1");
+    QString m_accessToken;
 };
 
 } // namespace pl::net

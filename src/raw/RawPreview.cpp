@@ -4,12 +4,22 @@
 
 #include <QTransform>
 
+#include <cctype>
+
 #ifdef PHOTOLIFE_HAVE_LIBRAW
 #include <libraw/libraw.h>
 #include <cstring>
 #endif
 
 namespace pl::raw {
+
+double dmsToDecimalDegrees(double deg, double min, double sec, char ref, char negativeRef)
+{
+    const double magnitude = deg + min / 60.0 + sec / 3600.0;
+    const bool negative =
+        std::toupper(static_cast<unsigned char>(ref)) == std::toupper(static_cast<unsigned char>(negativeRef));
+    return negative ? -magnitude : magnitude;
+}
 
 bool isAvailable()
 {
@@ -93,9 +103,70 @@ QImage extractPreview(const QString &path, int minLongestEdge)
     return image;
 }
 
+QByteArray extractEmbeddedJpegBytes(const QString &path)
+{
+    LibRaw raw;
+    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
+        return {};
+    if (raw.unpack_thumb() != LIBRAW_SUCCESS)
+        return {};
+
+    int err = 0;
+    libraw_processed_image_t *thumb = raw.dcraw_make_mem_thumb(&err);
+    QByteArray bytes;
+    if (thumb && thumb->type == LIBRAW_IMAGE_JPEG)
+        bytes = QByteArray(reinterpret_cast<const char *>(thumb->data), int(thumb->data_size));
+    if (thumb)
+        LibRaw::dcraw_clear_mem(thumb);
+    raw.recycle();
+    return bytes;
+}
+
+namespace {
+bool isRef(char c, char a, char b)
+{
+    const int u = std::toupper(static_cast<unsigned char>(c));
+    return u == std::toupper(static_cast<unsigned char>(a)) || u == std::toupper(static_cast<unsigned char>(b));
+}
+} // namespace
+
+RawGps extractGps(const QString &path)
+{
+    LibRaw raw;
+    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
+        return {};
+
+    RawGps out;
+    const libraw_gps_info_t &gps = raw.imgdata.other.parsed_gps;
+    // gpsparsed can be set even when the file carries an empty/placeholder GPS
+    // block (no fix acquired) -- e.g. latref/longref are null bytes and every
+    // DMS component is zero, which would otherwise silently become (0, 0):
+    // "Null Island", in the Atlantic off West Africa. Require a real N/S and
+    // E/W reference before trusting the coordinates at all.
+    const bool hasRefs = isRef(gps.latref, 'N', 'S') && isRef(gps.longref, 'E', 'W');
+    if (gps.gpsparsed && hasRefs) {
+        out.latitude = dmsToDecimalDegrees(gps.latitude[0], gps.latitude[1], gps.latitude[2],
+                                           gps.latref, 'S');
+        out.longitude = dmsToDecimalDegrees(gps.longitude[0], gps.longitude[1], gps.longitude[2],
+                                            gps.longref, 'W');
+    }
+    raw.recycle();
+    return out;
+}
+
 #else  // no LibRaw
 
 QImage extractPreview(const QString &, int)
+{
+    return {};
+}
+
+QByteArray extractEmbeddedJpegBytes(const QString &)
+{
+    return {};
+}
+
+RawGps extractGps(const QString &)
 {
     return {};
 }

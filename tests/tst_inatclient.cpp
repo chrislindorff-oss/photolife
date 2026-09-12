@@ -18,6 +18,7 @@ private slots:
     void searchTaxaPassesRankAndParses();
     void fetchTaxonReturnsAncestorsAndChildren();
     void speciesCountsParsesPageAndAncestry();
+    void observationCountReadsTotalResults();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
 
@@ -147,6 +148,29 @@ void TestINatClient::speciesCountsParsesPageAndAncestry()
     QVERIFY(url.contains(QStringLiteral("taxon_id=47217")));
     QVERIFY(url.contains(QStringLiteral("place_id=6744")));
     QVERIFY(url.contains(QStringLiteral("verifiable=true")));
+}
+
+void TestINatClient::observationCountReadsTotalResults()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(
+            R"({"total_results": 321, "page": 1, "per_page": 0, "results": []})"));
+    });
+
+    Outcome<int> got;
+    bool done = false;
+    m_inat->observationCount(570544, 6744, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+
+    QVERIFY(got.ok());
+    QCOMPARE(got.value, 321);
+
+    const QString url = m_transport->received.at(0).url.toString();
+    QVERIFY(url.contains(QStringLiteral("/observations?")));
+    QVERIFY(url.contains(QStringLiteral("taxon_id=570544")));
+    QVERIFY(url.contains(QStringLiteral("place_id=6744")));
+    QVERIFY(url.contains(QStringLiteral("verifiable=true")));
+    QVERIFY(url.contains(QStringLiteral("per_page=0")));
 }
 
 void TestINatClient::httpErrorBecomesOutcomeError()

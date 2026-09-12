@@ -4,6 +4,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 
+#include <algorithm>
+
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
 
@@ -23,6 +25,10 @@ private slots:
     void taxonUpsertStoresNamesAndIsIdempotent();
     void reUpsertReplacesNamesWithoutDuplicating();
     void projectMembershipAndTree();
+    void projectLocalityBoxResolvesFromPlace();
+    void taxonPhotoPersistsAndSurvivesPhotolessUpsert();
+    void projectLeafPhotosListAndMissing();
+    void deleteProjectRemovesItAndItsMembership();
     void httpCacheRoundTrips();
 
 private:
@@ -69,6 +75,10 @@ void TestTaxonomyStore::placeRoundTrips()
     QVERIFY(got.has_value());
     QCOMPARE(got->name, QStringLiteral("Victoria"));
     QCOMPARE(got->adminLevel.value_or(-1), 10);
+    QCOMPARE(got->bboxSwLat.value_or(0.0), -39.2);
+    QVERIFY(!got->bboxSwLng.has_value());   // only bboxSwLat was set above
+    QVERIFY(!got->bboxNeLat.has_value());
+    QVERIFY(!got->bboxNeLng.has_value());
 
     p.displayName = QStringLiteral("State of Victoria");
     QVERIFY(m_store->upsertPlace(p));
@@ -152,6 +162,16 @@ void TestTaxonomyStore::projectMembershipAndTree()
     sp.name = QStringLiteral("Diuris pardina");
     m_store->upsertTaxon(sp);
 
+    // A genus-level hybrid formula: a real, identifiable leaf taxon in its own right,
+    // not a subdivision of any species above.
+    Taxon genusHybrid;
+    genusHybrid.inatId = 300000;
+    genusHybrid.parentInatId = 60815;
+    genusHybrid.rank = QStringLiteral("genushybrid");
+    genusHybrid.rankLevel = 20;
+    genusHybrid.name = QStringLiteral("Diuris × palachila");
+    m_store->upsertTaxon(genusHybrid);
+
     const int proj = m_store->ensureProject(QStringLiteral("Orchids of Victoria"), 47217, 6744,
                                             QStringLiteral("inat"));
     QVERIFY(proj > 0);
@@ -162,18 +182,190 @@ void TestTaxonomyStore::projectMembershipAndTree()
     QVERIFY(m_store->addProjectTaxon(proj, 47217, false, false));
     QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
     QVERIFY(m_store->addProjectTaxon(proj, 200000, true, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 300000, true, false));
     QVERIFY(!m_store->addProjectTaxon(proj, 999999, true, false));  // unknown taxon
 
     const auto ids = m_store->projectTaxonInatIds(proj);
-    QCOMPARE(ids.size(), 3);
+    QCOMPARE(ids.size(), 4);
 
     const auto tree = m_store->projectTree(proj);
-    QCOMPARE(tree.size(), 3);
+    QCOMPARE(tree.size(), 4);
     QCOMPARE(tree.at(0).rank, QStringLiteral("family"));   // highest rank_level first
-    QCOMPARE(tree.at(2).name, QStringLiteral("Diuris pardina"));
-    QVERIFY(tree.at(2).inRegion);
-    QVERIFY(tree.at(2).isLeafRank);
     QVERIFY(!tree.at(0).isLeafRank);
+
+    const auto speciesIt = std::find_if(tree.begin(), tree.end(), [](const auto &n) {
+        return n.inatId == 200000;
+    });
+    QVERIFY(speciesIt != tree.end());
+    QVERIFY(speciesIt->inRegion);
+    QVERIFY(speciesIt->isLeafRank);
+
+    const auto hybridIt = std::find_if(tree.begin(), tree.end(), [](const auto &n) {
+        return n.inatId == 300000;
+    });
+    QVERIFY(hybridIt != tree.end());
+    QVERIFY(hybridIt->isLeafRank);   // genushybrid is a leaf, same as hybrid/subspecies/variety
+}
+
+void TestTaxonomyStore::projectLocalityBoxResolvesFromPlace()
+{
+    Place place;
+    place.inatId = 6744;
+    place.name = QStringLiteral("Victoria");
+    place.displayName = QStringLiteral("Victoria, AU");
+    place.bboxSwLat = -39.2;
+    place.bboxSwLng = 140.9;
+    place.bboxNeLat = -33.9;
+    place.bboxNeLng = 150.0;
+    QVERIFY(m_store->upsertPlace(place));
+
+    const int withBbox =
+        m_store->ensureProject(QStringLiteral("Orchids of Victoria"), 47217, 6744,
+                               QStringLiteral("inat"));
+    QVERIFY(withBbox > 0);
+
+    const auto box = m_store->projectLocalityBox(withBbox);
+    QVERIFY(box.has_value());
+    QCOMPARE(box->swLat, -39.2);
+    QCOMPARE(box->swLng, 140.9);
+    QCOMPARE(box->neLat, -33.9);
+    QCOMPARE(box->neLng, 150.0);
+
+    // A place with no bbox at all -> nullopt.
+    Place placeWithoutBbox;
+    placeWithoutBbox.inatId = 9999;
+    placeWithoutBbox.name = QStringLiteral("Somewhere");
+    QVERIFY(m_store->upsertPlace(placeWithoutBbox));
+    const int noBboxProject =
+        m_store->ensureProject(QStringLiteral("Somewhere Ferns"), 47217, 9999,
+                               QStringLiteral("inat"));
+    QVERIFY(!m_store->projectLocalityBox(noBboxProject).has_value());
+
+    // A project whose place_inat_id was never actually upserted -> nullopt
+    // (mirrors projectMembershipAndTree()'s own fixture, which never calls
+    // upsertPlace() for its place id).
+    const int uncachedPlaceProject =
+        m_store->ensureProject(QStringLiteral("Diuris"), 60815, 424242,
+                               QStringLiteral("inat"));
+    QVERIFY(!m_store->projectLocalityBox(uncachedPlaceProject).has_value());
+
+    // A project with no locality at all -> nullopt.
+    const int noPlaceProject =
+        m_store->ensureProject(QStringLiteral("No Locality"), 47217, std::nullopt,
+                               QStringLiteral("inat"));
+    QVERIFY(!m_store->projectLocalityBox(noPlaceProject).has_value());
+}
+
+void TestTaxonomyStore::taxonPhotoPersistsAndSurvivesPhotolessUpsert()
+{
+    Taxon t;
+    t.inatId = 500;
+    t.rank = QStringLiteral("species");
+    t.name = QStringLiteral("Diuris pardina");
+    t.photoUrl = QStringLiteral("https://inat.example/photos/9/medium.jpg");
+    t.photoAttribution = QStringLiteral("(c) obs, CC BY-NC");
+    QVERIFY(m_store->upsertTaxon(t) > 0);
+
+    auto photoUrlOf = [this](qint64 inatId) {
+        QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+        q.prepare(QStringLiteral("SELECT photo_url FROM taxon WHERE inat_id = ?"));
+        q.addBindValue(inatId);
+        return (q.exec() && q.next()) ? q.value(0).toString() : QString();
+    };
+    QCOMPARE(photoUrlOf(500), t.photoUrl);
+
+    // The by-inat-id getter surfaces the same data (and reports absence).
+    const auto tp = m_store->taxonPhoto(500);
+    QVERIFY(tp.found);
+    QCOMPARE(tp.name, QStringLiteral("Diuris pardina"));
+    QCOMPARE(tp.photoUrl, t.photoUrl);
+    QCOMPARE(tp.attribution, t.photoAttribution);
+    QVERIFY(!m_store->taxonPhoto(999999).found);
+
+    // A later upsert from an endpoint that didn't ask for default_photo must
+    // not wipe the cached photo.
+    Taxon photoless;
+    photoless.inatId = 500;
+    photoless.rank = QStringLiteral("species");
+    photoless.name = QStringLiteral("Diuris pardina");
+    QVERIFY(m_store->upsertTaxon(photoless) > 0);
+    QCOMPARE(photoUrlOf(500), t.photoUrl);
+
+    // A new non-empty value does win.
+    Taxon updated = photoless;
+    updated.photoUrl = QStringLiteral("https://inat.example/photos/10/medium.jpg");
+    QVERIFY(m_store->upsertTaxon(updated) > 0);
+    QCOMPARE(photoUrlOf(500), updated.photoUrl);
+}
+
+void TestTaxonomyStore::projectLeafPhotosListAndMissing()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.rankLevel = 20;
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    Taxon withPhoto;
+    withPhoto.inatId = 900;
+    withPhoto.parentInatId = 60815;
+    withPhoto.rank = QStringLiteral("species");
+    withPhoto.rankLevel = 10;
+    withPhoto.name = QStringLiteral("Diuris pardina");
+    withPhoto.commonName = QStringLiteral("Leopard Doubletail");
+    withPhoto.photoUrl = QStringLiteral("https://inat.example/photos/1/medium.jpg");
+    m_store->upsertTaxon(withPhoto);
+
+    Taxon noPhoto;
+    noPhoto.inatId = 901;
+    noPhoto.parentInatId = 60815;
+    noPhoto.rank = QStringLiteral("species");
+    noPhoto.rankLevel = 10;
+    noPhoto.name = QStringLiteral("Diuris punctata");
+    m_store->upsertTaxon(noPhoto);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Diuris"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 900, true, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 901, true, false));
+
+    const auto leaves = m_store->projectLeafPhotos(proj);
+    QCOMPARE(leaves.size(), 2);   // the genus is not a leaf
+    QCOMPARE(leaves.at(0).name, QStringLiteral("Diuris pardina"));   // name-sorted
+    QCOMPARE(leaves.at(0).commonName, QStringLiteral("Leopard Doubletail"));
+    QCOMPARE(leaves.at(0).photoUrl, QStringLiteral("https://inat.example/photos/1/medium.jpg"));
+    QVERIFY(leaves.at(1).photoUrl.isEmpty());
+
+    const auto missing = m_store->projectLeafTaxaMissingPhoto(proj);
+    QCOMPARE(missing, QList<qint64>{901});
+
+    // Scoped to a taxon: only its own subtree.
+    const auto scoped = m_store->projectLeafPhotos(proj, 900);
+    QCOMPARE(scoped.size(), 1);
+    QCOMPARE(scoped.at(0).inatId, qint64(900));
+}
+
+void TestTaxonomyStore::deleteProjectRemovesItAndItsMembership()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids of Victoria"), 60815,
+                                            std::nullopt, QStringLiteral("inat"));
+    QVERIFY(proj > 0);
+    QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
+    QCOMPARE(m_store->projectTaxonInatIds(proj).size(), 1);
+
+    QVERIFY(m_store->deleteProject(proj));
+
+    QVERIFY(!m_store->projectIdByName(QStringLiteral("Orchids of Victoria")).has_value());
+    QVERIFY(m_store->projectTaxonInatIds(proj).isEmpty());   // project_taxon cascaded away
+    QVERIFY(m_store->taxonLocalId(60815).has_value());       // shared taxon cache untouched
 }
 
 void TestTaxonomyStore::httpCacheRoundTrips()

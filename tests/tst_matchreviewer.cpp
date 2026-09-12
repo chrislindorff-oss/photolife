@@ -28,6 +28,7 @@ private slots:
     void confirmLearnsAliasAndSurvivesReMatch();
     void rejectDropsFromQueue();
     void reassignChangesTaxon();
+    void reassigningAConfirmedCaptureDropsTheOldTaxon();
     void markNotATaxonScopesToFolderAndReclassifies();
     void applyTaxonToFolderBulkConfirms();
     void ignoreFolderTreeStagesEverything();
@@ -164,6 +165,27 @@ void TestMatchReviewer::reassignChangesTaxon()
     QVERIFY(reviewer.confirm(cid, 102));   // reassign carnea -> fuscata
     QCOMPARE(matchTaxonInat(cid), qint64(102));
     QCOMPARE(matchStatus(cid), QStringLiteral("confirmed"));
+}
+
+void TestMatchReviewer::reassigningAConfirmedCaptureDropsTheOldTaxon()
+{
+    const qint64 cid = captureId(QStringLiteral("Caladenia carnea - Loc%"));
+    MatchReviewer reviewer(m_db->connectionName());
+
+    // First confirm to carnea (101) — this is now a *user* decision, unlike the
+    // engine's original guess. Reassigning away from it must not leave it behind.
+    QVERIFY(reviewer.confirm(cid, 101));
+    QCOMPARE(matchTaxonInat(cid), qint64(101));
+
+    QVERIFY(reviewer.confirm(cid, 102));   // reassign carnea -> fuscata, again
+    QCOMPARE(matchTaxonInat(cid), qint64(102));
+    QCOMPARE(matchStatus(cid), QStringLiteral("confirmed"));
+
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM capture_match WHERE capture_id = ?"));
+    q.addBindValue(qlonglong(cid));
+    QVERIFY(q.exec() && q.next());
+    QCOMPARE(q.value(0).toInt(), 1);   // exactly one live row — the old taxon is gone
 }
 
 void TestMatchReviewer::markNotATaxonScopesToFolderAndReclassifies()

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QString>
 #include <QStringList>
 
@@ -30,6 +31,9 @@ struct Taxon
     QString ancestry;          // "48460/47126/..."
     bool isActive = true;
 
+    QString photoUrl;          // iNaturalist default_photo, medium size (empty if none)
+    QString photoAttribution;  // licence / credit line for photoUrl
+
     QStringList synonyms;      // other scientific names
     QStringList vernacular;    // common names (commonName included is fine)
 };
@@ -52,6 +56,35 @@ struct TreeNode
     QString commonName;
     bool inRegion = false;
     bool isLeafRank = false;   // rank == "species" or below
+};
+
+// One photo attached to an observation. Two URLs, deliberately: `previewUrl`
+// is a small size, cheap to fetch for a review-grid thumbnail; `downloadUrl`
+// is the largest size the parser could resolve, for actually saving the
+// photo -- never used just to build a thumbnail, since that would mean
+// downloading a full-resolution image only to shrink it. See
+// net::inat::parseObservation().
+struct ObservationPhoto
+{
+    qint64 id = 0;
+    QString previewUrl;
+    QString downloadUrl;
+};
+
+// One of a user's iNaturalist observations, for the "Download from
+// iNaturalist" feature. Coordinates are the ones the API actually returned:
+// true coordinates when the request was authenticated as the observation's
+// owner, geoprivacy-obscured (or absent) otherwise -- see HttpClient's
+// bearer-token handling.
+struct Observation
+{
+    qint64 id = 0;
+    qint64 taxonInatId = 0;
+    QString observedOn;               // "YYYY-MM-DD", may be empty
+    std::optional<double> latitude;
+    std::optional<double> longitude;
+    QString placeGuess;               // iNat's own free-text place description, may be empty
+    QList<ObservationPhoto> photos;
 };
 
 } // namespace pl::taxonomy

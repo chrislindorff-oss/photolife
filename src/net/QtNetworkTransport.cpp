@@ -24,6 +24,8 @@ void QtNetworkTransport::send(const Request &request, Callback callback)
         req.setRawHeader("If-None-Match", request.ifNoneMatch.toUtf8());
     if (!request.ifModifiedSince.isEmpty())
         req.setRawHeader("If-Modified-Since", request.ifModifiedSince.toUtf8());
+    if (!request.bearerToken.isEmpty())
+        req.setRawHeader("Authorization", "Bearer " + request.bearerToken.toUtf8());
 
     QNetworkReply *reply = m_nam->get(req);
 

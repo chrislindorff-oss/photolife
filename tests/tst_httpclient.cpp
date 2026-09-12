@@ -54,6 +54,7 @@ private slots:
     void retriesTransientFailureThenSucceeds();
     void doesNotRetryClientError();
     void retriesOnNetworkError();
+    void authenticatedRequestSendsTokenAndBypassesCache();
 };
 
 void TestHttpClient::servesSuccessfulBody()
@@ -222,6 +223,54 @@ void TestHttpClient::retriesOnNetworkError()
     QTRY_VERIFY_WITH_TIMEOUT(done, 5000);
     QVERIFY(got.ok());
     QCOMPARE(raw->received.size(), 2);
+}
+
+void TestHttpClient::authenticatedRequestSendsTokenAndBypassesCache()
+{
+    Database db;
+    QVERIFY(db.open(QStringLiteral(":memory:")));
+    taxonomy::TaxonomyStore store(db.connectionName());
+
+    auto transport = std::make_unique<FakeTransport>();
+    FakeTransport *raw = transport.get();
+    transport->responder = [](const Transport::Request &req, int call) -> Transport::Reply {
+        if (call == 0)
+            return okReply(QByteArrayLiteral("public-payload"), QStringLiteral("\"etag-1\""));
+        if (call == 1)
+            return okReply(QByteArrayLiteral("private-payload"));   // the authenticated call
+        // Third call: unauthenticated again -- must still see the original etag,
+        // proving the authenticated call in between never touched the cache.
+        Transport::Reply r;
+        r.status = req.ifNoneMatch == QStringLiteral("\"etag-1\"") ? 304 : 200;
+        return r;
+    };
+
+    HttpClient client(std::move(transport), &store);
+    client.setMinRequestIntervalMs(0);
+    const QUrl url(QStringLiteral("https://api.inaturalist.org/v1/observations"));
+
+    HttpResponse first;
+    bool firstDone = false;
+    client.get(url, [&](HttpResponse r) { first = r; firstDone = true; });
+    QTRY_VERIFY(firstDone);
+    QCOMPARE(first.body, QByteArrayLiteral("public-payload"));
+
+    HttpResponse second;
+    bool secondDone = false;
+    client.get(
+        url, [&](HttpResponse r) { second = r; secondDone = true; }, QStringLiteral("my-token"));
+    QTRY_VERIFY(secondDone);
+    QCOMPARE(second.body, QByteArrayLiteral("private-payload"));
+    QVERIFY(!second.fromCache);
+    QCOMPARE(raw->received.at(1).bearerToken, QStringLiteral("my-token"));
+    QVERIFY(raw->received.at(1).ifNoneMatch.isEmpty());   // no cache read for an authenticated call
+
+    HttpResponse third;
+    bool thirdDone = false;
+    client.get(url, [&](HttpResponse r) { third = r; thirdDone = true; });
+    QTRY_VERIFY(thirdDone);
+    QVERIFY(third.fromCache);
+    QCOMPARE(third.body, QByteArrayLiteral("public-payload"));   // unchanged by the authenticated call
 }
 
 QTEST_GUILESS_MAIN(TestHttpClient)

@@ -1,8 +1,10 @@
 #include "scan/CatalogueWriter.h"
 
+#include "raw/RawPreview.h"
 #include "scan/Exif.h"
 #include "scan/FilenameParser.h"
 
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
@@ -13,6 +15,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
+
+#include <optional>
 
 namespace pl::scan {
 namespace {
@@ -58,6 +62,25 @@ RenditionProbe probeFile(const DiscoveredFile &file)
         if (file.ext == QLatin1String("jpg") || file.ext == QLatin1String("jpeg")
             || file.ext == QLatin1String("jpe")) {
             out.exif = readJpegExif(file.path);
+        }
+    } else {
+        // Cameras typically stamp the embedded preview with the same
+        // date/camera EXIF as the original capture, so re-use the JPEG
+        // parser on it for those fields. Not for GPS, though: LibRaw's
+        // reconstructed copy of the embedded preview's EXIF can corrupt
+        // small inline fields (GPSLatitudeRef/GPSLongitudeRef observed
+        // garbled), silently defaulting the hemisphere sign to positive —
+        // use LibRaw's own metadata parser for that instead.
+        const QByteArray jpegBytes = raw::extractEmbeddedJpegBytes(file.path);
+        if (!jpegBytes.isEmpty()) {
+            QBuffer buf;
+            buf.setData(jpegBytes);
+            buf.open(QIODevice::ReadOnly);
+            out.exif = readJpegExif(buf);
+        }
+        if (const raw::RawGps gps = raw::extractGps(file.path); gps.latitude && gps.longitude) {
+            out.exif.latitude = gps.latitude;
+            out.exif.longitude = gps.longitude;
         }
     }
 
@@ -172,6 +195,9 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             return bail(QStringLiteral("failed to record folder %1").arg(cap.dirPath));
 
         const ParsedFilename parsed = parseStem(cap.baseName);
+        int renamedRenditionId = -1;
+        QString renamedPath;
+        std::optional<RenditionProbe> renamedProbe;
 
         // Upsert the capture row (date filled in after the renditions are probed).
         QSqlQuery findCap(db);
@@ -183,13 +209,53 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             return bail(findCap.lastError().text());
 
         int captureId = -1;
-        const bool captureExisted = findCap.next();
+        bool captureExisted = findCap.next();
+        if (!captureExisted) {
+            // A rename changes both the rendition path and capture stem. Reuse
+            // the old capture when its file is gone but its content hash is
+            // found at the new path, preserving matches and thumbnails.
+            for (const DiscoveredFile &file : cap.files) {
+                const RenditionProbe probe = probeFile(file);
+                if (probe.contentHash.isEmpty())
+                    continue;
+
+                QSqlQuery findRenamed(db);
+                findRenamed.prepare(QStringLiteral(
+                    "SELECT r.id, r.capture_id, r.path FROM rendition r "
+                    "JOIN capture c ON c.id = r.capture_id "
+                    "WHERE r.content_hash = ? AND r.path <> ? "
+                    "ORDER BY (c.folder_id = ?) DESC, r.id"));
+                findRenamed.addBindValue(probe.contentHash);
+                findRenamed.addBindValue(file.path);
+                findRenamed.addBindValue(folderId);
+                if (!findRenamed.exec())
+                    return bail(findRenamed.lastError().text());
+
+                while (findRenamed.next()) {
+                    const QString oldPath = findRenamed.value(2).toString();
+                    if (QFileInfo::exists(oldPath))
+                        continue;
+                    renamedRenditionId = findRenamed.value(0).toInt();
+                    captureId = findRenamed.value(1).toInt();
+                    renamedPath = file.path;
+                    renamedProbe = probe;
+                    captureExisted = true;
+                    break;
+                }
+                if (captureExisted)
+                    break;
+            }
+        }
+
         if (captureExisted) {
-            captureId = findCap.value(0).toInt();
+            if (captureId < 0)
+                captureId = findCap.value(0).toInt();
             QSqlQuery upd(db);
             upd.prepare(QStringLiteral(
-                "UPDATE capture SET name_text = ?, locality_text = ?, organ_tags = ?, "
-                "last_seen = ? WHERE id = ?"));
+                "UPDATE capture SET folder_id = ?, base_name = ?, name_text = ?, "
+                "locality_text = ?, organ_tags = ?, last_seen = ? WHERE id = ?"));
+            upd.addBindValue(folderId);
+            upd.addBindValue(cap.baseName);
             upd.addBindValue(parsed.name);
             upd.addBindValue(parsed.locality.isEmpty() ? QVariant() : parsed.locality);
             upd.addBindValue(parsed.organTags.isEmpty() ? QVariant()
@@ -220,24 +286,60 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
         }
 
         QDateTime earliestExif;
+        std::optional<double> lat, lon;
         for (const DiscoveredFile &file : cap.files) {
             if (cancelled()) {
                 summary.cancelled = true;
                 break;
             }
 
+            if (file.path == renamedPath) {
+                const RenditionProbe &probe = *renamedProbe;
+                QSqlQuery upd(db);
+                upd.prepare(QStringLiteral(
+                    "UPDATE rendition SET capture_id = ?, path = ?, kind = ?, ext = ?, "
+                    "file_size = ?, mtime = ?, width = ?, height = ?, scanned_at = ?, "
+                    "geo_checked = 1 WHERE id = ?"));
+                upd.addBindValue(captureId);
+                upd.addBindValue(file.path);
+                upd.addBindValue(renditionKind(file));
+                upd.addBindValue(file.ext);
+                upd.addBindValue(file.size);
+                upd.addBindValue(file.mtime);
+                upd.addBindValue(probe.width > 0 ? QVariant(probe.width) : QVariant());
+                upd.addBindValue(probe.height > 0 ? QVariant(probe.height) : QVariant());
+                upd.addBindValue(now);
+                upd.addBindValue(renamedRenditionId);
+                if (!upd.exec())
+                    return bail(upd.lastError().text());
+                ++summary.renditionsUpdated;
+                if (probe.exif.hasDate())
+                    earliestExif = probe.exif.dateTimeOriginal;
+                if (probe.exif.hasGps()) {
+                    lat = probe.exif.latitude;
+                    lon = probe.exif.longitude;
+                }
+                continue;
+            }
+
             QSqlQuery findRend(db);
             findRend.prepare(QStringLiteral(
-                "SELECT id, file_size, mtime FROM rendition WHERE path = ?"));
+                "SELECT id, file_size, mtime, geo_checked FROM rendition WHERE path = ?"));
             findRend.addBindValue(file.path);
             if (!findRend.exec())
                 return bail(findRend.lastError().text());
 
             const bool rendExisted = findRend.next();
             const int rendId = rendExisted ? findRend.value(0).toInt() : -1;
-            const bool unchanged = rendExisted
-                                   && findRend.value(1).toLongLong() == file.size
-                                   && findRend.value(2).toLongLong() == file.mtime;
+            const bool sameFile = rendExisted
+                                  && findRend.value(1).toLongLong() == file.size
+                                  && findRend.value(2).toLongLong() == file.mtime;
+            const bool geoChecked = rendExisted && findRend.value(3).toInt() != 0;
+            // A file catalogued before GPS support existed is otherwise
+            // "unchanged" forever and would never get a chance to backfill
+            // its coordinates — so an unchecked rendition still gets probed
+            // once even if its file itself hasn't changed.
+            const bool unchanged = sameFile && geoChecked;
 
             if (unchanged) {
                 ++summary.renditionsUnchanged;
@@ -250,12 +352,17 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
                 && (!earliestExif.isValid() || probe.exif.dateTimeOriginal < earliestExif)) {
                 earliestExif = probe.exif.dateTimeOriginal;
             }
+            if (!lat && probe.exif.hasGps()) {
+                lat = probe.exif.latitude;
+                lon = probe.exif.longitude;
+            }
 
             if (rendExisted) {
                 QSqlQuery upd(db);
                 upd.prepare(QStringLiteral(
                     "UPDATE rendition SET capture_id = ?, kind = ?, ext = ?, content_hash = ?, "
-                    "file_size = ?, mtime = ?, width = ?, height = ?, scanned_at = ? WHERE id = ?"));
+                    "file_size = ?, mtime = ?, width = ?, height = ?, scanned_at = ?, "
+                    "geo_checked = 1 WHERE id = ?"));
                 upd.addBindValue(captureId);
                 upd.addBindValue(renditionKind(file));
                 upd.addBindValue(file.ext);
@@ -268,13 +375,16 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
                 upd.addBindValue(rendId);
                 if (!upd.exec())
                     return bail(upd.lastError().text());
-                ++summary.renditionsUpdated;
+                if (sameFile)
+                    ++summary.renditionsUnchanged;   // only the geo backfill ran
+                else
+                    ++summary.renditionsUpdated;
             } else {
                 QSqlQuery ins(db);
                 ins.prepare(QStringLiteral(
                     "INSERT INTO rendition (capture_id, path, kind, ext, content_hash, "
-                    "file_size, mtime, width, height, scanned_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+                    "file_size, mtime, width, height, scanned_at, geo_checked) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)"));
                 ins.addBindValue(captureId);
                 ins.addBindValue(file.path);
                 ins.addBindValue(renditionKind(file));
@@ -312,6 +422,20 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             setDate.addBindValue(captureId);
             if (!setDate.exec())
                 return bail(setDate.lastError().text());
+        }
+
+        // Only write GPS when found: unchanged renditions are skipped above
+        // (before probeFile() runs), so an incremental rescan where nothing
+        // changed must not blank out coordinates already stored.
+        if (lat && lon) {
+            QSqlQuery setGeo(db);
+            setGeo.prepare(QStringLiteral(
+                "UPDATE capture SET latitude = ?, longitude = ? WHERE id = ?"));
+            setGeo.addBindValue(*lat);
+            setGeo.addBindValue(*lon);
+            setGeo.addBindValue(captureId);
+            if (!setGeo.exec())
+                return bail(setGeo.lastError().text());
         }
 
         ++m_stats.capturesSeen;

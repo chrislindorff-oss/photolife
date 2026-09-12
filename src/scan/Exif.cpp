@@ -118,6 +118,7 @@ ExifData parseExifSegment(const QByteArray &tiff)
 
     IfdReader reader{tiff, bigEndian};
     quint32 exifIfd = 0;
+    quint32 gpsIfd = 0;
 
     reader.walk(ifd0, [&](quint16 tag, quint16 type, quint32 count, int valuePos) {
         switch (tag) {
@@ -132,6 +133,9 @@ ExifData parseExifSegment(const QByteArray &tiff)
         case 0x8769:  // Exif IFD pointer
             exifIfd = read<quint32>(tiff, valuePos, bigEndian, &ok);
             break;
+        case 0x8825:  // GPSInfo IFD pointer
+            gpsIfd = read<quint32>(tiff, valuePos, bigEndian, &ok);
+            break;
         default:
             break;
         }
@@ -145,6 +149,55 @@ ExifData parseExifSegment(const QByteArray &tiff)
                     out.dateTimeOriginal = dt;
             }
         });
+    }
+
+    if (gpsIfd != 0 && gpsIfd < quint32(tiff.size())) {
+        QString latRef, lonRef;
+        std::optional<double> latAbs, lonAbs;
+
+        // A GPS coordinate is stored as three RATIONALs (degrees, minutes,
+        // seconds), each 8 bytes: a 4-byte numerator then a 4-byte denominator.
+        auto readDms = [&](int valuePos) -> std::optional<double> {
+            double total = 0.0;
+            const double scale[3] = {1.0, 60.0, 3600.0};
+            for (int i = 0; i < 3; ++i) {
+                bool ok1 = true, ok2 = true;
+                const quint32 num = read<quint32>(tiff, valuePos + i * 8, bigEndian, &ok1);
+                const quint32 den = read<quint32>(tiff, valuePos + i * 8 + 4, bigEndian, &ok2);
+                if (!ok1 || !ok2 || den == 0)
+                    return std::nullopt;
+                total += (double(num) / double(den)) / scale[i];
+            }
+            return total;
+        };
+
+        reader.walk(gpsIfd, [&](quint16 tag, quint16 type, quint32 count, int valuePos) {
+            switch (tag) {
+            case 0x0001:  // GPSLatitudeRef
+                if (type == 2)
+                    latRef = reader.ascii(valuePos, int(count));
+                break;
+            case 0x0002:  // GPSLatitude
+                if (type == 5 && count == 3)
+                    latAbs = readDms(valuePos);
+                break;
+            case 0x0003:  // GPSLongitudeRef
+                if (type == 2)
+                    lonRef = reader.ascii(valuePos, int(count));
+                break;
+            case 0x0004:  // GPSLongitude
+                if (type == 5 && count == 3)
+                    lonAbs = readDms(valuePos);
+                break;
+            default:
+                break;
+            }
+        });
+
+        if (latAbs && lonAbs) {
+            out.latitude = (latRef == QLatin1String("S")) ? -*latAbs : *latAbs;
+            out.longitude = (lonRef == QLatin1String("W")) ? -*lonAbs : *lonAbs;
+        }
     }
 
     return out;
