@@ -120,7 +120,7 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          & "$env:ProgramFiles(x86)\NSIS\makensis.exe" `
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" `
             "/DAPP_VERSION=${{ steps.ver.outputs.version }}" `
             "/DSTAGE_DIR=..\..\dist" `
             packaging/windows/photolife.nsi
