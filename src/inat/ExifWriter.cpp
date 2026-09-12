@@ -8,9 +8,8 @@ namespace pl::inat {
 namespace {
 
 // EXIF stores a lat/lon degree as three rationals (degrees, minutes, seconds
-// -- seconds carrying two implied decimal digits of precision here). exiv2
-// 0.27's API predates std::unique_ptr (Value::AutoPtr is a std::auto_ptr),
-// so this builds the value in place and returns it by value instead.
+// -- seconds carrying two implied decimal digits of precision here). This
+// builds the value in place and returns it by value.
 Exiv2::URationalValue toGpsRational(double absDecimalDegrees)
 {
     const int deg = int(absDecimalDegrees);
@@ -30,7 +29,15 @@ Exiv2::URationalValue toGpsRational(double absDecimalDegrees)
 bool writeExif(const QString &path, const ExifFields &fields, QString *error)
 {
     try {
+        // Image::AutoPtr (std::auto_ptr-based) was renamed to the
+        // std::unique_ptr-based Image::UniquePtr in exiv2 0.28, with no
+        // overlap -- 0.27 (this dev machine's apt package) only has
+        // AutoPtr, 0.28 (vcpkg's Windows build) only has UniquePtr.
+#if EXIV2_TEST_VERSION(0, 28, 0)
+        Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(path.toStdString());
+#else
         Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(path.toStdString());
+#endif
         if (!image.get()) {
             if (error)
                 *error = QStringLiteral("could not open %1").arg(path);

@@ -12,7 +12,11 @@ concurrency:
 jobs:
   linux-qt-floor:
     name: Linux · Qt 6.4 (apt, the supported floor)
-    runs-on: ubuntu-22.04
+    # ubuntu-22.04's apt repos only carry Qt 6.2 -- below this project's 6.4
+    # floor (CMakeLists.txt: find_package(Qt6 6.4 REQUIRED ...)). 24.04 is
+    # the oldest Ubuntu whose apt Qt6 actually clears that floor (6.4.2, the
+    # same version this project's own Linux dev box runs).
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }

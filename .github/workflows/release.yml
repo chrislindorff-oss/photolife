@@ -11,17 +11,27 @@ permissions:
 jobs:
   appimage:
     name: Linux AppImage
+    # Deliberately the oldest supported base (older glibc = the resulting
+    # AppImage runs on more distros) -- but its apt repos only carry Qt 6.2,
+    # below this project's 6.4 floor, so Qt itself comes from the official
+    # installer below instead of apt.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
 
-      - name: Install Qt 6 and build tools
+      - name: Install build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qt6-base-dev qt6-base-dev-tools libqt6sql6-sqlite qt6-image-formats-plugins \
             libraw-dev libjpeg-turbo8-dev libexiv2-dev ninja-build libgl-dev libfuse2 file curl
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.2"
+          modules: qtimageformats
+          cache: true
 
       - name: Build AppImage
         run: packaging/linux/build-appimage.sh "$PWD/build-appimage"
