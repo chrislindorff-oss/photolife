@@ -104,8 +104,13 @@ jobs:
           # next to any DLLs copied alongside it -- unlike the per-subdirectory
           # default (e.g. build/src/...) that applies on Linux/macOS.
           Copy-Item build/PhotoLife.exe $dist/
+          # --compiler-runtime pulls in the MSVC redistributable DLLs
+          # (MSVCP140.dll, VCRUNTIME140.dll, VCRUNTIME140_1.dll, ...) that the
+          # MSVC-built exe needs at runtime -- without it, windeployqt only
+          # bundles Qt's own DLLs and installs fail on machines without the
+          # VC++ redistributable already installed.
           & windeployqt --release --no-translations --sql --no-system-d3d-compiler `
-            --no-opengl-sw "$dist/PhotoLife.exe"
+            --no-opengl-sw --compiler-runtime "$dist/PhotoLife.exe"
           # windeployqt only bundles Qt's own DLLs -- exiv2 and its transitive
           # deps (expat, zlib, ...) come from vcpkg and need copying in too.
           Copy-Item "$env:VCPKG_INSTALLED\bin\*.dll" $dist/ -Force
