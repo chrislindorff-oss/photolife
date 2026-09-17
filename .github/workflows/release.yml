@@ -78,11 +78,17 @@ jobs:
       # exiv2 is a required dependency (see src/CMakeLists.txt) with no
       # official Windows package -- vcpkg builds it, and pkgconf (a
       # pkg-config-compatible tool) so CMake's FindPkgConfig can locate it
-      # the same way it does on Linux/macOS.
-      - name: Install exiv2 (via vcpkg)
+      # the same way it does on Linux/macOS. libpq is here purely for its
+      # DLL: windeployqt's --sql bundles Qt's QPSQL plugin automatically,
+      # but the plugin's own runtime dependency (libpq.dll, and its OpenSSL
+      # DLLs) isn't a Qt binary and windeployqt never looks for it --
+      # without this, the installed app's QPSQL driver silently fails to
+      # load and the Shared (Postgres) catalogue option in Settings can't
+      # connect.
+      - name: Install exiv2 and libpq (via vcpkg)
         shell: pwsh
         run: |
-          vcpkg install exiv2:x64-windows pkgconf:x64-windows
+          vcpkg install exiv2:x64-windows pkgconf:x64-windows libpq:x64-windows
           $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
           echo "PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
           echo "VCPKG_INSTALLED=$installed" >> $env:GITHUB_ENV
@@ -111,8 +117,9 @@ jobs:
           # VC++ redistributable already installed.
           & windeployqt --release --no-translations --sql --no-system-d3d-compiler `
             --no-opengl-sw --compiler-runtime "$dist/PhotoLife.exe"
-          # windeployqt only bundles Qt's own DLLs -- exiv2 and its transitive
-          # deps (expat, zlib, ...) come from vcpkg and need copying in too.
+          # windeployqt only bundles Qt's own DLLs -- exiv2, libpq and their
+          # transitive deps (expat, zlib, OpenSSL, ...) come from vcpkg and
+          # need copying in too.
           Copy-Item "$env:VCPKG_INSTALLED\bin\*.dll" $dist/ -Force
 
       - name: Derive version

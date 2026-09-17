@@ -49,12 +49,16 @@ export OUTPUT="PhotoLife-${VERSION}-x86_64.AppImage"
 # moment it detects the binary links QtSql, regardless of EXTRA_QT_PLUGINS
 # -- including Qt's Mimer SQL driver, which depends on the proprietary
 # libmimerapi.so that isn't installed here (or on most machines) and isn't
-# needed, since this app only ever uses SQLite. EXTRA_QT_PLUGINS has no
-# lever to exclude one driver from an auto-bundled category, so every other
-# driver is removed from the *source* Qt install's plugin directory before
-# linuxdeploy ever scans it -- safe since this is a disposable build tree.
+# needed, since this app only ever uses SQLite or Postgres (see
+# CatalogueDescriptor). EXTRA_QT_PLUGINS has no lever to exclude one driver
+# from an auto-bundled category, so every other driver is removed from the
+# *source* Qt install's plugin directory before linuxdeploy ever scans it --
+# safe since this is a disposable build tree. libqsqlpsql.so's own
+# dependency, libpq.so.5, gets bundled automatically by linuxdeploy's normal
+# ldd-based resolution once the plugin itself survives this prune.
 QT_PLUGIN_DIR="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
-find "$QT_PLUGIN_DIR/sqldrivers" -name 'libqsql*.so' ! -name 'libqsqlite.so' -delete
+find "$QT_PLUGIN_DIR/sqldrivers" -name 'libqsql*.so' \
+    ! -name 'libqsqlite.so' ! -name 'libqsqlpsql.so' -delete
 export EXTRA_QT_PLUGINS="imageformats;tls"
 
 cd "$BUILD_DIR"
