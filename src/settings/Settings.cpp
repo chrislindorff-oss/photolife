@@ -19,6 +19,19 @@ constexpr auto kWindowState = "ui/mainWindow/state";
 constexpr auto kCaptionFields = "ui/captureGrid/captionFields";
 constexpr auto kInatUsername = "inat/username";
 constexpr auto kInatApiToken = "inat/apiToken";
+
+// Qt's QFile/QDir never expand a shell-style leading "~" -- a path typed or
+// hand-edited that way would otherwise be taken completely literally (as a
+// real subdirectory named "~"), silently opening/creating a catalogue in
+// the wrong place instead of failing loudly.
+QString expandHome(const QString &path)
+{
+    if (path == QStringLiteral("~"))
+        return QDir::homePath();
+    if (path.startsWith(QStringLiteral("~/")))
+        return QDir::homePath() + path.mid(1);
+    return path;
+}
 } // namespace
 
 Settings::Settings() = default;
@@ -38,7 +51,7 @@ QString Settings::databasePath() const
     const QString configured =
         m_settings.value(QLatin1String(kDatabasePath)).toString();
     if (!configured.isEmpty())
-        return configured;
+        return expandHome(configured);
 
     const QString dataDir =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -53,6 +66,11 @@ void Settings::setDatabasePath(const QString &path)
 CatalogueDescriptor Settings::catalogueDescriptor() const
 {
     CatalogueDescriptor d;
+    // Always populated, regardless of backend -- lets CatalogueSettingsDialog
+    // prefill the SQLite file field with the real configured path even when
+    // switching back from Postgres, instead of showing it blank.
+    d.sqlitePath = databasePath();
+
     const QString backend = m_settings.value(QLatin1String(kCatalogueBackend)).toString();
     if (backend == QStringLiteral("postgres")) {
         d.backend = CatalogueDescriptor::Backend::Postgres;
@@ -65,7 +83,6 @@ CatalogueDescriptor Settings::catalogueDescriptor() const
             m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("prefer")).toString();
     } else {
         d.backend = CatalogueDescriptor::Backend::Sqlite;
-        d.sqlitePath = databasePath();
     }
     return d;
 }

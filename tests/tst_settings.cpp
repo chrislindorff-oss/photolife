@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QStandardPaths>
 
 #include "db/CatalogueDescriptor.h"
@@ -19,9 +20,11 @@ private slots:
     void watchedRootsRoundTrip();
     void databasePathDefaultsToAppData();
     void databasePathHonoursOverride();
+    void databasePathExpandsLeadingTilde();
     void catalogueDescriptorDefaultsToSqlite();
     void catalogueDescriptorRoundTripsPostgres();
     void catalogueDescriptorSwitchingBackToSqliteKeepsDatabasePath();
+    void catalogueDescriptorPrefillsSqlitePathEvenInPostgresMode();
     void windowStateRoundTrip();
     void captureCaptionFieldsDefaultsToNameOnly();
     void captureCaptionFieldsRoundTrip();
@@ -72,6 +75,26 @@ void TestSettings::databasePathHonoursOverride()
     QVERIFY(Settings().databasePath().endsWith(QStringLiteral("catalogue.db")));
 }
 
+void TestSettings::databasePathExpandsLeadingTilde()
+{
+    // Qt never expands a shell-style "~" itself -- a path stored (typed by
+    // the user, or hand-edited into the config file) with a literal leading
+    // "~" must resolve to the real home directory, not a directory literally
+    // named "~" wherever the app happens to be launched from.
+    Settings writer;
+    writer.setDatabasePath(QStringLiteral("~/library/custom.db"));
+    QCOMPARE(Settings().databasePath(),
+             QDir::homePath() + QStringLiteral("/library/custom.db"));
+
+    writer.setDatabasePath(QStringLiteral("~"));
+    QCOMPARE(Settings().databasePath(), QDir::homePath());
+
+    // A path that merely contains a "~" elsewhere (not a leading shortcut)
+    // is left alone.
+    writer.setDatabasePath(QStringLiteral("/srv/lib~rary/custom.db"));
+    QCOMPARE(Settings().databasePath(), QStringLiteral("/srv/lib~rary/custom.db"));
+}
+
 void TestSettings::catalogueDescriptorDefaultsToSqlite()
 {
     const CatalogueDescriptor d = Settings().catalogueDescriptor();
@@ -118,6 +141,26 @@ void TestSettings::catalogueDescriptorSwitchingBackToSqliteKeepsDatabasePath()
     const CatalogueDescriptor back = Settings().catalogueDescriptor();
     QCOMPARE(back.backend, CatalogueDescriptor::Backend::Sqlite);
     QCOMPARE(back.sqlitePath, QStringLiteral("/srv/library/custom.db"));
+}
+
+void TestSettings::catalogueDescriptorPrefillsSqlitePathEvenInPostgresMode()
+{
+    // CatalogueSettingsDialog prefills its SQLite file field from
+    // catalogueDescriptor().sqlitePath regardless of which backend is
+    // currently active -- otherwise switching the combo back to Local
+    // (SQLite) while Postgres is active shows a blank field instead of the
+    // real configured path.
+    Settings writer;
+    writer.setDatabasePath(QStringLiteral("/srv/library/custom.db"));
+
+    CatalogueDescriptor postgres;
+    postgres.backend = CatalogueDescriptor::Backend::Postgres;
+    postgres.pgHost = QStringLiteral("db.example.com");
+    writer.setCatalogueDescriptor(postgres);
+
+    const CatalogueDescriptor d = Settings().catalogueDescriptor();
+    QCOMPARE(d.backend, CatalogueDescriptor::Backend::Postgres);
+    QCOMPARE(d.sqlitePath, QStringLiteral("/srv/library/custom.db"));
 }
 
 void TestSettings::windowStateRoundTrip()
