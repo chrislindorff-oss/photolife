@@ -1,6 +1,7 @@
 #include "app/Application.h"
 
 #include "app/Logging.h"
+#include "db/CatalogueDescriptor.h"
 #include "db/Database.h"
 #include "pl/Version.h"
 #include "inat/InatPhotoDownloader.h"
@@ -49,13 +50,18 @@ bool Application::initialize()
     m_settings = std::make_unique<Settings>();
 
     m_database = std::make_unique<Database>();
-    const QString dbPath = m_settings->databasePath();
-    if (!m_database->open(dbPath)) {
-        qCritical() << "Could not open catalogue database at" << dbPath << ":"
-                    << m_database->error();
+    const CatalogueDescriptor descriptor = m_settings->catalogueDescriptor();
+    if (!m_database->open(descriptor)) {
+        qCritical() << "Could not open catalogue database:" << m_database->error();
         return false;
     }
-    qInfo() << "Catalogue open:" << dbPath
+    qInfo() << "Catalogue open:"
+            << (descriptor.backend == CatalogueDescriptor::Backend::Postgres
+                    ? QStringLiteral("postgres://%1@%2:%3/%4")
+                          .arg(descriptor.pgUser, descriptor.pgHost)
+                          .arg(descriptor.pgPort)
+                          .arg(descriptor.pgDbName)
+                    : descriptor.sqlitePath)
             << "(schema v" << m_database->schemaVersion() << ")";
 
     const QString thumbDir = QDir(dataDir).filePath(QStringLiteral("thumbnails"));
@@ -63,12 +69,12 @@ bool Application::initialize()
     raw::installRawLoader(*m_thumbnails);
     qInfo() << "RAW previews:" << (raw::isAvailable() ? "enabled (LibRaw)" : "unavailable");
 
-    m_scanService = std::make_unique<scan::ScanService>(dbPath);
+    m_scanService = std::make_unique<scan::ScanService>(descriptor);
 
     m_libraryWatcher = std::make_unique<scan::LibraryWatcher>(*m_database);
     m_libraryWatcher->setRoots(m_settings->watchedRoots());
 
-    m_matchService = std::make_unique<match::MatchService>(dbPath);
+    m_matchService = std::make_unique<match::MatchService>(descriptor);
 
     m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
     m_http = std::make_unique<net::HttpClient>(

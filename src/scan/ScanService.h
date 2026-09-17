@@ -1,5 +1,6 @@
 #pragma once
 
+#include "db/CatalogueDescriptor.h"
 #include "scan/ScanTypes.h"
 
 #include <QObject>
@@ -20,7 +21,7 @@ class ScanService : public QObject
     Q_OBJECT
 
 public:
-    explicit ScanService(QString databasePath, QObject *parent = nullptr);
+    explicit ScanService(CatalogueDescriptor descriptor, QObject *parent = nullptr);
     ~ScanService() override;
 
     bool isRunning() const { return m_running; }
@@ -39,7 +40,7 @@ private:
 
     void onFinished(pl::scan::ScanSummary summary);
 
-    QString m_databasePath;
+    CatalogueDescriptor m_descriptor;
     QThread *m_thread = nullptr;
     Worker *m_worker = nullptr;
     std::shared_ptr<std::atomic_bool> m_cancel;

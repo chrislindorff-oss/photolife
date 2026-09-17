@@ -33,6 +33,7 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/AliasEditorDialog.h"
+#include "ui/CatalogueSettingsDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
@@ -652,6 +653,8 @@ void MainWindow::buildMenus()
     m_cancelAction = fileMenu->addAction(tr("&Stop Scan"),
                                          &m_app.scanService(), &scan::ScanService::cancel);
     m_cancelAction->setEnabled(false);
+
+    fileMenu->addAction(tr("&Catalogue Settings…"), this, &MainWindow::showCatalogueSettings);
 
     fileMenu->addAction(tr("Remove Photos With &Missing Files…"),
                         this, &MainWindow::removeMissingCaptures);
@@ -2710,10 +2713,17 @@ void MainWindow::showAbout()
 
 void MainWindow::showStorageUsage()
 {
-    const QString dbPath = m_app.settings().databasePath();
-    qint64 dbBytes = QFileInfo(dbPath).size();
-    dbBytes += QFileInfo(dbPath + QStringLiteral("-wal")).size();
-    dbBytes += QFileInfo(dbPath + QStringLiteral("-shm")).size();
+    // A shared Postgres catalogue has no local file to size -- only local
+    // SQLite mode has a byte count worth reporting here.
+    const bool isLocalSqlite = m_app.settings().catalogueDescriptor().backend
+                                == CatalogueDescriptor::Backend::Sqlite;
+    qint64 dbBytes = 0;
+    if (isLocalSqlite) {
+        const QString dbPath = m_app.settings().databasePath();
+        dbBytes = QFileInfo(dbPath).size();
+        dbBytes += QFileInfo(dbPath + QStringLiteral("-wal")).size();
+        dbBytes += QFileInfo(dbPath + QStringLiteral("-shm")).size();
+    }
 
     const qint64 thumbBytes = app::directoryBytes(m_app.thumbnails().cacheDir());
     const qint64 photoBytes = app::directoryBytes(m_app.photoCache().cacheDir());
@@ -2721,6 +2731,8 @@ void MainWindow::showStorageUsage()
     const qint64 total = dbBytes + thumbBytes + photoBytes + tileBytes;
 
     QLocale locale;
+    const QString dbSizeText =
+        isLocalSqlite ? locale.formattedDataSize(dbBytes) : tr("Shared (Postgres)");
     const QString html =
         tr("<table cellspacing='6'>"
            "<tr><td>Catalogue database</td><td align='right'>%1</td></tr>"
@@ -2729,11 +2741,23 @@ void MainWindow::showStorageUsage()
            "<tr><td>Map tiles (OpenStreetMap)</td><td align='right'>%4</td></tr>"
            "<tr><td><b>Total</b></td><td align='right'><b>%5</b></td></tr>"
            "</table>")
-            .arg(locale.formattedDataSize(dbBytes), locale.formattedDataSize(thumbBytes),
+            .arg(dbSizeText, locale.formattedDataSize(thumbBytes),
                  locale.formattedDataSize(photoBytes), locale.formattedDataSize(tileBytes),
                  locale.formattedDataSize(total));
 
     QMessageBox::information(this, tr("Storage Usage"), html);
+}
+
+void MainWindow::showCatalogueSettings()
+{
+    CatalogueSettingsDialog dialog(m_app.settings().catalogueDescriptor(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    m_app.settings().setCatalogueDescriptor(dialog.descriptor());
+    QMessageBox::information(
+        this, tr("Catalogue Settings"),
+        tr("Saved. Restart PhotoLife for the new catalogue to take effect."));
 }
 
 } // namespace pl

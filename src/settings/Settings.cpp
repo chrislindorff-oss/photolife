@@ -7,6 +7,13 @@ namespace pl {
 namespace {
 constexpr auto kWatchedRoots = "library/watchedRoots";
 constexpr auto kDatabasePath = "library/databasePath";
+constexpr auto kCatalogueBackend = "library/backend";   // "sqlite" | "postgres"
+constexpr auto kPgHost = "library/pg/host";
+constexpr auto kPgPort = "library/pg/port";
+constexpr auto kPgDbName = "library/pg/dbName";
+constexpr auto kPgUser = "library/pg/user";
+constexpr auto kPgPassword = "library/pg/password";   // stored in plain text, like inatApiToken()
+constexpr auto kPgSslMode = "library/pg/sslMode";
 constexpr auto kWindowGeometry = "ui/mainWindow/geometry";
 constexpr auto kWindowState = "ui/mainWindow/state";
 constexpr auto kCaptionFields = "ui/captureGrid/captionFields";
@@ -41,6 +48,42 @@ QString Settings::databasePath() const
 void Settings::setDatabasePath(const QString &path)
 {
     m_settings.setValue(QLatin1String(kDatabasePath), path);
+}
+
+CatalogueDescriptor Settings::catalogueDescriptor() const
+{
+    CatalogueDescriptor d;
+    const QString backend = m_settings.value(QLatin1String(kCatalogueBackend)).toString();
+    if (backend == QStringLiteral("postgres")) {
+        d.backend = CatalogueDescriptor::Backend::Postgres;
+        d.pgHost = m_settings.value(QLatin1String(kPgHost)).toString();
+        d.pgPort = m_settings.value(QLatin1String(kPgPort), 5432).toInt();
+        d.pgDbName = m_settings.value(QLatin1String(kPgDbName)).toString();
+        d.pgUser = m_settings.value(QLatin1String(kPgUser)).toString();
+        d.pgPassword = m_settings.value(QLatin1String(kPgPassword)).toString();
+        d.pgSslMode =
+            m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("prefer")).toString();
+    } else {
+        d.backend = CatalogueDescriptor::Backend::Sqlite;
+        d.sqlitePath = databasePath();
+    }
+    return d;
+}
+
+void Settings::setCatalogueDescriptor(const CatalogueDescriptor &descriptor)
+{
+    if (descriptor.backend == CatalogueDescriptor::Backend::Postgres) {
+        m_settings.setValue(QLatin1String(kCatalogueBackend), QStringLiteral("postgres"));
+        m_settings.setValue(QLatin1String(kPgHost), descriptor.pgHost);
+        m_settings.setValue(QLatin1String(kPgPort), descriptor.pgPort);
+        m_settings.setValue(QLatin1String(kPgDbName), descriptor.pgDbName);
+        m_settings.setValue(QLatin1String(kPgUser), descriptor.pgUser);
+        m_settings.setValue(QLatin1String(kPgPassword), descriptor.pgPassword);
+        m_settings.setValue(QLatin1String(kPgSslMode), descriptor.pgSslMode);
+    } else {
+        m_settings.setValue(QLatin1String(kCatalogueBackend), QStringLiteral("sqlite"));
+        setDatabasePath(descriptor.sqlitePath);
+    }
 }
 
 QByteArray Settings::mainWindowGeometry() const

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "db/CatalogueDescriptor.h"
 #include "match/MatchEngine.h"
 
 #include <QObject>
@@ -18,7 +19,7 @@ class MatchService : public QObject
     Q_OBJECT
 
 public:
-    explicit MatchService(QString databasePath, QObject *parent = nullptr);
+    explicit MatchService(CatalogueDescriptor descriptor, QObject *parent = nullptr);
     ~MatchService() override;
 
     bool isRunning() const { return m_running; }
@@ -36,7 +37,7 @@ private:
     class Worker;
     void onFinished(pl::match::MatchEngine::Stats stats);
 
-    QString m_databasePath;
+    CatalogueDescriptor m_descriptor;
     QThread *m_thread = nullptr;
     Worker *m_worker = nullptr;
     std::shared_ptr<std::atomic_bool> m_cancel;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "db/CatalogueDescriptor.h"
+
 #include <QSettings>
 #include <QString>
 #include <QStringList>
@@ -18,8 +20,17 @@ public:
 
     // Absolute path of the catalogue database.
     // Defaults to <AppDataLocation>/catalogue.db; override with setDatabasePath().
+    // Only meaningful in CatalogueDescriptor::Backend::Sqlite mode -- see
+    // catalogueDescriptor() below, which is what Application actually opens.
     QString databasePath() const;
     void setDatabasePath(const QString &path);
+
+    // Which catalogue backend to open (Local SQLite, at databasePath(), or a
+    // shared Postgres database) and, for Postgres, the connection details.
+    // Takes effect on the next app start -- nothing currently re-points an
+    // already-open Database/ScanService/MatchService at a new descriptor.
+    CatalogueDescriptor catalogueDescriptor() const;
+    void setCatalogueDescriptor(const CatalogueDescriptor &descriptor);
 
     QByteArray mainWindowGeometry() const;
     void setMainWindowGeometry(const QByteArray &geometry);

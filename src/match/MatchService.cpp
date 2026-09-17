@@ -18,8 +18,8 @@ class MatchService::Worker : public QObject
     Q_OBJECT
 
 public:
-    Worker(QString dbPath, std::shared_ptr<std::atomic_bool> cancel)
-        : m_dbPath(std::move(dbPath)), m_cancel(std::move(cancel))
+    Worker(CatalogueDescriptor descriptor, std::shared_ptr<std::atomic_bool> cancel)
+        : m_descriptor(std::move(descriptor)), m_cancel(std::move(cancel))
     {
     }
 
@@ -28,7 +28,7 @@ public:
         MatchEngine::Stats stats;
 
         Database db;
-        if (!db.open(m_dbPath)) {
+        if (!db.open(m_descriptor)) {
             stats.error = db.error().isEmpty() ? QStringLiteral("cannot open catalogue")
                                                : db.error();
             emit finished(stats);
@@ -46,12 +46,12 @@ signals:
     void finished(pl::match::MatchEngine::Stats stats);
 
 private:
-    QString m_dbPath;
+    CatalogueDescriptor m_descriptor;
     std::shared_ptr<std::atomic_bool> m_cancel;
 };
 
-MatchService::MatchService(QString databasePath, QObject *parent)
-    : QObject(parent), m_databasePath(std::move(databasePath))
+MatchService::MatchService(CatalogueDescriptor descriptor, QObject *parent)
+    : QObject(parent), m_descriptor(std::move(descriptor))
 {
     Q_UNUSED(kMetaRegistered);
 }
@@ -73,7 +73,7 @@ void MatchService::start()
     m_running = true;
     m_cancel = std::make_shared<std::atomic_bool>(false);
 
-    m_worker = new Worker(m_databasePath, m_cancel);
+    m_worker = new Worker(m_descriptor, m_cancel);
     Worker *worker = m_worker;
     m_thread = QThread::create([worker] { worker->run(); });
 

@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QStandardPaths>
 
+#include "db/CatalogueDescriptor.h"
 #include "pl/Version.h"
 #include "settings/Settings.h"
 
@@ -18,6 +19,9 @@ private slots:
     void watchedRootsRoundTrip();
     void databasePathDefaultsToAppData();
     void databasePathHonoursOverride();
+    void catalogueDescriptorDefaultsToSqlite();
+    void catalogueDescriptorRoundTripsPostgres();
+    void catalogueDescriptorSwitchingBackToSqliteKeepsDatabasePath();
     void windowStateRoundTrip();
     void captureCaptionFieldsDefaultsToNameOnly();
     void captureCaptionFieldsRoundTrip();
@@ -66,6 +70,54 @@ void TestSettings::databasePathHonoursOverride()
 
     writer.setDatabasePath(QString());
     QVERIFY(Settings().databasePath().endsWith(QStringLiteral("catalogue.db")));
+}
+
+void TestSettings::catalogueDescriptorDefaultsToSqlite()
+{
+    const CatalogueDescriptor d = Settings().catalogueDescriptor();
+    QCOMPARE(d.backend, CatalogueDescriptor::Backend::Sqlite);
+    QVERIFY(d.sqlitePath.endsWith(QStringLiteral("catalogue.db")));
+}
+
+void TestSettings::catalogueDescriptorRoundTripsPostgres()
+{
+    CatalogueDescriptor d;
+    d.backend = CatalogueDescriptor::Backend::Postgres;
+    d.pgHost = QStringLiteral("db.example.com");
+    d.pgPort = 6543;
+    d.pgDbName = QStringLiteral("photolife");
+    d.pgUser = QStringLiteral("helena");
+    d.pgPassword = QStringLiteral("s3cret");
+    d.pgSslMode = QStringLiteral("require");
+
+    Settings writer;
+    writer.setCatalogueDescriptor(d);
+
+    const CatalogueDescriptor read = Settings().catalogueDescriptor();
+    QCOMPARE(read.backend, CatalogueDescriptor::Backend::Postgres);
+    QCOMPARE(read.pgHost, d.pgHost);
+    QCOMPARE(read.pgPort, d.pgPort);
+    QCOMPARE(read.pgDbName, d.pgDbName);
+    QCOMPARE(read.pgUser, d.pgUser);
+    QCOMPARE(read.pgPassword, d.pgPassword);
+    QCOMPARE(read.pgSslMode, d.pgSslMode);
+}
+
+void TestSettings::catalogueDescriptorSwitchingBackToSqliteKeepsDatabasePath()
+{
+    Settings writer;
+    writer.setDatabasePath(QStringLiteral("/srv/library/custom.db"));
+
+    CatalogueDescriptor postgres;
+    postgres.backend = CatalogueDescriptor::Backend::Postgres;
+    postgres.pgHost = QStringLiteral("db.example.com");
+    writer.setCatalogueDescriptor(postgres);
+    QCOMPARE(Settings().catalogueDescriptor().backend, CatalogueDescriptor::Backend::Postgres);
+
+    writer.setCatalogueDescriptor(CatalogueDescriptor::sqlite(QStringLiteral("/srv/library/custom.db")));
+    const CatalogueDescriptor back = Settings().catalogueDescriptor();
+    QCOMPARE(back.backend, CatalogueDescriptor::Backend::Sqlite);
+    QCOMPARE(back.sqlitePath, QStringLiteral("/srv/library/custom.db"));
 }
 
 void TestSettings::windowStateRoundTrip()

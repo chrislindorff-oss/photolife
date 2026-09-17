@@ -91,6 +91,7 @@ private:
     void showAbout();
     void showHelp();
     void showStorageUsage();
+    void showCatalogueSettings();
 
     void addWatchedFolder();
     void startScan();

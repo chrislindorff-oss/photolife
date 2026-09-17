@@ -25,8 +25,10 @@ class ScanService::Worker : public QObject
     Q_OBJECT
 
 public:
-    Worker(QString dbPath, QStringList roots, std::shared_ptr<std::atomic_bool> cancel)
-        : m_dbPath(std::move(dbPath)), m_roots(std::move(roots)), m_cancel(std::move(cancel))
+    Worker(CatalogueDescriptor descriptor, QStringList roots,
+           std::shared_ptr<std::atomic_bool> cancel)
+        : m_descriptor(std::move(descriptor)), m_roots(std::move(roots)),
+          m_cancel(std::move(cancel))
     {
     }
 
@@ -36,7 +38,7 @@ public:
         auto cancelled = [this] { return m_cancel->load(); };
 
         Database db;
-        if (!db.open(m_dbPath)) {
+        if (!db.open(m_descriptor)) {
             summary.error = db.error().isEmpty() ? QStringLiteral("cannot open catalogue")
                                                  : db.error();
             emit finished(summary);
@@ -67,13 +69,13 @@ signals:
     void finished(pl::scan::ScanSummary summary);
 
 private:
-    QString m_dbPath;
+    CatalogueDescriptor m_descriptor;
     QStringList m_roots;
     std::shared_ptr<std::atomic_bool> m_cancel;
 };
 
-ScanService::ScanService(QString databasePath, QObject *parent)
-    : QObject(parent), m_databasePath(std::move(databasePath))
+ScanService::ScanService(CatalogueDescriptor descriptor, QObject *parent)
+    : QObject(parent), m_descriptor(std::move(descriptor))
 {
     Q_UNUSED(kMetaTypesRegistered);
 }
@@ -95,7 +97,7 @@ void ScanService::start(const QStringList &roots)
     m_running = true;
     m_cancel = std::make_shared<std::atomic_bool>(false);
 
-    m_worker = new Worker(m_databasePath, roots, m_cancel);
+    m_worker = new Worker(m_descriptor, roots, m_cancel);
     Worker *worker = m_worker;
     m_thread = QThread::create([worker] { worker->run(); });
 
