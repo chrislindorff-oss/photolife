@@ -1,5 +1,6 @@
 #include "db/Database.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -14,20 +15,29 @@
 namespace pl {
 namespace {
 
-// Migrations live at :/migrations/NNN_description.sql and are applied in
-// ascending NNN order. NNN is the schema version the script produces.
+// Migrations live at :/migrations/<dialect>/NNN_description.sql and are
+// applied in ascending NNN order. NNN is the schema version the script
+// produces. The sqlite/ and postgres/ subtrees must expose the same set of
+// version numbers -- see tst_database.cpp.
 struct Migration
 {
     int version;
     QString resourcePath;
 };
 
-QList<Migration> discoverMigrations()
+QString migrationsDir(CatalogueDescriptor::Backend backend)
+{
+    return backend == CatalogueDescriptor::Backend::Postgres
+               ? QStringLiteral(":/migrations/postgres")
+               : QStringLiteral(":/migrations/sqlite");
+}
+
+QList<Migration> discoverMigrations(CatalogueDescriptor::Backend backend)
 {
     QList<Migration> migrations;
     const QRegularExpression pattern(QStringLiteral("^(\\d+)_.*\\.sql$"));
 
-    QDir dir(QStringLiteral(":/migrations"));
+    QDir dir(migrationsDir(backend));
     const QStringList entries = dir.entryList(QStringList{QStringLiteral("*.sql")},
                                               QDir::Files, QDir::Name);
     for (const QString &name : entries) {
@@ -86,9 +96,9 @@ Database::~Database()
     close();
 }
 
-int Database::targetSchemaVersion()
+int Database::targetSchemaVersion(CatalogueDescriptor::Backend backend)
 {
-    const QList<Migration> migrations = discoverMigrations();
+    const QList<Migration> migrations = discoverMigrations(backend);
     return migrations.isEmpty() ? 0 : migrations.last().version;
 }
 
@@ -98,21 +108,26 @@ bool Database::fail(const QString &context, const QString &detail)
     return false;
 }
 
-bool Database::open(const QString &path)
+bool Database::open(const QString &sqlitePath)
+{
+    return open(CatalogueDescriptor::sqlite(sqlitePath));
+}
+
+bool Database::open(const CatalogueDescriptor &descriptor)
 {
     close();
     m_error.clear();
-    m_path = path;
+    m_descriptor = descriptor;
 
-    if (!path.isEmpty() && path != QStringLiteral(":memory:")) {
-        const QFileInfo info(path);
-        if (!QDir().mkpath(info.absolutePath()))
-            return fail(QStringLiteral("Cannot create %1").arg(info.absolutePath()), {});
-    }
+    if (descriptor.backend == CatalogueDescriptor::Backend::Sqlite) {
+        const QString &path = descriptor.sqlitePath;
+        if (!path.isEmpty() && path != QStringLiteral(":memory:")) {
+            const QFileInfo info(path);
+            if (!QDir().mkpath(info.absolutePath()))
+                return fail(QStringLiteral("Cannot create %1").arg(info.absolutePath()), {});
+        }
 
-    {
-        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
-                                                    m_connectionName);
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
         db.setDatabaseName(path);
         if (!db.open())
             return fail(QStringLiteral("Cannot open %1").arg(path), db.lastError().text());
@@ -121,6 +136,21 @@ bool Database::open(const QString &path)
         pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
         pragma.exec(QStringLiteral("PRAGMA journal_mode = WAL"));
         pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
+    } else {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QPSQL"), m_connectionName);
+        db.setHostName(descriptor.pgHost);
+        db.setPort(descriptor.pgPort);
+        db.setDatabaseName(descriptor.pgDbName);
+        db.setUserName(descriptor.pgUser);
+        db.setPassword(descriptor.pgPassword);
+        db.setConnectOptions(QStringLiteral("sslmode=%1").arg(descriptor.pgSslMode));
+        if (!db.open()) {
+            return fail(QStringLiteral("Cannot connect to %1@%2:%3/%4")
+                             .arg(descriptor.pgUser, descriptor.pgHost)
+                             .arg(descriptor.pgPort)
+                             .arg(descriptor.pgDbName),
+                        db.lastError().text());
+        }
     }
 
     if (!applyPendingMigrations()) {
@@ -149,12 +179,52 @@ bool Database::isOpen() const
            && QSqlDatabase::database(m_connectionName, false).isOpen();
 }
 
+bool Database::ensureMigrationsTableExists()
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    QSqlQuery create(db);
+    if (!create.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "  version INTEGER PRIMARY KEY,"
+            "  applied_at TEXT NOT NULL"
+            ")"))) {
+        return fail(QStringLiteral("Cannot create schema_migrations"), create.lastError().text());
+    }
+
+    // Catalogues created before this table existed tracked their schema
+    // version in SQLite's PRAGMA user_version instead. On first open under
+    // the new scheme, carry that version forward as already-applied rows
+    // rather than re-running DDL for tables that already exist.
+    if (m_descriptor.backend == CatalogueDescriptor::Backend::Sqlite) {
+        QSqlQuery count(db);
+        if (count.exec(QStringLiteral("SELECT COUNT(*) FROM schema_migrations")) && count.next()
+            && count.value(0).toInt() == 0) {
+            QSqlQuery legacy(db);
+            if (legacy.exec(QStringLiteral("PRAGMA user_version")) && legacy.next()) {
+                const int legacyVersion = legacy.value(0).toInt();
+                const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+                for (int v = 1; v <= legacyVersion; ++v) {
+                    QSqlQuery insert(db);
+                    insert.prepare(QStringLiteral(
+                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)"));
+                    insert.addBindValue(v);
+                    insert.addBindValue(now);
+                    insert.exec();
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 int Database::schemaVersion() const
 {
     if (!isOpen())
         return -1;
     QSqlQuery query(QSqlDatabase::database(m_connectionName, false));
-    if (!query.exec(QStringLiteral("PRAGMA user_version")) || !query.next())
+    if (!query.exec(QStringLiteral("SELECT COALESCE(MAX(version), 0) FROM schema_migrations"))
+        || !query.next())
         return -1;
     return query.value(0).toInt();
 }
@@ -174,12 +244,15 @@ bool Database::runScript(const QString &sql)
 
 bool Database::applyPendingMigrations()
 {
+    if (!ensureMigrationsTableExists())
+        return false;
+
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
     const int current = schemaVersion();
     if (current < 0)
         return fail(QStringLiteral("Cannot read schema version"), {});
 
-    const QList<Migration> migrations = discoverMigrations();
+    const QList<Migration> migrations = discoverMigrations(m_descriptor.backend);
     for (const Migration &migration : migrations) {
         if (migration.version <= current)
             continue;
@@ -200,9 +273,14 @@ bool Database::applyPendingMigrations()
         }
 
         QSqlQuery bump(db);
-        if (!bump.exec(QStringLiteral("PRAGMA user_version = %1").arg(migration.version))) {
+        bump.prepare(QStringLiteral(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)"));
+        bump.addBindValue(migration.version);
+        bump.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        if (!bump.exec()) {
             db.rollback();
-            return fail(QStringLiteral("Cannot set user_version"), bump.lastError().text());
+            return fail(QStringLiteral("Cannot record migration %1").arg(migration.version),
+                        bump.lastError().text());
         }
 
         if (!db.commit())

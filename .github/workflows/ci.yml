@@ -17,6 +17,24 @@ jobs:
     # the oldest Ubuntu whose apt Qt6 actually clears that floor (6.4.2, the
     # same version this project's own Linux dev box runs).
     runs-on: ubuntu-24.04
+    # Exercises the optional Postgres-backed catalogue (see pl::Database /
+    # CatalogueDescriptor). tst_database and friends skip their Postgres
+    # cases unless PHOTOLIFE_TEST_PG_DSN is set, so this container is what
+    # turns them on in CI -- the SQLite-only path already runs regardless.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: photolife_test
+          POSTGRES_PASSWORD: photolife_test
+          POSTGRES_DB: photolife_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -25,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qt6-base-dev qt6-base-dev-tools libqt6sql6-sqlite \
+            qt6-base-dev qt6-base-dev-tools libqt6sql6-sqlite libqt6sql6-psql \
             ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev libexiv2-dev
 
       - name: Configure
@@ -35,6 +53,8 @@ jobs:
         run: cmake --build build
 
       - name: Test
+        env:
+          PHOTOLIFE_TEST_PG_DSN: "host=localhost port=5432 dbname=photolife_test user=photolife_test password=photolife_test sslmode=disable"
         run: ctest --test-dir build --output-on-failure
 
   build-and-test:

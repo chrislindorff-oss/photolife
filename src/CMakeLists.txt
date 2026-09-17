@@ -113,22 +113,34 @@ target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_EXIV2)
 message(STATUS "exiv2 ${Exiv2_VERSION}: EXIF writing enabled")
 
 # Schema migrations and the help pages are compiled in so the binary is
-# self-contained.
+# self-contained. There are two parallel sets of migrations, one per SQL
+# dialect (see pl::Database) -- keep them in lockstep when adding a new one.
 qt_add_resources(photolife_core "photolife_migrations"
     PREFIX "/"
     BASE "${CMAKE_SOURCE_DIR}/resources"
     FILES
-        "${CMAKE_SOURCE_DIR}/resources/migrations/001_initial.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/002_taxonomy.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/003_matching.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/004_infraspecific.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/005_geolocation.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/006_geo_backfill.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/007_taxon_photos.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/008_recheck_infraspecific.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/009_best_shots.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/010_locality_cache.sql"
-        "${CMAKE_SOURCE_DIR}/resources/migrations/011_inat_import.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/001_initial.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/002_taxonomy.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/003_matching.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/004_infraspecific.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/005_geolocation.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/006_geo_backfill.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/007_taxon_photos.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/008_recheck_infraspecific.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/009_best_shots.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/010_locality_cache.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/011_inat_import.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/004_infraspecific.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/005_geolocation.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/006_geo_backfill.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/007_taxon_photos.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/008_recheck_infraspecific.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/009_best_shots.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/010_locality_cache.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/011_inat_import.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

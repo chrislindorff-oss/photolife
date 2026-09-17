@@ -1,0 +1,28 @@
+# Local Postgres for developing/testing the shared-catalogue backend (see
+# pl::Database / CatalogueDescriptor). Not used by the app itself -- it's a
+# convenience for running the Postgres-backed test cases and for manually
+# trying the "Shared (Postgres)" catalogue mode against something real.
+#
+# Usage:
+#   docker compose up -d
+#   export PHOTOLIFE_TEST_PG_DSN="host=localhost port=5432 dbname=photolife_test user=photolife_test password=photolife_test sslmode=disable"
+#   ctest --test-dir build --output-on-failure
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: photolife_test
+      POSTGRES_PASSWORD: photolife_test
+      POSTGRES_DB: photolife_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - photolife_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "photolife_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  photolife_pg_data:
