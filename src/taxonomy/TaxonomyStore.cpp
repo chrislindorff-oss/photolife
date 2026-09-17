@@ -1,5 +1,7 @@
 #include "taxonomy/TaxonomyStore.h"
 
+#include "db/Database.h"
+
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -70,12 +72,13 @@ bool TaxonomyStore::upsertPlace(const Place &place)
     q.prepare(QStringLiteral(
         "INSERT INTO place (inat_id, name, display_name, admin_level, "
         "  bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, %1) "
         "ON CONFLICT(inat_id) DO UPDATE SET name = excluded.name, "
         "  display_name = excluded.display_name, admin_level = excluded.admin_level, "
         "  bbox_swlat = excluded.bbox_swlat, bbox_swlng = excluded.bbox_swlng, "
         "  bbox_nelat = excluded.bbox_nelat, bbox_nelng = excluded.bbox_nelng, "
-        "  fetched_at = excluded.fetched_at"));
+        "  fetched_at = excluded.fetched_at")
+                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(qlonglong(place.inatId));
     q.addBindValue(place.name);
     q.addBindValue(place.displayName.isEmpty() ? QVariant() : place.displayName);
@@ -95,7 +98,7 @@ int TaxonomyStore::upsertTaxon(const Taxon &taxon)
     up.prepare(QStringLiteral(
         "INSERT INTO taxon (inat_id, parent_inat_id, rank, rank_level, name, common_name, "
         "  ancestry, is_active, photo_url, photo_attribution, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %1) "
         "ON CONFLICT(inat_id) DO UPDATE SET parent_inat_id = excluded.parent_inat_id, "
         "  rank = excluded.rank, rank_level = excluded.rank_level, name = excluded.name, "
         "  common_name = excluded.common_name, ancestry = excluded.ancestry, "
@@ -103,7 +106,8 @@ int TaxonomyStore::upsertTaxon(const Taxon &taxon)
         // Keep an existing photo when this upsert carries none (most callers
         // don't request default_photo); a non-empty value always wins.
         "  photo_url = COALESCE(excluded.photo_url, taxon.photo_url), "
-        "  photo_attribution = COALESCE(excluded.photo_attribution, taxon.photo_attribution)"));
+        "  photo_attribution = COALESCE(excluded.photo_attribution, taxon.photo_attribution)")
+                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     up.addBindValue(qlonglong(taxon.inatId));
     up.addBindValue(opt(taxon.parentInatId));
     up.addBindValue(taxon.rank);
@@ -134,8 +138,8 @@ int TaxonomyStore::upsertTaxon(const Taxon &taxon)
             return;
         QSqlQuery ins(db);
         ins.prepare(QStringLiteral(
-            "INSERT OR IGNORE INTO taxon_name (taxon_id, name, name_folded, kind) "
-            "VALUES (?, ?, ?, ?)"));
+            "INSERT INTO taxon_name (taxon_id, name, name_folded, kind) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(taxon_id, name, kind) DO NOTHING"));
         ins.addBindValue(localId);
         ins.addBindValue(name.trimmed());
         ins.addBindValue(foldName(name));
@@ -180,7 +184,8 @@ bool TaxonomyStore::addName(qint64 taxonInatId, const QString &name, const QStri
 
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO taxon_name (taxon_id, name, name_folded, kind) VALUES (?, ?, ?, ?)"));
+        "INSERT INTO taxon_name (taxon_id, name, name_folded, kind) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(taxon_id, name, kind) DO NOTHING"));
     q.addBindValue(qlonglong(*local));
     q.addBindValue(name.trimmed());
     q.addBindValue(foldName(name));
@@ -203,11 +208,20 @@ std::optional<qint64> TaxonomyStore::taxonInatIdByFoldedName(const QString &fold
 QStringList TaxonomyStore::projectGenera(int projectId) const
 {
     QStringList genera;
+    // The genus is the text before the first space (or the whole name, for
+    // an unspaced higher-rank name). instr()/substr() is SQLite-only;
+    // split_part() is the Postgres equivalent with the same "no space ->
+    // whole string" behaviour.
+    const QString genusExpr = Database::backendFor(m_connectionName) == CatalogueDescriptor::Backend::Postgres
+        ? QStringLiteral("lower(split_part(t.name, ' ', 1))")
+        : QStringLiteral(
+              "lower(substr(t.name, 1, "
+              "  CASE WHEN instr(t.name, ' ') > 0 THEN instr(t.name, ' ') - 1 ELSE length(t.name) END))");
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
-        "SELECT DISTINCT lower(substr(t.name, 1, "
-        "  CASE WHEN instr(t.name, ' ') > 0 THEN instr(t.name, ' ') - 1 ELSE length(t.name) END)) "
-        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
+        "SELECT DISTINCT %1 "
+        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?")
+                  .arg(genusExpr));
     q.addBindValue(projectId);
     if (q.exec()) {
         while (q.next())
@@ -241,8 +255,8 @@ int TaxonomyStore::ensureProject(const QString &name, std::optional<qint64> root
 bool TaxonomyStore::setProjectRefreshedNow(int projectId)
 {
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
-    q.prepare(QStringLiteral(
-        "UPDATE project SET refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?"));
+    q.prepare(QStringLiteral("UPDATE project SET refreshed_at = %1 WHERE id = ?")
+                  .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(projectId);
     return q.exec();
 }
@@ -343,10 +357,11 @@ bool TaxonomyStore::storeResponse(const QString &url, const QString &etag,
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
         "INSERT INTO http_cache (url, etag, last_modified, status, body, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+        "VALUES (?, ?, ?, ?, ?, %1) "
         "ON CONFLICT(url) DO UPDATE SET etag = excluded.etag, "
         "  last_modified = excluded.last_modified, status = excluded.status, "
-        "  body = excluded.body, fetched_at = excluded.fetched_at"));
+        "  body = excluded.body, fetched_at = excluded.fetched_at")
+                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(url);
     q.addBindValue(etag.isEmpty() ? QVariant() : etag);
     q.addBindValue(lastModified.isEmpty() ? QVariant() : lastModified);

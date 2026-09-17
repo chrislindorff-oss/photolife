@@ -256,7 +256,11 @@ void CaptureListModel::reload()
         }
 
         if (m_bestShotOnly)
-            clauses << QStringLiteral("is_best_shot = 1");
+            // Not "is_best_shot = 1": is_best_shot comes from EXISTS(...), an
+            // actual boolean on Postgres (comparing it to an integer literal
+            // is a type error there), but a plain truthy 0/1 on SQLite. A
+            // bare boolean-context reference is valid truthiness on both.
+            clauses << QStringLiteral("is_best_shot");
 
         const QString where =
             clauses.isEmpty() ? QString()
@@ -285,8 +289,11 @@ void CaptureListModel::reload()
             "     SELECT id FROM capture_match WHERE capture_id = c.id "
             "     ORDER BY (decided_by = 'user') DESC, confidence DESC LIMIT 1) "
             "  LEFT JOIN taxon t ON t.id = m.taxon_id "
-            "  LEFT JOIN geocode_cache g ON g.lat_round = ROUND(c.latitude, 3) "
-            "     AND g.lon_round = ROUND(c.longitude, 3) "
+            // CAST(... AS NUMERIC): Postgres's two-argument ROUND() has no
+            // overload for a bare double precision/real column; the cast is
+            // a no-op on SQLite.
+            "  LEFT JOIN geocode_cache g ON g.lat_round = ROUND(CAST(c.latitude AS NUMERIC), 3) "
+            "     AND g.lon_round = ROUND(CAST(c.longitude AS NUMERIC), 3) "
             ")") + where + QStringLiteral(
             " ORDER BY (captured_on IS NULL), captured_on DESC, id DESC"));
         if (m_projectScope > 0)

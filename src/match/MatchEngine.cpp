@@ -1,5 +1,6 @@
 #include "match/MatchEngine.h"
 
+#include "db/Database.h"
 #include "match/NameParser.h"
 #include "match/PathClassifier.h"
 #include "match/TaxonResolver.h"
@@ -255,6 +256,15 @@ MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressF
         return stats;
     }
 
+    // On the shared Postgres backend a full re-match can touch tens of
+    // thousands of rows; holding one giant transaction for the whole run
+    // would lock capture_match against every collaborator's review-queue
+    // decisions until it finishes. SQLite has no other writer to block, so
+    // it keeps the original one-transaction-per-run behaviour.
+    const bool chunkCommits = Database::backendFor(m_connectionName)
+                               == CatalogueDescriptor::Backend::Postgres;
+    constexpr int kCommitEvery = 200;
+
     int done = 0;
     for (qint64 id : captureIds) {
         if (cancel && cancel()) {
@@ -306,7 +316,18 @@ MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressF
         if (!outcome.hasTaxon())
             ++stats.unmatched;
 
-        if (progress && (++done % 200) == 0)
+        ++done;
+        if (chunkCommits && done % kCommitEvery == 0) {
+            if (!db.commit()) {
+                stats.error = db.lastError().text();
+                return stats;
+            }
+            if (!db.transaction()) {
+                stats.error = db.lastError().text();
+                return stats;
+            }
+        }
+        if (progress && done % kCommitEvery == 0)
             progress(done, stats.captures);
     }
 

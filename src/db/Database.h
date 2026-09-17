@@ -46,6 +46,18 @@ public:
     // version numbers -- see tst_database.cpp).
     static int targetSchemaVersion(CatalogueDescriptor::Backend backend = CatalogueDescriptor::Backend::Sqlite);
 
+    // Which backend an already-open connection (by name) is talking to.
+    // Store classes only ever see a connectionName, not the descriptor that
+    // opened it, so this is how they pick a dialect-specific SQL fragment
+    // (see nowIsoExpr()) without a constructor signature change.
+    static CatalogueDescriptor::Backend backendFor(const QString &connectionName);
+
+    // A SQL expression producing the current UTC time as the ISO-8601-with-
+    // milliseconds string the rest of the app parses (Qt::ISODateWithMs),
+    // in the given backend's dialect. SQLite: strftime(...). Postgres:
+    // to_char(now() ...).
+    static QString nowIsoExpr(CatalogueDescriptor::Backend backend);
+
 private:
     bool applyPendingMigrations();
     bool ensureMigrationsTableExists();

@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QSqlDatabase>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 
@@ -13,6 +14,8 @@
 #include "scan/CatalogueWriter.h"
 #include "scan/FileScanner.h"
 #include "taxonomy/TaxonomyStore.h"
+
+#include "PgTestDsn.h"
 
 using namespace pl;
 using namespace pl::match;
@@ -32,6 +35,7 @@ private slots:
     void markNotATaxonScopesToFolderAndReclassifies();
     void applyTaxonToFolderBulkConfirms();
     void ignoreFolderTreeStagesEverything();
+    void pgReassignLeavesExactlyOneLiveDecision();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -240,6 +244,76 @@ void TestMatchReviewer::ignoreFolderTreeStagesEverything()
                           "AND kind = 'staging'"));
     q.next();
     QCOMPARE(q.value(0).toInt(), 2);
+}
+
+void TestMatchReviewer::pgReassignLeavesExactlyOneLiveDecision()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed MatchReviewer tests");
+
+    Database db;
+    QVERIFY2(db.open(*descriptor), qPrintable(db.error()));
+
+    QSqlDatabase conn = QSqlDatabase::database(db.connectionName(), false);
+    // This DSN is expected to point at a scratch database dedicated to
+    // PhotoLife's test suite -- clear it so repeated local runs don't pile
+    // up rows from earlier ones.
+    QVERIFY(conn.exec(QStringLiteral(
+                              "TRUNCATE folder, capture, taxon, capture_match "
+                              "RESTART IDENTITY CASCADE"))
+                .lastError()
+                .type()
+            == QSqlError::NoError);
+
+    taxonomy::TaxonomyStore store(db.connectionName());
+    auto addTaxon = [&](qint64 id, const QString &rank, const QString &name) {
+        taxonomy::Taxon t;
+        t.inatId = id;
+        t.rank = rank;
+        t.name = name;
+        QVERIFY(store.upsertTaxon(t) > 0);
+    };
+    addTaxon(101, QStringLiteral("species"), QStringLiteral("Caladenia carnea"));
+    addTaxon(102, QStringLiteral("species"), QStringLiteral("Caladenia fuscata"));
+
+    QSqlQuery folderIns(conn);
+    folderIns.prepare(QStringLiteral(
+        "INSERT INTO folder (path, name, depth) VALUES (?, ?, 0) RETURNING id"));
+    folderIns.addBindValue(QStringLiteral("/pg-scratch"));
+    folderIns.addBindValue(QStringLiteral("pg-scratch"));
+    QVERIFY2(folderIns.exec(), qPrintable(folderIns.lastError().text()));
+    QVERIFY(folderIns.next());
+    const int folderId = folderIns.value(0).toInt();
+
+    QSqlQuery captureIns(conn);
+    captureIns.prepare(QStringLiteral(
+        "INSERT INTO capture (folder_id, base_name) VALUES (?, ?) RETURNING id"));
+    captureIns.addBindValue(folderId);
+    captureIns.addBindValue(QStringLiteral("Caladenia carnea - Loc 1-1-2020"));
+    QVERIFY2(captureIns.exec(), qPrintable(captureIns.lastError().text()));
+    QVERIFY(captureIns.next());
+    const qint64 cid = captureIns.value(0).toLongLong();
+
+    MatchReviewer reviewer(db.connectionName());
+    QVERIFY2(reviewer.confirm(cid, 101, false), qPrintable(reviewer.error()));
+    QVERIFY2(reviewer.confirm(cid, 102, false), qPrintable(reviewer.error()));
+
+    QSqlQuery count(conn);
+    count.prepare(QStringLiteral("SELECT COUNT(*) FROM capture_match WHERE capture_id = ?"));
+    count.addBindValue(cid);
+    QVERIFY(count.exec());
+    QVERIFY(count.next());
+    QCOMPARE(count.value(0).toInt(), 1);
+
+    QSqlQuery taxon(conn);
+    taxon.prepare(QStringLiteral(
+        "SELECT t.inat_id FROM capture_match m JOIN taxon t ON t.id = m.taxon_id "
+        "WHERE m.capture_id = ?"));
+    taxon.addBindValue(cid);
+    QVERIFY(taxon.exec());
+    QVERIFY(taxon.next());
+    QCOMPARE(taxon.value(0).toLongLong(), qint64(102));
 }
 
 QTEST_GUILESS_MAIN(TestMatchReviewer)

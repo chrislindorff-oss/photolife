@@ -16,7 +16,7 @@ CREATE TABLE capture_match (
     taxon_id     INTEGER REFERENCES taxon(id) ON DELETE SET NULL,
     matched_rank TEXT,
     method       TEXT NOT NULL,
-    confidence   REAL NOT NULL DEFAULT 0,
+    confidence   DOUBLE PRECISION NOT NULL DEFAULT 0,
     status       TEXT NOT NULL DEFAULT 'pending',
     qualifier    TEXT,
     note         TEXT,

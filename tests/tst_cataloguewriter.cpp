@@ -10,6 +10,8 @@
 #include "scan/CatalogueWriter.h"
 #include "scan/FileScanner.h"
 
+#include "PgTestDsn.h"
+
 using namespace pl;
 using namespace pl::scan;
 
@@ -132,6 +134,7 @@ private slots:
     void writesGpsFromExif();
     void unchangedRescanKeepsExistingGps();
     void backfillsGpsForPreExistingUncheckedRendition();
+    void pgSyncWritesFolderTreeCaptureAndRenditions();
 
 private:
     QTemporaryDir m_tmp;
@@ -386,6 +389,62 @@ void TestCatalogueWriter::backfillsGpsForPreExistingUncheckedRendition()
     QVERIFY(!q.value(1).isNull());
     QVERIFY(qAbs(q.value(0).toDouble() - (-37.5)) < 1e-6);
     QVERIFY(qAbs(q.value(1).toDouble() - 145.25) < 1e-6);
+}
+
+void TestCatalogueWriter::pgSyncWritesFolderTreeCaptureAndRenditions()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed CatalogueWriter tests");
+
+    Database pgDb;
+    QVERIFY2(pgDb.open(*descriptor), qPrintable(pgDb.error()));
+
+    QSqlDatabase conn = QSqlDatabase::database(pgDb.connectionName(), false);
+    // This DSN is expected to point at a scratch database dedicated to
+    // PhotoLife's test suite -- clear it so repeated local runs don't pile
+    // up rows from earlier ones.
+    QVERIFY(conn.exec(QStringLiteral("TRUNCATE folder, capture, rendition RESTART IDENTITY CASCADE"))
+                .lastError()
+                .type()
+            == QSqlError::NoError);
+
+    // A directory of its own, not m_root: other slots in this fixture write
+    // extra files into m_root's shared QTemporaryDir, so scanning m_root
+    // here would pick up whatever earlier slots happened to leave behind.
+    const QString pgRoot = m_tmp.filePath(QStringLiteral("Pg Scratch Root"));
+    writeFile(pgRoot + QStringLiteral("/Orchidaceae/Diuris/Diuris pardina/"
+                                      "Diuris pardina (bud) - Dadswells Bridge 28-9-2020 (1).jpg"),
+              QByteArrayLiteral("jpeg-bytes-one"));
+    writeFile(pgRoot + QStringLiteral("/Orchidaceae/Diuris/Diuris pardina/"
+                                      "Diuris pardina (bud) - Dadswells Bridge 28-9-2020 (1).nef"),
+              QByteArrayLiteral("raw-bytes-one"));
+    writeFile(pgRoot + QStringLiteral("/Orchidaceae/Caladenia/Caladenia carnea/"
+                                      "Caladenia carnea - Anglesea 3-10-2019.jpg"),
+              QByteArrayLiteral("jpeg-bytes-two"));
+
+    FileScanner scanner;
+    const auto caps = scanner.scan({pgRoot});
+
+    // Exercises the RETURNING-id inserts (folder and capture) and the
+    // Postgres-only chunked-commit path in CatalogueWriter::sync() against a
+    // real server, not just SQLite.
+    CatalogueWriter writer(pgDb.connectionName());
+    const ScanSummary s = writer.sync(caps, {pgRoot});
+    QVERIFY2(s.ok(), qPrintable(s.error));
+    QCOMPARE(s.capturesAdded, 2);
+    QCOMPARE(s.renditionsAdded, 3);
+    QCOMPARE(s.filesHashed, 3);
+
+    QSqlQuery q(conn);
+    QVERIFY(q.exec(QStringLiteral("SELECT COUNT(*) FROM capture")));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toInt(), 2);
+
+    QSqlQuery r(conn);
+    QVERIFY(r.exec(QStringLiteral("SELECT COUNT(*) FROM rendition")));
+    QVERIFY(r.next());
+    QCOMPARE(r.value(0).toInt(), 3);
 }
 
 QTEST_GUILESS_MAIN(TestCatalogueWriter)

@@ -1,5 +1,6 @@
 #include "scan/CatalogueWriter.h"
 
+#include "db/Database.h"
 #include "raw/RawPreview.h"
 #include "scan/Exif.h"
 #include "scan/FilenameParser.h"
@@ -143,15 +144,18 @@ int CatalogueWriter::folderIdFor(const QString &dirPath, const QString &rootPath
     }
 
     QSqlQuery ins(db);
+    // RETURNING id (SQLite 3.35+, Postgres) instead of lastInsertId(): Qt's
+    // QPSQL driver has no reliable lastInsertId() on modern Postgres (row
+    // OIDs are gone), so this is the one code path that works on both.
     ins.prepare(QStringLiteral(
-        "INSERT INTO folder (path, parent_id, name, depth) VALUES (?, ?, ?, ?)"));
+        "INSERT INTO folder (path, parent_id, name, depth) VALUES (?, ?, ?, ?) RETURNING id"));
     ins.addBindValue(path);
     ins.addBindValue(parentId < 0 ? QVariant() : QVariant(parentId));
     ins.addBindValue(QFileInfo(path).fileName());
     ins.addBindValue(depth);
     ins.exec();
 
-    const int id = ins.lastInsertId().toInt();
+    const int id = ins.next() ? ins.value(0).toInt() : -1;
     m_folderIds.insert(path, id);
     ++m_stats.foldersSeen;
     return id;
@@ -180,6 +184,15 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
         summary.error = what;
         return summary;
     };
+
+    // On the shared Postgres backend, a full library scan can touch tens of
+    // thousands of rows; holding one giant transaction for the whole run
+    // would lock folder/capture/rendition against other collaborators for
+    // its entire duration. SQLite keeps the original one-transaction-per-run
+    // behaviour, since it has no other writer to block.
+    const bool chunkCommits = Database::backendFor(m_connectionName)
+                               == CatalogueDescriptor::Backend::Postgres;
+    constexpr int kCommitEvery = 200;
 
     const QString now = isoNow();
 
@@ -267,10 +280,12 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             ++summary.capturesUpdated;
         } else {
             QSqlQuery ins(db);
+            // RETURNING id instead of lastInsertId() -- see the folder
+            // insert above for why.
             ins.prepare(QStringLiteral(
                 "INSERT INTO capture (folder_id, base_name, name_text, locality_text, "
                 "organ_tags, date_source, first_seen, last_seen) "
-                "VALUES (?, ?, ?, ?, ?, 'none', ?, ?)"));
+                "VALUES (?, ?, ?, ?, ?, 'none', ?, ?) RETURNING id"));
             ins.addBindValue(folderId);
             ins.addBindValue(cap.baseName);
             ins.addBindValue(parsed.name);
@@ -279,9 +294,9 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
                                                         : parsed.organTags.join(QLatin1Char(',')));
             ins.addBindValue(now);
             ins.addBindValue(now);
-            if (!ins.exec())
+            if (!ins.exec() || !ins.next())
                 return bail(ins.lastError().text());
-            captureId = ins.lastInsertId().toInt();
+            captureId = ins.value(0).toInt();
             ++summary.capturesAdded;
         }
 
@@ -439,7 +454,16 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
         }
 
         ++m_stats.capturesSeen;
-        if (m_progress && (m_stats.capturesSeen % 200) == 0)
+        if (chunkCommits && m_stats.capturesSeen % kCommitEvery == 0) {
+            if (!db.commit())
+                return bail(QStringLiteral("commit failed: %1").arg(db.lastError().text()));
+            if (!db.transaction()) {
+                summary.error = QStringLiteral("cannot begin transaction: %1")
+                                    .arg(db.lastError().text());
+                return summary;
+            }
+        }
+        if (m_progress && (m_stats.capturesSeen % kCommitEvery) == 0)
             m_progress(m_stats);
     }
 

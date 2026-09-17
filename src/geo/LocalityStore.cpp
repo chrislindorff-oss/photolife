@@ -1,5 +1,7 @@
 #include "geo/LocalityStore.h"
 
+#include "db/Database.h"
+
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -32,7 +34,8 @@ bool LocalityStore::upsertLocality(double lat, double lon, const QString &locali
     q.prepare(QStringLiteral(
         "INSERT INTO geocode_cache (lat_round, lon_round, locality) VALUES (?, ?, ?) "
         "ON CONFLICT(lat_round, lon_round) DO UPDATE SET locality = excluded.locality, "
-        "  fetched_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"));
+        "  fetched_at = %1")
+                  .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(rounded(lat));
     q.addBindValue(rounded(lon));
     q.addBindValue(locality);
@@ -50,12 +53,16 @@ QList<QPair<double, double>> LocalityStore::coordinatesNeedingLookup() const
 
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.setForwardOnly(true);
+    // Two-argument ROUND() needs a NUMERIC operand on Postgres (it has no
+    // overload for a bare double precision/real column), and the explicit
+    // cast works identically on SQLite.
     if (!q.exec(QStringLiteral(
-            "SELECT DISTINCT ROUND(latitude, 3), ROUND(longitude, 3) FROM capture "
+            "SELECT DISTINCT ROUND(CAST(latitude AS NUMERIC), 3), ROUND(CAST(longitude AS NUMERIC), 3) "
+            "FROM capture "
             "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM geocode_cache g "
-            "  WHERE g.lat_round = ROUND(capture.latitude, 3) "
-            "    AND g.lon_round = ROUND(capture.longitude, 3))"))) {
+            "  WHERE g.lat_round = ROUND(CAST(capture.latitude AS NUMERIC), 3) "
+            "    AND g.lon_round = ROUND(CAST(capture.longitude AS NUMERIC), 3))"))) {
         m_error = q.lastError().text();
         return out;
     }

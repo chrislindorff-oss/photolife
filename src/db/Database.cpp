@@ -102,6 +102,23 @@ int Database::targetSchemaVersion(CatalogueDescriptor::Backend backend)
     return migrations.isEmpty() ? 0 : migrations.last().version;
 }
 
+CatalogueDescriptor::Backend Database::backendFor(const QString &connectionName)
+{
+    if (!QSqlDatabase::contains(connectionName))
+        return CatalogueDescriptor::Backend::Sqlite;
+    const QSqlDatabase db = QSqlDatabase::database(connectionName, false);
+    return db.driverName() == QStringLiteral("QPSQL") ? CatalogueDescriptor::Backend::Postgres
+                                                        : CatalogueDescriptor::Backend::Sqlite;
+}
+
+QString Database::nowIsoExpr(CatalogueDescriptor::Backend backend)
+{
+    return backend == CatalogueDescriptor::Backend::Postgres
+               ? QStringLiteral(
+                     "to_char(now() at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')")
+               : QStringLiteral("strftime('%Y-%m-%dT%H:%M:%fZ','now')");
+}
+
 bool Database::fail(const QString &context, const QString &detail)
 {
     m_error = detail.isEmpty() ? context : QStringLiteral("%1: %2").arg(context, detail);

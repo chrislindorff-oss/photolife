@@ -1,5 +1,6 @@
 #include "match/MatchReviewer.h"
 
+#include "db/Database.h"
 #include "match/NameParser.h"
 #include "taxonomy/TaxonomyStore.h"
 
@@ -69,7 +70,13 @@ bool MatchReviewer::writeDecision(qint64 captureId, qint64 taxonInatId, const QS
     // A capture has exactly one live decision. Clear whatever it had before —
     // a stale engine guess, or an earlier user decision this one supersedes
     // (e.g. reassigning an already-confirmed capture to a different taxon) —
-    // then write the new one fresh.
+    // then write the new one fresh. The delete-then-insert pair is wrapped in
+    // a transaction so two collaborators deciding the same capture at once
+    // (shared Postgres catalogue) can't interleave and leave two live rows;
+    // whichever transaction commits last simply wins.
+    if (!db.transaction())
+        return fail(db.lastError().text());
+
     QSqlQuery del(db);
     del.prepare(QStringLiteral("DELETE FROM capture_match WHERE capture_id = ?"));
     del.addBindValue(qlonglong(captureId));
@@ -79,15 +86,21 @@ bool MatchReviewer::writeDecision(qint64 captureId, qint64 taxonInatId, const QS
     ins.prepare(QStringLiteral(
         "INSERT INTO capture_match (capture_id, taxon_id, matched_rank, method, confidence, "
         "status, qualifier, decided_by, decided_at) "
-        "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), ?, 'manual', 1.0, ?, ?, 'user', "
-        "        strftime('%Y-%m-%dT%H:%M:%fZ','now'))"));
+        "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), ?, 'manual', 1.0, ?, ?, 'user', %1)")
+                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     ins.addBindValue(qlonglong(captureId));
     ins.addBindValue(taxonInatId > 0 ? QVariant(qlonglong(taxonInatId)) : QVariant());
     ins.addBindValue(matchedRank.isEmpty() ? QVariant() : matchedRank);
     ins.addBindValue(status);
     ins.addBindValue(qualifier.isEmpty() ? QVariant() : qualifier);
-    if (!ins.exec())
-        return fail(ins.lastError().text());
+    if (!ins.exec()) {
+        const QString error = ins.lastError().text();
+        db.rollback();
+        return fail(error);
+    }
+
+    if (!db.commit())
+        return fail(db.lastError().text());
     return true;
 }
 
@@ -271,9 +284,10 @@ int MatchReviewer::ignoreFolderTree(int folderId)
         QSqlQuery rej(db);
         rej.prepare(QStringLiteral(
             "UPDATE capture_match SET status = 'rejected', decided_by = 'user', "
-            "  decided_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "  decided_at = %1 "
             "WHERE capture_id IN (SELECT id FROM capture WHERE folder_id = ?) "
-            "  AND decided_by = 'engine'"));
+            "  AND decided_by = 'engine'")
+                        .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
         rej.addBindValue(f);
         rej.exec();
     }

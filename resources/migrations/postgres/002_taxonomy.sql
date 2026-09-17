@@ -5,6 +5,12 @@
 -- shapes as the SQLite version: place.inat_id is always supplied by the
 -- caller (the iNaturalist id), never autoincremented, so it stays a plain
 -- INTEGER PRIMARY KEY with no IDENTITY clause.
+--
+-- REAL -> DOUBLE PRECISION: SQLite's REAL type affinity is always an 8-byte
+-- IEEE double regardless of the declared name, but Postgres's REAL is a
+-- genuine 4-byte single-precision float4 -- using it here silently loses
+-- precision and breaks equality comparisons against values computed from a
+-- double-precision source (see geocode_cache in 010_locality_cache.sql).
 
 -- An iNaturalist place (a region a project is scoped to).
 CREATE TABLE place (
@@ -12,10 +18,10 @@ CREATE TABLE place (
     name         TEXT NOT NULL,
     display_name TEXT,
     admin_level  INTEGER,
-    bbox_swlat   REAL,
-    bbox_swlng   REAL,
-    bbox_nelat   REAL,
-    bbox_nelng   REAL,
+    bbox_swlat   DOUBLE PRECISION,
+    bbox_swlng   DOUBLE PRECISION,
+    bbox_nelat   DOUBLE PRECISION,
+    bbox_nelng   DOUBLE PRECISION,
     fetched_at   TEXT NOT NULL DEFAULT (to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
 );
 
