@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QEventLoop>
+#include <QSplashScreen>
 #include <QTimer>
 #include <QWidget>
 #include <QAction>
@@ -8,6 +9,7 @@
 #include <QTreeView>
 
 #include <cstdio>
+#include <memory>
 
 #include <QFile>
 #include <QSqlDatabase>
@@ -20,6 +22,7 @@
 #include "match/MatchService.h"
 #include "scan/ScanService.h"
 #include "scan/ScanTypes.h"
+#include "settings/Settings.h"
 #include "taxonomy/ProjectBuilder.h"
 #include "taxonomy/TaxonomyStore.h"
 
@@ -260,8 +263,36 @@ int main(int argc, char *argv[])
 
     parser.process(qtApp);
 
+    // Only the plain interactive launch below (no headless/screenshot flag)
+    // can benefit from a "connecting" indicator -- the CLI modes already
+    // report their own progress on stderr/the log file as they run.
+    const bool interactiveGui = !parser.isSet(scanOption) && !parser.isSet(buildOption)
+                              && !parser.isSet(matchOption) && !parser.isSet(checklistOption)
+                              && !parser.isSet(screenshotOption);
+
+    // Opening a shared Postgres catalogue can take several seconds (a
+    // network round-trip, or waking a suspended database), with nothing on
+    // screen the whole time otherwise -- that looks exactly like PhotoLife
+    // has hung. A quick peek at Settings (cheap, local, no network) decides
+    // whether a short-lived status window is worth showing while it connects.
+    std::unique_ptr<QSplashScreen> connecting;
+    if (interactiveGui
+        && pl::Settings().catalogueDescriptor().backend
+               == pl::CatalogueDescriptor::Backend::Postgres) {
+        QPixmap background(420, 90);
+        background.fill(QColor(0xf6, 0xf1, 0xe3));
+        connecting = std::make_unique<QSplashScreen>(background);
+        connecting->showMessage(QStringLiteral("Connecting to shared catalogue…"),
+                                Qt::AlignCenter, QColor(0x24, 0x40, 0x22));
+        connecting->show();
+        qtApp.processEvents();
+    }
+
     pl::Application app;
-    if (!app.initialize())
+    const bool initialized = app.initialize();
+    if (connecting)
+        connecting->close();
+    if (!initialized)
         return 1;
 
     if (parser.isSet(scanOption))
