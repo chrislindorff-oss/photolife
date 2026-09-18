@@ -690,21 +690,21 @@ void MainWindow::buildMenus()
     quit->setShortcut(QKeySequence::Quit);
     quit->setMenuRole(QAction::QuitRole);
 
-    QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
+    m_viewMenu = menuBar()->addMenu(tr("&View"));
     m_viewModeGroup = new QActionGroup(this);
     m_viewModeGroup->setExclusive(true);
 
-    m_viewTreeAction = viewMenu->addAction(tr("&Reference Tree"));
+    m_viewTreeAction = m_viewMenu->addAction(tr("&Reference Tree"));
     m_viewTreeAction->setCheckable(true);
     m_viewTreeAction->setObjectName(QStringLiteral("viewTreeAction"));
     m_viewModeGroup->addAction(m_viewTreeAction);
 
-    m_viewLibraryAction = viewMenu->addAction(tr("&All Library Photos"));
+    m_viewLibraryAction = m_viewMenu->addAction(tr("&All Library Photos"));
     m_viewLibraryAction->setCheckable(true);
     m_viewLibraryAction->setObjectName(QStringLiteral("viewLibraryAction"));
     m_viewModeGroup->addAction(m_viewLibraryAction);
 
-    m_viewReviewAction = viewMenu->addAction(tr("&Review Unmatched"));
+    m_viewReviewAction = m_viewMenu->addAction(tr("&Review Unmatched"));
     m_viewReviewAction->setCheckable(true);
     m_viewReviewAction->setObjectName(QStringLiteral("viewReviewAction"));
     m_viewModeGroup->addAction(m_viewReviewAction);
@@ -897,6 +897,15 @@ void MainWindow::buildReferenceTreeDock()
     dock->setWidget(panel);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
     resizeDocks({dock}, {360}, Qt::Horizontal);
+
+    // The dock's own close button hides it with no other way back short of
+    // this menu entry -- and mainWindow/state persists that hidden state
+    // across restarts (restoreLayout(), below), so without this there would
+    // be no way to get the panel back at all once closed.
+    QAction *toggle = dock->toggleViewAction();
+    toggle->setText(tr("Reference Trees &Panel"));
+    m_viewMenu->addSeparator();
+    m_viewMenu->addAction(toggle);
 }
 
 int MainWindow::currentProjectId() const

@@ -157,6 +157,7 @@ private:
     QTabWidget *m_tabs = nullptr;
     QStackedWidget *m_photoStack = nullptr;
     QStackedWidget *m_centralStack = nullptr;
+    QMenu *m_viewMenu = nullptr;
     QActionGroup *m_viewModeGroup = nullptr;
     QAction *m_viewTreeAction = nullptr;
     QAction *m_viewLibraryAction = nullptr;
