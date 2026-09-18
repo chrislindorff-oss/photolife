@@ -2626,7 +2626,16 @@ void MainWindow::addWatchedFolder()
     }
 
     updateEmptyState();
-    startScan();
+
+    // Only this folder needs scanning -- CatalogueWriter::sync() never
+    // deletes or prunes anything outside the roots it's given, so this
+    // can't affect captures already catalogued under the other watched
+    // roots. Scanning the whole library here (the way startScan()/"Rescan
+    // Library" does) would make adding one small folder wait on a full
+    // re-walk of everything else for no benefit.
+    if (m_app.scanService().isRunning())
+        return;
+    m_app.scanService().start({clean});
 }
 
 void MainWindow::startScan()
@@ -2654,10 +2663,14 @@ void MainWindow::setScanUiRunning(bool running)
 
 void MainWindow::onScanProgress(const scan::ScanProgress &progress)
 {
-    statusBar()->showMessage(tr("Scanning %1 — %2 folders, %3 photos")
-                                 .arg(progress.currentDir)
+    // foldersSeen/filesSeen are running totals for this whole scan (every
+    // root being scanned this run, not just currentDir) -- word it that way
+    // so it doesn't read as "this folder alone has thousands of photos" when
+    // a scan covering several roots happens to be passing through a small one.
+    statusBar()->showMessage(tr("Scanning — %1 folders, %2 photos found so far (currently: %3)")
                                  .arg(progress.foldersSeen)
-                                 .arg(progress.filesSeen));
+                                 .arg(progress.filesSeen)
+                                 .arg(progress.currentDir));
 }
 
 void MainWindow::onScanFinished(const scan::ScanSummary &summary)
