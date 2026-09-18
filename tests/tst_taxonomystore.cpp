@@ -9,6 +9,8 @@
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
 
+#include "PgTestDsn.h"
+
 using namespace pl;
 using namespace pl::taxonomy;
 
@@ -30,6 +32,7 @@ private slots:
     void projectLeafPhotosListAndMissing();
     void deleteProjectRemovesItAndItsMembership();
     void httpCacheRoundTrips();
+    void pgAddProjectTaxonMergesFlagsOnConflict();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -384,6 +387,44 @@ void TestTaxonomyStore::httpCacheRoundTrips()
     QVERIFY(m_store->storeResponse(url, QStringLiteral("\"def456\""), QString(), 200,
                                    QByteArrayLiteral("{\"results\":[1]}")));
     QCOMPARE(m_store->cachedResponse(url)->etag, QStringLiteral("\"def456\""));
+}
+
+void TestTaxonomyStore::pgAddProjectTaxonMergesFlagsOnConflict()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed TaxonomyStore tests");
+
+    // Regression test: addProjectTaxon()'s ON CONFLICT clause used to merge
+    // in_region/from_checklist with SQLite's scalar max(a, b) -- valid SQLite,
+    // but Postgres's max() is aggregate-only and has no such overload, so
+    // every call on Postgres failed outright (see TaxonomyStore.cpp).
+    Database db;
+    QVERIFY2(db.open(*descriptor), qPrintable(db.error()));
+    QSqlDatabase conn = QSqlDatabase::database(db.connectionName(), false);
+    conn.exec(QStringLiteral(
+        "TRUNCATE taxon, project, project_taxon RESTART IDENTITY CASCADE"));
+
+    TaxonomyStore store(db.connectionName());
+    Taxon fam;
+    fam.inatId = 47217;
+    fam.rank = QStringLiteral("family");
+    fam.name = QStringLiteral("Orchidaceae");
+    QVERIFY(store.upsertTaxon(fam) > 0);
+
+    const int proj = store.ensureProject(QStringLiteral("Orchids of Victoria"), 47217,
+                                         std::nullopt, QStringLiteral("inat"));
+    QVERIFY(proj > 0);
+
+    // First call: not in-region, not from a checklist.
+    QVERIFY2(store.addProjectTaxon(proj, 47217, false, false), qPrintable(conn.lastError().text()));
+    // Second call for the SAME taxon: in-region this time -- the ON CONFLICT
+    // path must fire and merge, not just silently keep the old row untouched.
+    QVERIFY2(store.addProjectTaxon(proj, 47217, true, false), qPrintable(conn.lastError().text()));
+
+    const auto tree = store.projectTree(proj);
+    QCOMPARE(tree.size(), 1);
+    QVERIFY(tree.first().inRegion);
 }
 
 QTEST_GUILESS_MAIN(TestTaxonomyStore)

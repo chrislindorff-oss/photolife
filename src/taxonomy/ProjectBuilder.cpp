@@ -3,6 +3,8 @@
 #include "net/INatClient.h"
 #include "taxonomy/TaxonomyStore.h"
 
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QtGlobal>
 
 #include <cmath>
@@ -12,6 +14,21 @@ namespace {
 constexpr int kBatchSize = 30;      // iNat allows up to 30 ids per /taxa call
 constexpr int kFirstConfirmAt = 10000;   // ask the user before going past this
 constexpr int kConfirmEvery = 5000;      // then re-ask every this many species
+
+// Every write to a shared Postgres catalogue is a network round trip, unlike
+// local SQLite where a whole page finishes before the OS would ever notice.
+// Yielding to the event loop every few writes (paint/timer events only --
+// ExcludeUserInputEvents avoids the user re-entrantly clicking something
+// mid-batch) keeps the window responsive and lets the progress text below
+// actually get painted, instead of the app looking hung for the whole page.
+constexpr int kYieldEvery = 10;
+
+void maybeYield(int count)
+{
+    if (count % kYieldEvery == 0)
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
 } // namespace
 
 ProjectBuilder::ProjectBuilder(pl::net::INatClient &inat, TaxonomyStore &store, QObject *parent)
@@ -169,12 +186,14 @@ void ProjectBuilder::fetchRootDetail()
             return;
         if (out.ok()) {
             // The spine above the root (kingdom .. order) and its immediate children.
+            m_store.beginBatch();
             for (const Taxon &a : out.value.ancestors) {
                 m_store.upsertTaxon(a);
                 m_stored.insert(a.inatId);
                 m_store.addProjectTaxon(m_projectId, a.inatId, false, false);
             }
             m_store.upsertTaxon(out.value.taxon);
+            m_store.commitBatch();
         }
         fetchSpeciesPage(1);
     });
@@ -198,6 +217,9 @@ void ProjectBuilder::fetchSpeciesPage(int page)
         if (page == 1)
             m_speciesTotal = out.value.totalResults;
 
+        const int pageCount = int(out.value.results.size());
+        int written = 0;
+        m_store.beginBatch();
         for (const pl::net::SpeciesCount &sc : out.value.results) {
             m_store.upsertTaxon(sc.taxon);
             m_stored.insert(sc.taxon.inatId);
@@ -205,7 +227,16 @@ void ProjectBuilder::fetchSpeciesPage(int page)
             for (qint64 anc : sc.ancestorIds)
                 m_neededAncestors.insert(anc);
             ++m_speciesSeen;
+            ++written;
+            if (written % kYieldEvery == 0 || written == pageCount) {
+                emit progress(tr("Uploading to catalogue (%1 of %2 total resolved)")
+                                  .arg(m_speciesSeen)
+                                  .arg(m_speciesTotal),
+                              written, pageCount);
+            }
+            maybeYield(written);
         }
+        m_store.commitBatch();
 
         emit progress(tr("Fetching species"), m_speciesSeen, m_speciesTotal);
 
@@ -294,13 +325,20 @@ void ProjectBuilder::fillNextAncestorBatch()
             fail(tr("filling the tree failed: %1").arg(out.error));
             return;
         }
+        const int batchCount = int(out.value.size());
+        int written = 0;
+        m_store.beginBatch();
         for (const Taxon &t : out.value) {
             m_store.upsertTaxon(t);
             m_store.addProjectTaxon(m_projectId, t.inatId, false, false);
             m_stored.insert(t.inatId);
             ++m_ancestorFilled;
+            ++written;
+            if (written % kYieldEvery == 0 || written == batchCount)
+                emit progress(tr("Filling intermediate taxa"), m_ancestorFilled, m_ancestorTotal);
+            maybeYield(written);
         }
-        emit progress(tr("Filling intermediate taxa"), m_ancestorFilled, m_ancestorTotal);
+        m_store.commitBatch();
         fillNextAncestorBatch();
     });
 }

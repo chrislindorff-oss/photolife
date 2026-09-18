@@ -313,6 +313,21 @@ bool TaxonomyStore::markInfraChecked(int projectId, qint64 speciesInatId)
     return q.exec();
 }
 
+bool TaxonomyStore::beginBatch()
+{
+    return QSqlDatabase::database(m_connectionName, false).transaction();
+}
+
+bool TaxonomyStore::commitBatch()
+{
+    return QSqlDatabase::database(m_connectionName, false).commit();
+}
+
+void TaxonomyStore::rollbackBatch()
+{
+    QSqlDatabase::database(m_connectionName, false).rollback();
+}
+
 bool TaxonomyStore::addProjectTaxon(int projectId, qint64 taxonInatId, bool inRegion,
                                     bool fromChecklist)
 {
@@ -321,12 +336,17 @@ bool TaxonomyStore::addProjectTaxon(int projectId, qint64 taxonInatId, bool inRe
         return false;
 
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    // "|" (bitwise OR) instead of max(a, b): SQLite's max() is a scalar
+    // function when given 2+ args (returns the larger value), but Postgres's
+    // max() is aggregate-only and has no such overload -- a | b gives the
+    // same result as max(a, b) here specifically because these columns are
+    // always exactly 0 or 1, never any other integer.
     q.prepare(QStringLiteral(
         "INSERT INTO project_taxon (project_id, taxon_id, in_region, from_checklist) "
         "VALUES (?, ?, ?, ?) "
         "ON CONFLICT(project_id, taxon_id) DO UPDATE SET "
-        "  in_region = max(project_taxon.in_region, excluded.in_region), "
-        "  from_checklist = max(project_taxon.from_checklist, excluded.from_checklist)"));
+        "  in_region = project_taxon.in_region | excluded.in_region, "
+        "  from_checklist = project_taxon.from_checklist | excluded.from_checklist"));
     q.addBindValue(projectId);
     q.addBindValue(qlonglong(*local));
     q.addBindValue(inRegion ? 1 : 0);

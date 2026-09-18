@@ -52,6 +52,18 @@ public:
 
     bool addProjectTaxon(int projectId, qint64 taxonInatId, bool inRegion, bool fromChecklist);
 
+    // Wraps a run of the write calls above in one transaction. Building a
+    // reference tree can mean hundreds of upsertTaxon()/addProjectTaxon()
+    // calls per network page; on a local SQLite file each is effectively
+    // free, but on a shared Postgres connection every call is its own
+    // network round trip, and each auto-committed statement separately pays
+    // a commit-acknowledgement wait -- wrapping a page's worth of calls in
+    // one transaction (one commit instead of many) cuts that overhead
+    // sharply. Safe on both backends; a no-op improvement on SQLite.
+    bool beginBatch();
+    bool commitBatch();
+    void rollbackBatch();
+
     // Deletes the project and its project_taxon / representative rows (cascaded by the
     // schema). The shared taxon cache and any matched captures are left untouched.
     bool deleteProject(int projectId);
