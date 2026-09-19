@@ -6,9 +6,20 @@
 
 #include <QPainter>
 #include <QPixmap>
+#include <QThread>
 
 namespace pl::model {
 namespace {
+
+bool registerMetaTypes()
+{
+    qRegisterMetaType<pl::model::ReferencePhotoModel::QueryParams>(
+        "pl::model::ReferencePhotoModel::QueryParams");
+    qRegisterMetaType<QList<pl::model::ReferencePhotoModel::Row>>(
+        "QList<pl::model::ReferencePhotoModel::Row>");
+    return true;
+}
+const bool kMetaTypesRegistered = registerMetaTypes();
 
 QIcon makePlaceholder()
 {
@@ -26,11 +37,56 @@ QIcon makePlaceholder()
 
 } // namespace
 
+// See CaptureListModel::Worker -- same persistent background-connection
+// pattern, applied here so a tree click's setScope() doesn't block the GUI
+// thread on a remote Postgres round trip either.
+class ReferencePhotoModel::Worker : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit Worker(CatalogueDescriptor descriptor) : m_descriptor(std::move(descriptor)) {}
+
+public slots:
+    void run(quint64 generation, pl::model::ReferencePhotoModel::QueryParams params)
+    {
+        if (!m_db.isOpen() && !m_db.open(m_descriptor))
+            return;
+        const QList<ReferencePhotoModel::Row> rows =
+            ReferencePhotoModel::fetchRows(m_db.connectionName(), params);
+        emit rowsReady(generation, rows);
+    }
+
+    // See CaptureListModel::Worker::shutdown() -- closes the connection on
+    // this worker's own thread before the model tears the thread down.
+    void shutdown() { m_db.close(); }
+
+signals:
+    void rowsReady(quint64 generation, QList<pl::model::ReferencePhotoModel::Row> rows);
+
+private:
+    CatalogueDescriptor m_descriptor;
+    Database m_db;
+};
+
 ReferencePhotoModel::ReferencePhotoModel(pl::Database &db, pl::net::PhotoCache &photos,
                                         QObject *parent)
     : QAbstractListModel(parent), m_db(db), m_photos(photos), m_placeholder(makePlaceholder())
 {
+    Q_UNUSED(kMetaTypesRegistered);
     connect(&m_photos, &pl::net::PhotoCache::ready, this, &ReferencePhotoModel::onPhotoReady);
+}
+
+ReferencePhotoModel::~ReferencePhotoModel()
+{
+    if (m_workerThread) {
+        if (m_worker)
+            QMetaObject::invokeMethod(m_worker, "shutdown", Qt::BlockingQueuedConnection);
+        m_workerThread->quit();
+        m_workerThread->wait();
+    }
+    delete m_worker;
+    delete m_workerThread;
 }
 
 int ReferencePhotoModel::rowCount(const QModelIndex &parent) const
@@ -121,32 +177,75 @@ void ReferencePhotoModel::setScope(qint64 taxonInatId)
     if (m_scope == taxonInatId)
         return;
     m_scope = taxonInatId;
-    reload();
+    reloadAsync();
 }
 
 void ReferencePhotoModel::reload()
 {
     beginResetModel();
-    m_rows.clear();
+    m_rows = m_db.isOpen() ? fetchRows(m_db.connectionName(), QueryParams{m_projectId, m_scope})
+                           : QList<Row>();
     m_rowsByUrl.clear();
-
-    if (m_db.isOpen() && m_projectId > 0) {
-        taxonomy::TaxonomyStore store(m_db.connectionName());
-        for (const auto &lp : store.projectLeafPhotos(m_projectId, m_scope)) {
-            Row row;
-            row.inatId = lp.inatId;
-            row.name = lp.name;
-            row.commonName = lp.commonName;
-            row.rank = lp.rank;
-            row.photoUrl = lp.photoUrl;
-            row.attribution = lp.attribution;
-            if (!row.photoUrl.isEmpty())
-                m_rowsByUrl[row.photoUrl].append(int(m_rows.size()));
-            m_rows.append(std::move(row));
-        }
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (!m_rows[i].photoUrl.isEmpty())
+            m_rowsByUrl[m_rows[i].photoUrl].append(i);
     }
-
     endResetModel();
+}
+
+void ReferencePhotoModel::ensureWorker()
+{
+    if (m_worker)
+        return;
+    m_workerThread = new QThread();
+    m_worker = new Worker(m_db.descriptor());
+    m_worker->moveToThread(m_workerThread);
+    connect(this, &ReferencePhotoModel::requestFetch, m_worker, &Worker::run);
+    connect(m_worker, &Worker::rowsReady, this, &ReferencePhotoModel::onRowsReady);
+    m_workerThread->start();
+}
+
+void ReferencePhotoModel::reloadAsync()
+{
+    ensureWorker();
+    const quint64 generation = ++m_generation;
+    emit requestFetch(generation, QueryParams{m_projectId, m_scope});
+}
+
+void ReferencePhotoModel::onRowsReady(quint64 generation, QList<Row> rows)
+{
+    if (generation != m_generation)
+        return;   // superseded by a later request -- discard
+
+    beginResetModel();
+    m_rows = std::move(rows);
+    m_rowsByUrl.clear();
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (!m_rows[i].photoUrl.isEmpty())
+            m_rowsByUrl[m_rows[i].photoUrl].append(i);
+    }
+    endResetModel();
+}
+
+QList<ReferencePhotoModel::Row> ReferencePhotoModel::fetchRows(const QString &connectionName,
+                                                               const QueryParams &params)
+{
+    QList<Row> rows;
+    if (params.projectId <= 0)
+        return rows;
+
+    taxonomy::TaxonomyStore store(connectionName);
+    for (const auto &lp : store.projectLeafPhotos(params.projectId, params.scope)) {
+        Row row;
+        row.inatId = lp.inatId;
+        row.name = lp.name;
+        row.commonName = lp.commonName;
+        row.rank = lp.rank;
+        row.photoUrl = lp.photoUrl;
+        row.attribution = lp.attribution;
+        rows.append(std::move(row));
+    }
+    return rows;
 }
 
 void ReferencePhotoModel::onPhotoReady(const QString &url)
@@ -161,3 +260,5 @@ void ReferencePhotoModel::onPhotoReady(const QString &url)
 }
 
 } // namespace pl::model
+
+#include "ReferencePhotoModel.moc"

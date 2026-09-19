@@ -2,6 +2,7 @@
 
 #include "taxonomy/TaxonomyTypes.h"
 
+#include <QDate>
 #include <QList>
 #include <QObject>
 #include <QString>
@@ -98,16 +99,19 @@ public:
     void observationCount(qint64 taxonId, qint64 placeId,
                           std::function<void(Outcome<int>)> done);
 
-    // GET /v1/observations?user_login=&taxon_id=<comma list>&place_id=&photos=true&page=
+    // GET /v1/observations?user_login=&taxon_id=<comma list>&place_id=&d1=&d2=&photos=true&page=
     // `taxonIds` is one page's worth of ids -- callers batch large taxon lists
     // themselves (see ReferencePhotoFetcher's 30-at-a-time precedent). `placeId`
     // restricts results to that place (0 = no place filter), the same
-    // convention as speciesCounts()/observationCount() above. Sends the
+    // convention as speciesCounts()/observationCount() above. `dateFrom`/`dateTo`
+    // restrict to observations made in that (inclusive) date range; an invalid
+    // QDate on either end omits that bound (both invalid = no date filter at
+    // all, the only behaviour before this parameter existed). Sends the
     // configured access token, if any, so the results reflect what that user
     // can actually see (true coordinates on their own geoprivacy-obscured
     // observations, otherwise the public, possibly-obscured view).
     void fetchObservations(const QString &userLogin, const QList<qint64> &taxonIds,
-                           qint64 placeId, int page,
+                           qint64 placeId, const QDate &dateFrom, const QDate &dateTo, int page,
                            std::function<void(Outcome<ObservationPage>)> done);
 
 private:

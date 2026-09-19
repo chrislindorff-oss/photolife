@@ -9,11 +9,22 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QStringList>
+#include <QThread>
 
 namespace pl::model {
 namespace {
 
 constexpr int kThumbPx = pl::thumb::ThumbnailCache::kGridPx;
+
+bool registerMetaTypes()
+{
+    qRegisterMetaType<pl::model::CaptureListModel::QueryParams>(
+        "pl::model::CaptureListModel::QueryParams");
+    qRegisterMetaType<QList<pl::model::CaptureListModel::Row>>(
+        "QList<pl::model::CaptureListModel::Row>");
+    return true;
+}
+const bool kMetaTypesRegistered = registerMetaTypes();
 
 QIcon makePlaceholder()
 {
@@ -30,12 +41,65 @@ QIcon makePlaceholder()
 
 } // namespace
 
+// Runs fetchRows() on its own thread with its own catalogue connection, so a
+// tree click's query never blocks the GUI thread -- important once the
+// catalogue is a shared Postgres connection where each round trip can be tens
+// of milliseconds. Persistent (not one-shot like ScanService/MatchService's
+// workers): tree clicks are frequent, so a fresh connection per click would
+// undercut the point of the fix.
+class CaptureListModel::Worker : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit Worker(CatalogueDescriptor descriptor) : m_descriptor(std::move(descriptor)) {}
+
+public slots:
+    void run(quint64 generation, pl::model::CaptureListModel::QueryParams params)
+    {
+        if (!m_db.isOpen() && !m_db.open(m_descriptor))
+            return;
+        const QList<CaptureListModel::Row> rows = CaptureListModel::fetchRows(
+            QSqlDatabase::database(m_db.connectionName(), false), params);
+        emit rowsReady(generation, rows);
+    }
+
+    // Closes the connection while still running on this worker's own thread
+    // -- Qt's SQL drivers tie a connection to the thread that opened it, and
+    // closing/destroying it from elsewhere (e.g. the model's destructor,
+    // running on the GUI thread, deleting this Worker after the thread has
+    // already stopped) trips "database does not belong to the calling
+    // thread". Invoked with a blocking queued connection just before the
+    // model tears the worker thread down.
+    void shutdown() { m_db.close(); }
+
+signals:
+    void rowsReady(quint64 generation, QList<pl::model::CaptureListModel::Row> rows);
+
+private:
+    CatalogueDescriptor m_descriptor;
+    Database m_db;
+};
+
 CaptureListModel::CaptureListModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
                                    QObject *parent)
     : QAbstractListModel(parent), m_db(db), m_thumbs(thumbs), m_placeholder(makePlaceholder())
 {
+    Q_UNUSED(kMetaTypesRegistered);
     connect(&m_thumbs, &pl::thumb::ThumbnailCache::ready,
             this, &CaptureListModel::onThumbnailReady);
+}
+
+CaptureListModel::~CaptureListModel()
+{
+    if (m_workerThread) {
+        if (m_worker)
+            QMetaObject::invokeMethod(m_worker, "shutdown", Qt::BlockingQueuedConnection);
+        m_workerThread->quit();
+        m_workerThread->wait();
+    }
+    delete m_worker;
+    delete m_workerThread;
 }
 
 int CaptureListModel::rowCount(const QModelIndex &parent) const
@@ -63,6 +127,8 @@ QHash<int, QByteArray> CaptureListModel::roleNames() const
         {ShowFileTypeBadgeRole, "showFileTypeBadge"},
         {FullCaptionRole, "fullCaption"},
         {LocalityRole, "locality"},
+        {MatchedTaxonInatIdRole, "matchedTaxonInatId"},
+        {PreviewIsRawRole, "previewIsRaw"},
     };
 }
 
@@ -151,6 +217,10 @@ QVariant CaptureListModel::data(const QModelIndex &index, int role) const
         return (m_captionFields & CaptionFileType) != 0;
     case LocalityRole:
         return row.locality;
+    case MatchedTaxonInatIdRole:
+        return row.matchedTaxonInatId;
+    case PreviewIsRawRole:
+        return row.previewIsRaw;
     default:
         return {};
     }
@@ -169,7 +239,7 @@ void CaptureListModel::setTaxonScope(qint64 taxonInatId)
     if (m_taxonScope == taxonInatId)
         return;
     m_taxonScope = taxonInatId;
-    reload();
+    reloadAsync();
 }
 
 void CaptureListModel::setProjectScope(int projectId)
@@ -178,7 +248,17 @@ void CaptureListModel::setProjectScope(int projectId)
     if (m_projectScope == normalised)
         return;
     m_projectScope = normalised;
-    reload();
+    reloadAsync();
+}
+
+void CaptureListModel::setScope(int projectId, qint64 taxonInatId)
+{
+    const int normalised = projectId > 0 ? projectId : 0;
+    if (m_projectScope == normalised && m_taxonScope == taxonInatId)
+        return;
+    m_projectScope = normalised;
+    m_taxonScope = taxonInatId;
+    reloadAsync();
 }
 
 void CaptureListModel::setBestShotOnly(bool on)
@@ -203,6 +283,20 @@ void CaptureListModel::applyBestShot(const QList<int> &captureIds, bool on)
     }
 }
 
+void CaptureListModel::applyGps(int captureId, double latitude, double longitude)
+{
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (m_rows[i].id != captureId)
+            continue;
+        m_rows[i].hasGps = true;
+        m_rows[i].latitude = latitude;
+        m_rows[i].longitude = longitude;
+        const QModelIndex idx = index(i);
+        emit dataChanged(idx, idx, {HasGpsRole, LatitudeRole, LongitudeRole});
+        return;
+    }
+}
+
 void CaptureListModel::setCaptionFields(int fields)
 {
     if (m_captionFields == fields)
@@ -219,18 +313,74 @@ void CaptureListModel::reload()
     m_rowsByHash.clear();
 
     if (m_db.isOpen()) {
+        const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly};
+        m_rows = fetchRows(QSqlDatabase::database(m_db.connectionName(), false), params);
+        for (int i = 0; i < m_rows.size(); ++i) {
+            if (!m_rows[i].previewHash.isEmpty())
+                m_rowsByHash[m_rows[i].previewHash].append(i);
+        }
+    }
+
+    endResetModel();
+}
+
+void CaptureListModel::ensureWorker()
+{
+    if (m_worker)
+        return;
+    m_workerThread = new QThread();
+    m_worker = new Worker(m_db.descriptor());
+    m_worker->moveToThread(m_workerThread);
+    connect(this, &CaptureListModel::requestFetch, m_worker, &Worker::run);
+    connect(m_worker, &Worker::rowsReady, this, &CaptureListModel::onRowsReady);
+    m_workerThread->start();
+}
+
+void CaptureListModel::reloadAsync()
+{
+    ensureWorker();
+    const quint64 generation = ++m_generation;
+    emit requestFetch(generation, QueryParams{m_statusFilter, m_taxonScope, m_projectScope,
+                                              m_bestShotOnly});
+}
+
+void CaptureListModel::onRowsReady(quint64 generation, QList<Row> rows)
+{
+    if (generation != m_generation)
+        return;   // superseded by a later request -- discard
+
+    beginResetModel();
+    m_rows = std::move(rows);
+    m_rowsByHash.clear();
+    for (int i = 0; i < m_rows.size(); ++i) {
+        if (!m_rows[i].previewHash.isEmpty())
+            m_rowsByHash[m_rows[i].previewHash].append(i);
+    }
+    endResetModel();
+}
+
+QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
+                                                         const QueryParams &params)
+{
+    QList<Row> rows;
+    if (!db.isOpen())
+        return rows;
+
+    {
         QStringList clauses;
-        if (m_statusFilter == QLatin1String("auto"))
+        if (params.statusFilter == QLatin1String("auto"))
             clauses << QStringLiteral("match_status = 'auto'");
-        else if (m_statusFilter == QLatin1String("confirmed"))
+        else if (params.statusFilter == QLatin1String("confirmed"))
             clauses << QStringLiteral("match_status = 'confirmed'");
-        else if (m_statusFilter == QLatin1String("pending"))
+        else if (params.statusFilter == QLatin1String("pending"))
             clauses << QStringLiteral("match_status = 'pending' AND matched_id IS NOT NULL");
-        else if (m_statusFilter == QLatin1String("unmatched"))
+        else if (params.statusFilter == QLatin1String("unmatched"))
             clauses << QStringLiteral(
                 "(match_status IS NULL OR (match_status = 'pending' AND matched_id IS NULL))");
 
-        if (m_projectScope > 0 && m_taxonScope > 0) {
+        const qint64 taxonScope = params.taxonScope;
+        const int projectScope = params.projectScope;
+        if (projectScope > 0 && taxonScope > 0) {
             // Descendants of the selected taxon, then narrowed to taxa that are
             // actually in this reference tree — otherwise selecting an ancestor
             // node a tree only shows for structure (up to the synthetic "Life"
@@ -242,12 +392,12 @@ void CaptureListModel::reload()
                 "    WITH RECURSIVE sub(x) AS (SELECT ? "
                 "      UNION ALL SELECT t.inat_id FROM taxon t JOIN sub ON t.parent_inat_id = sub.x) "
                 "    SELECT x FROM sub))");
-        } else if (m_projectScope > 0) {
+        } else if (projectScope > 0) {
             // No taxon picked: still confine to this reference tree rather than
             // falling back to the whole library.
             clauses << QStringLiteral(
                 "matched_id IN (SELECT taxon_id FROM project_taxon WHERE project_id = ?)");
-        } else if (m_taxonScope > 0) {
+        } else if (taxonScope > 0) {
             clauses << QStringLiteral(
                 "matched_id IN (SELECT id FROM taxon WHERE inat_id IN ("
                 "  WITH RECURSIVE sub(x) AS (SELECT ? "
@@ -255,7 +405,7 @@ void CaptureListModel::reload()
                 "  SELECT x FROM sub))");
         }
 
-        if (m_bestShotOnly)
+        if (params.bestShotOnly)
             // Not "is_best_shot = 1": is_best_shot comes from EXISTS(...), an
             // actual boolean on Postgres (comparing it to an integer literal
             // is a type error there), but a plain truthy 0/1 on SQLite. A
@@ -266,12 +416,12 @@ void CaptureListModel::reload()
             clauses.isEmpty() ? QString()
                               : QStringLiteral(" WHERE ") + clauses.join(QStringLiteral(" AND "));
 
-        QSqlQuery q(QSqlDatabase::database(m_db.connectionName(), false));
+        QSqlQuery q(db);
         q.setForwardOnly(true);
         q.prepare(QStringLiteral(
             "SELECT id, base_name, name_text, captured_on, date_source, path, preview_path, "
             "       preview_hash, match_status, matched_name, preview_ext, latitude, longitude, "
-            "       is_best_shot, locality "
+            "       is_best_shot, locality, matched_taxon_inat_id, preview_kind "
             "FROM ("
             "  SELECT c.id, c.base_name, c.name_text, c.captured_on, c.date_source, f.path, "
             "    (SELECT r.path FROM rendition r WHERE r.capture_id = c.id "
@@ -283,7 +433,9 @@ void CaptureListModel::reload()
             "    m.status AS match_status, m.taxon_id AS matched_id, t.name AS matched_name, "
             "    c.latitude, c.longitude, "
             "    EXISTS(SELECT 1 FROM best_shot bs WHERE bs.capture_id = c.id) AS is_best_shot, "
-            "    g.locality AS locality "
+            "    g.locality AS locality, t.inat_id AS matched_taxon_inat_id, "
+            "    (SELECT r.kind FROM rendition r WHERE r.capture_id = c.id "
+            "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_kind "
             "  FROM capture c JOIN folder f ON f.id = c.folder_id "
             "  LEFT JOIN capture_match m ON m.id = ("
             "     SELECT id FROM capture_match WHERE capture_id = c.id "
@@ -296,10 +448,10 @@ void CaptureListModel::reload()
             "     AND g.lon_round = ROUND(CAST(c.longitude AS NUMERIC), 3) "
             ")") + where + QStringLiteral(
             " ORDER BY (captured_on IS NULL), captured_on DESC, id DESC"));
-        if (m_projectScope > 0)
-            q.addBindValue(m_projectScope);
-        if (m_taxonScope > 0)
-            q.addBindValue(qlonglong(m_taxonScope));
+        if (projectScope > 0)
+            q.addBindValue(projectScope);
+        if (taxonScope > 0)
+            q.addBindValue(qlonglong(taxonScope));
         q.exec();
 
         while (q.next()) {
@@ -330,14 +482,14 @@ void CaptureListModel::reload()
             }
             row.isBestShot = q.value(13).toBool();
             row.locality = q.value(14).toString();
+            row.matchedTaxonInatId = q.value(15).toLongLong();
+            row.previewIsRaw = q.value(16).toString() == QLatin1String("raw");
 
-            if (!row.previewHash.isEmpty())
-                m_rowsByHash[row.previewHash].append(int(m_rows.size()));
-            m_rows.append(std::move(row));
+            rows.append(std::move(row));
         }
     }
 
-    endResetModel();
+    return rows;
 }
 
 void CaptureListModel::onThumbnailReady(const QString &contentHash, int longestEdge)
@@ -354,3 +506,5 @@ void CaptureListModel::onThumbnailReady(const QString &contentHash, int longestE
 }
 
 } // namespace pl::model
+
+#include "CaptureListModel.moc"

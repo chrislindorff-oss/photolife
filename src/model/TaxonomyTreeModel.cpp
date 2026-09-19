@@ -144,7 +144,7 @@ QModelIndex TaxonomyTreeModel::indexForTaxon(qint64 inatId) const
 
 QList<qint64> TaxonomyTreeModel::findTaxa(const QString &text, int limit) const
 {
-    const QString needle = taxonomy::TaxonomyStore::foldName(text);
+    const QString needle = taxonomy::TaxonomyStore::foldSearchText(text);
     if (needle.isEmpty())
         return {};
 

@@ -26,6 +26,7 @@ private slots:
     void forCaptureRanksExactAboveFuzzy();
     void forCaptureUsesFolderNameWhenFilenameIsOdd();
     void searchFindsByPrefixAndSynonym();
+    void searchFindsHybridByTypedX();
     void folderGenusResolves();
 
 private:
@@ -77,6 +78,8 @@ void TestCandidateFinder::init()
     add(101, 100, QStringLiteral("species"), QStringLiteral("Caladenia carnea"),
         {QStringLiteral("Petalochilus carneus")});
     add(102, 100, QStringLiteral("species"), QStringLiteral("Caladenia fuscata"));
+    add(200, 0, QStringLiteral("genus"), QStringLiteral("Eucalyptus"));
+    add(201, 200, QStringLiteral("hybrid"), QString::fromUtf8("Eucalyptus \xC3\x97 carolaniae"));
 }
 
 void TestCandidateFinder::cleanup()
@@ -123,6 +126,17 @@ void TestCandidateFinder::searchFindsByPrefixAndSynonym()
     const auto bySynonym = finder.search(QStringLiteral("Petalochilus carneus"));
     QVERIFY(!bySynonym.isEmpty());
     QCOMPARE(bySynonym.first().name, QStringLiteral("Caladenia carnea"));
+}
+
+void TestCandidateFinder::searchFindsHybridByTypedX()
+{
+    CandidateFinder finder(m_db->connectionName());
+
+    // iNaturalist stores the hybrid name with the multiplication sign, but a
+    // user searching from the keyboard types a plain "x".
+    const auto hits = finder.search(QStringLiteral("Eucalyptus x carolaniae"));
+    QVERIFY(!hits.isEmpty());
+    QCOMPARE(hits.first().name, QString::fromUtf8("Eucalyptus \xC3\x97 carolaniae"));
 }
 
 void TestCandidateFinder::folderGenusResolves()

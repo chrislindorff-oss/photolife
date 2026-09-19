@@ -9,6 +9,7 @@ namespace pl::coverage {
 struct TaxonCoverage
 {
     qint64 inatId = 0;
+    qint64 parentInatId = 0;      // 0 if root (no parent in the project's tree)
     QString rank;
     QString name;
     QString commonName;

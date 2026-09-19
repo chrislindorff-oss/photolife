@@ -5,6 +5,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QVariant>
 
 #include "db/Database.h"
 #include "scan/CatalogueMaintenance.h"
@@ -25,12 +26,15 @@ private slots:
     void capturesWithMissingFilesFindsGhostsOnly();
     void backfillIgnoresNonExistentRawFiles();
     void backfillSkipsCapturesWithoutRawRendition();
+    void captureCountUnderFolderCountsWholeSubtree();
+    void purgeFolderCascadesToDescendantsAndCaptures();
+    void purgeFolderOnUncatalogedPathIsANoOp();
 
 private:
     QTemporaryDir m_tmp;
     std::unique_ptr<Database> m_db;
 
-    int addFolder(const QString &path);
+    int addFolder(const QString &path, int parentId = -1);
     int addCapture(int folderId, const QString &baseName);
     int addRendition(int captureId, const QString &path);
     int addRawRendition(int captureId, const QString &path);
@@ -50,12 +54,15 @@ void TestCatalogueMaintenance::cleanup()
     m_db.reset();
 }
 
-int TestCatalogueMaintenance::addFolder(const QString &path)
+int TestCatalogueMaintenance::addFolder(const QString &path, int parentId)
 {
     QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
-    q.prepare(QStringLiteral("INSERT INTO folder (path, name, depth) VALUES (?, ?, 0)"));
+    q.prepare(QStringLiteral(
+        "INSERT INTO folder (path, parent_id, name, depth) VALUES (?, ?, ?, ?)"));
     q.addBindValue(path);
+    q.addBindValue(parentId < 0 ? QVariant() : QVariant(parentId));
     q.addBindValue(QFileInfo(path).fileName());
+    q.addBindValue(parentId < 0 ? 0 : 1);
     const bool ok = q.exec();
     Q_ASSERT(ok);
     Q_UNUSED(ok);
@@ -225,6 +232,61 @@ void TestCatalogueMaintenance::backfillSkipsCapturesWithoutRawRendition()
     CatalogueMaintenance maint(m_db->connectionName());
     QCOMPARE(maint.backfillRawGeolocation(), 0);
     QVERIFY(maint.error().isEmpty());
+}
+
+void TestCatalogueMaintenance::captureCountUnderFolderCountsWholeSubtree()
+{
+    const int root = addFolder(m_tmp.filePath(QStringLiteral("Root")));
+    const int child = addFolder(m_tmp.filePath(QStringLiteral("Root/Child")), root);
+    addCapture(root, QStringLiteral("at-root"));
+    addCapture(child, QStringLiteral("at-child"));
+
+    // A sibling outside the tree must not be counted.
+    const int sibling = addFolder(m_tmp.filePath(QStringLiteral("Sibling")));
+    addCapture(sibling, QStringLiteral("elsewhere"));
+
+    CatalogueMaintenance maint(m_db->connectionName());
+    QCOMPARE(maint.captureCountUnderFolder(m_tmp.filePath(QStringLiteral("Root"))), 2);
+    QVERIFY(maint.error().isEmpty());
+}
+
+void TestCatalogueMaintenance::purgeFolderCascadesToDescendantsAndCaptures()
+{
+    const int root = addFolder(m_tmp.filePath(QStringLiteral("Root")));
+    const int child = addFolder(m_tmp.filePath(QStringLiteral("Root/Child")), root);
+    const int rootCap = addCapture(root, QStringLiteral("at-root"));
+    const int childCap = addCapture(child, QStringLiteral("at-child"));
+    addRendition(rootCap, m_tmp.filePath(QStringLiteral("Root/at-root.jpg")));
+    addRendition(childCap, m_tmp.filePath(QStringLiteral("Root/Child/at-child.jpg")));
+
+    const int sibling = addFolder(m_tmp.filePath(QStringLiteral("Sibling")));
+    const int siblingCap = addCapture(sibling, QStringLiteral("elsewhere"));
+    addRendition(siblingCap, m_tmp.filePath(QStringLiteral("Sibling/elsewhere.jpg")));
+
+    CatalogueMaintenance maint(m_db->connectionName());
+    QCOMPARE(maint.purgeFolder(m_tmp.filePath(QStringLiteral("Root"))), 2);
+    QVERIFY(maint.error().isEmpty());
+
+    QCOMPARE(count(QStringLiteral("folder")), 1);
+    QCOMPARE(count(QStringLiteral("capture")), 1);
+    QCOMPARE(count(QStringLiteral("rendition")), 1);
+
+    QSqlQuery left(QSqlDatabase::database(m_db->connectionName(), false));
+    left.exec(QStringLiteral("SELECT id FROM capture"));
+    QVERIFY(left.next());
+    QCOMPARE(left.value(0).toInt(), siblingCap);
+}
+
+void TestCatalogueMaintenance::purgeFolderOnUncatalogedPathIsANoOp()
+{
+    const int folder = addFolder(m_tmp.filePath(QStringLiteral("Lib")));
+    addCapture(folder, QStringLiteral("untouched"));
+
+    CatalogueMaintenance maint(m_db->connectionName());
+    QCOMPARE(maint.purgeFolder(QStringLiteral("/nonexistent/path")), 0);
+    QVERIFY(maint.error().isEmpty());
+    QCOMPARE(count(QStringLiteral("folder")), 1);
+    QCOMPARE(count(QStringLiteral("capture")), 1);
 }
 
 QTEST_GUILESS_MAIN(TestCatalogueMaintenance)

@@ -152,7 +152,7 @@ void InatObservationFetcher::fetchPage()
         return;
 
     m_inat.fetchObservations(
-        m_userLogin, m_batches.at(m_batchIndex), m_placeId, m_page,
+        m_userLogin, m_batches.at(m_batchIndex), m_placeId, QDate(), QDate(), m_page,
         [this](net::Outcome<net::ObservationPage> out) {
             if (checkCancelled())
                 return;

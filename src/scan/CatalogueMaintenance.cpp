@@ -58,6 +58,62 @@ int CatalogueMaintenance::forgetCaptures(const QList<int> &captureIds)
     return removed;
 }
 
+int CatalogueMaintenance::captureCountUnderFolder(const QString &rootPath) const
+{
+    m_error.clear();
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "WITH RECURSIVE sub(id) AS ("
+        "  SELECT id FROM folder WHERE path = ?"
+        "  UNION ALL"
+        "  SELECT f.id FROM folder f JOIN sub ON f.parent_id = sub.id"
+        ") "
+        "SELECT COUNT(*) FROM capture WHERE folder_id IN (SELECT id FROM sub)"));
+    q.addBindValue(rootPath);
+    if (!q.exec() || !q.next()) {
+        m_error = q.lastError().text();
+        return 0;
+    }
+    return q.value(0).toInt();
+}
+
+int CatalogueMaintenance::purgeFolder(const QString &rootPath)
+{
+    m_error.clear();
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    if (!db.isOpen()) {
+        m_error = QStringLiteral("catalogue connection is not open");
+        return -1;
+    }
+
+    // Captures are about to vanish via cascade, so count them first --
+    // numRowsAffected() on the folder delete only counts folder rows.
+    const int captureCount = captureCountUnderFolder(rootPath);
+    if (!m_error.isEmpty())
+        return -1;
+
+    if (!db.transaction()) {
+        m_error = db.lastError().text();
+        return -1;
+    }
+
+    QSqlQuery del(db);
+    del.prepare(QStringLiteral("DELETE FROM folder WHERE path = ?"));
+    del.addBindValue(rootPath);
+    if (!del.exec()) {
+        m_error = del.lastError().text();
+        db.rollback();
+        return -1;
+    }
+    const int foldersRemoved = del.numRowsAffected();
+
+    if (!db.commit()) {
+        m_error = db.lastError().text();
+        return -1;
+    }
+    return foldersRemoved > 0 ? captureCount : 0;
+}
+
 QList<CatalogueMaintenance::MissingCapture> CatalogueMaintenance::capturesWithMissingFiles() const
 {
     m_error.clear();

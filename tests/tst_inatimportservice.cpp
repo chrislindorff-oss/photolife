@@ -97,7 +97,7 @@ void TestInatImportService::downloadsWritesExifAndStampsProvenance()
     QCOMPARE(saved.first().photoId, qint64(2));
 
     const QString expectedPath = QDir(m_destDir->path())
-                                     .filePath(QStringLiteral("Diuris sp900-Melbourne, VIC-10012025.jpg"));
+                                     .filePath(QStringLiteral("Diuris sp900 - Melbourne, VIC - 10012025.jpg"));
     QCOMPARE(saved.first().path, expectedPath);
     QVERIFY(QFile::exists(expectedPath));
     QFile written(expectedPath);
@@ -120,7 +120,7 @@ void TestInatImportService::downloadsWritesExifAndStampsProvenance()
         "INSERT INTO folder (id, path, name, depth) VALUES (1, '/lib', 'lib', 0)"));
     QSqlQuery cap(sqlDb);
     cap.prepare(QStringLiteral(
-        "INSERT INTO capture (folder_id, base_name) VALUES (1, 'Diuris sp900-Melbourne, VIC-10012025')"));
+        "INSERT INTO capture (folder_id, base_name) VALUES (1, 'Diuris sp900 - Melbourne, VIC - 10012025')"));
     QVERIFY(cap.exec());
     const int captureId = cap.lastInsertId().toInt();
     QSqlQuery ren(sqlDb);
@@ -172,7 +172,7 @@ void TestInatImportService::unsetExifWriterStillSavesTheFile()
 
     QCOMPARE(spy.at(0).at(0).toBool(), true);
     QVERIFY(QFile::exists(QDir(m_destDir->path())
-                              .filePath(QStringLiteral("Diuris sp900-Melbourne, VIC-10012025.jpg"))));
+                              .filePath(QStringLiteral("Diuris sp900 - Melbourne, VIC - 10012025.jpg"))));
 }
 
 void TestInatImportService::fallsBackToObservationIdWhenNoNamingDataAvailable()
@@ -208,9 +208,10 @@ void TestInatImportService::disambiguatesFilenameCollisionsWithinARun()
 
     QCOMPARE(spy.at(0).at(0).toBool(), true);
     const QString destDir = m_destDir->path();
-    QVERIFY(QFile::exists(QDir(destDir).filePath(QStringLiteral("Diuris sp900-Melbourne, VIC-10012025.jpg"))));
     QVERIFY(QFile::exists(
-        QDir(destDir).filePath(QStringLiteral("Diuris sp900-Melbourne, VIC-10012025-2.jpg"))));
+        QDir(destDir).filePath(QStringLiteral("Diuris sp900 - Melbourne, VIC - 10012025.jpg"))));
+    QVERIFY(QFile::exists(
+        QDir(destDir).filePath(QStringLiteral("Diuris sp900 - Melbourne, VIC - 10012025 - 2.jpg"))));
 }
 
 QTEST_MAIN(TestInatImportService)

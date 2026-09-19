@@ -2,10 +2,22 @@
 
 #include <exiv2/exiv2.hpp>
 
+#include <QFile>
+
 #include <cmath>
 
 namespace pl::inat {
 namespace {
+
+// Image::AutoPtr (std::auto_ptr-based) was renamed to the std::unique_ptr-
+// based Image::UniquePtr in exiv2 0.28, with no overlap -- 0.27 (this dev
+// machine's apt package) only has AutoPtr, 0.28 (vcpkg's Windows build) only
+// has UniquePtr.
+#if EXIV2_TEST_VERSION(0, 28, 0)
+using ImagePtr = Exiv2::Image::UniquePtr;
+#else
+using ImagePtr = Exiv2::Image::AutoPtr;
+#endif
 
 // EXIF stores a lat/lon degree as three rationals (degrees, minutes, seconds
 // -- seconds carrying two implied decimal digits of precision here). This
@@ -29,15 +41,7 @@ Exiv2::URationalValue toGpsRational(double absDecimalDegrees)
 bool writeExif(const QString &path, const ExifFields &fields, QString *error)
 {
     try {
-        // Image::AutoPtr (std::auto_ptr-based) was renamed to the
-        // std::unique_ptr-based Image::UniquePtr in exiv2 0.28, with no
-        // overlap -- 0.27 (this dev machine's apt package) only has
-        // AutoPtr, 0.28 (vcpkg's Windows build) only has UniquePtr.
-#if EXIV2_TEST_VERSION(0, 28, 0)
-        Exiv2::Image::UniquePtr image = Exiv2::ImageFactory::open(path.toStdString());
-#else
-        Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(path.toStdString());
-#endif
+        ImagePtr image = Exiv2::ImageFactory::open(path.toStdString());
         if (!image.get()) {
             if (error)
                 *error = QStringLiteral("could not open %1").arg(path);
@@ -81,6 +85,63 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
             *error = QString::fromStdString(e.what());
         return false;
     }
+}
+
+bool writeExifSafely(const QString &path, const ExifFields &fields, QString *error)
+{
+    const QString tempPath = path + QStringLiteral(".photolife-tmp");
+    QFile::remove(tempPath);   // stale leftover from an earlier failed attempt
+
+    if (!QFile::copy(path, tempPath)) {
+        if (error)
+            *error = QStringLiteral("could not create a working copy of %1").arg(path);
+        return false;
+    }
+
+    QString writeError;
+    if (!writeExif(tempPath, fields, &writeError)) {
+        QFile::remove(tempPath);
+        if (error)
+            *error = writeError;
+        return false;
+    }
+
+    // A "successful" write that actually produced something broken must not
+    // be allowed to replace the only copy of the original -- confirm the
+    // result still opens as a valid image before trusting it.
+    try {
+        ImagePtr check = Exiv2::ImageFactory::open(tempPath.toStdString());
+        if (!check.get())
+            throw Exiv2::Error(Exiv2::kerErrorMessage, "reopen failed");
+        check->readMetadata();
+    } catch (const Exiv2::Error &e) {
+        QFile::remove(tempPath);
+        if (error)
+            *error = QStringLiteral("write appeared to succeed but the result failed "
+                                    "verification: %1").arg(QString::fromStdString(e.what()));
+        return false;
+    }
+
+    // No cross-platform atomic file-replace primitive is available here
+    // (Qt's QFile::rename() refuses to overwrite an existing destination),
+    // so this is remove-then-rename rather than a single atomic step -- but
+    // verification above has already run before the original is touched, so
+    // the only failure mode left is losing the temp file's name, never a
+    // corrupted result silently taking the original's place.
+    if (!QFile::remove(path)) {
+        QFile::remove(tempPath);
+        if (error)
+            *error = QStringLiteral("could not remove the original file at %1").arg(path);
+        return false;
+    }
+    if (!QFile::rename(tempPath, path)) {
+        if (error)
+            *error = QStringLiteral("wrote successfully but could not move the result into "
+                                    "place (original was removed; recovered copy left at %1)")
+                          .arg(tempPath);
+        return false;
+    }
+    return true;
 }
 
 } // namespace pl::inat

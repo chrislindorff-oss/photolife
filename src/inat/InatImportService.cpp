@@ -26,7 +26,7 @@ QString sanitizeFilenameComponent(const QString &text)
     return out.simplified();
 }
 
-// "SpeciesName-Place-DDMMYYYY", each part sanitized and omitted when the
+// "SpeciesName - Place - DDMMYYYY", each part sanitized and omitted when the
 // item has no data for it (place_guess and the observed-on date are both
 // sometimes empty). Falls back to the old inat-<observation>-<photo> scheme
 // when nothing else is available, so a fully unidentified/dateless/placeless
@@ -43,7 +43,7 @@ QString baseFileName(const ImportItem &item)
 
     if (parts.isEmpty())
         return QStringLiteral("inat-%1-%2").arg(item.observationId).arg(item.photoId);
-    return parts.join(QLatin1Char('-'));
+    return parts.join(QStringLiteral(" - "));
 }
 
 } // namespace
@@ -83,7 +83,7 @@ void InatImportService::importNext()
     // Several photos from the same observation, sharing the same species,
     // place, and date, would otherwise all resolve to the same base name.
     for (int n = 2; m_usedFileNames.contains(fileName); ++n)
-        fileName = QStringLiteral("%1-%2.jpg").arg(base).arg(n);
+        fileName = QStringLiteral("%1 - %2.jpg").arg(base).arg(n);
     m_usedFileNames.insert(fileName);
     const QString destPath = QDir(m_destFolder).filePath(fileName);
 

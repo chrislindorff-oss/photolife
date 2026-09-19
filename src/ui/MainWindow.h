@@ -25,14 +25,18 @@ class QStackedWidget;
 class QTabWidget;
 class QToolButton;
 class QTreeView;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QComboBox;
 class QAction;
 class QActionGroup;
 class QAbstractItemModel;
+class QProgressDialog;
 
 namespace pl {
 
 class Application;
+class PostgresConnectionMonitor;
 
 namespace model {
 class CaptureListModel;
@@ -94,6 +98,7 @@ private:
     void showCatalogueSettings();
 
     void addWatchedFolder();
+    void manageLibraryFolders();
     void startScan();
     void setScanUiRunning(bool running);
     void onScanProgress(const scan::ScanProgress &progress);
@@ -121,11 +126,35 @@ private:
     void reloadProjectList();
     void newReferenceTree();
     void refreshReferenceTree();
+    void addTaxonToReferenceTree();
     void deleteReferenceTree();
     void fetchInfraspecificTaxa();
     void startInfraspecificFetch(qint64 scopeInatId, const QString &scopeName);
     void showTreeContextMenu(const QPoint &pos);
+    void pruneTaxonFromTree(qint64 inatId, const QString &name);
     void importChecklist();
+
+    // Probes a Postgres catalogue on a background thread (Database::
+    // probeReachable(), the same mechanism the startup connect dialog
+    // already uses) before a long Postgres-writing action starts, so a
+    // suspended Neon compute wakes up before the GUI thread makes its first
+    // *synchronous* write -- otherwise that single blocking call can run
+    // long enough for the OS to decide PhotoLife has hung. A no-op (returns
+    // true immediately) when the active backend is SQLite.
+    bool ensureCatalogueReachable();
+
+    // Shared modal progress display for the long Postgres-writing actions
+    // (reference tree build/refresh, add taxon, fetch subspecies/varieties,
+    // fetch reference photos, import checklist), replacing status-bar-only
+    // feedback with a persistent, clearly-updating window. Shows a Cancel
+    // button wired to `onCancel` when given; omit it for a task with no
+    // meaningful way to cancel mid-flight (e.g. one single network call).
+    void beginTaskProgress(const QString &title, std::function<void()> onCancel = {});
+    // total <= 0 shows a busy (indeterminate) bar -- for phases with no
+    // known item count (e.g. resolving a taxon/place, or a single fetch).
+    void updateTaskProgress(const QString &phase, int done, int total);
+    void endTaskProgress();
+
     void refreshCoverage();
     void onTreeSelectionChanged();
     void selectTaxonInTree(qint64 inatId);
@@ -140,6 +169,7 @@ private:
     void openViewer(QAbstractItemModel *model, const QModelIndex &index);
     QListView *makeCaptureGrid(QAbstractItemModel *model);
     void removeSelectedCaptures(QListView *grid);
+    void fetchCoordinatesFromInat(const QModelIndex &idx);
     void removeMissingCaptures();
     void fixRawGeolocation();
     void fetchPhotoLocalities();
@@ -162,6 +192,8 @@ private:
     QAction *m_viewTreeAction = nullptr;
     QAction *m_viewLibraryAction = nullptr;
     QAction *m_viewReviewAction = nullptr;
+    QLabel *m_pgStatusLabel = nullptr;
+    PostgresConnectionMonitor *m_pgMonitor = nullptr;
 
     model::CaptureListModel *m_taxonModel = nullptr;
     QListView *m_taxonGrid = nullptr;
@@ -172,7 +204,7 @@ private:
     model::CaptureListModel *m_bestShotModel = nullptr;
     QListView *m_bestShotGrid = nullptr;
     QLabel *m_bestShotHeader = nullptr;
-    QListWidget *m_missingList = nullptr;
+    QTreeWidget *m_missingList = nullptr;
     QLineEdit *m_missingSearch = nullptr;
     ReferencePhotoDialog *m_referencePhotoDialog = nullptr;
 
@@ -192,6 +224,7 @@ private:
     QAction *m_scanAction = nullptr;
     QAction *m_cancelAction = nullptr;
     QAction *m_addFolderAction = nullptr;
+    QAction *m_manageFoldersAction = nullptr;
 
     model::TaxonomyTreeModel *m_treeModel = nullptr;
     QTreeView *m_treeView = nullptr;
@@ -233,9 +266,19 @@ private:
     CoveragePanel *m_coveragePanel = nullptr;
     QAction *m_newTreeAction = nullptr;
     QAction *m_refreshTreeAction = nullptr;
+    QAction *m_addTaxonAction = nullptr;
     QAction *m_deleteTreeAction = nullptr;
     QAction *m_fetchInfraAction = nullptr;
     QAction *m_importChecklistAction = nullptr;
+    // Set while addTaxonToReferenceTree()'s fetchTaxon() call is in flight --
+    // that call is async and non-modal (unlike the TaxonConfirmDialog that
+    // precedes it), so this closes the window where Delete/Refresh/Prune
+    // could otherwise run against the same project before the write lands.
+    bool m_addingTaxon = false;
+    // Owned by beginTaskProgress()/endTaskProgress() -- recreated per task
+    // rather than reused, since each task's Cancel button needs to be wired
+    // to a different service's cancel().
+    QProgressDialog *m_taskProgress = nullptr;
 
     QAction *m_matchAction = nullptr;
     QComboBox *m_filterCombo = nullptr;

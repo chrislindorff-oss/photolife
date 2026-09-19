@@ -72,18 +72,21 @@ CatalogueDescriptor Settings::catalogueDescriptor() const
     d.sqlitePath = databasePath();
 
     const QString backend = m_settings.value(QLatin1String(kCatalogueBackend)).toString();
-    if (backend == QStringLiteral("postgres")) {
-        d.backend = CatalogueDescriptor::Backend::Postgres;
-        d.pgHost = m_settings.value(QLatin1String(kPgHost)).toString();
-        d.pgPort = m_settings.value(QLatin1String(kPgPort), 5432).toInt();
-        d.pgDbName = m_settings.value(QLatin1String(kPgDbName)).toString();
-        d.pgUser = m_settings.value(QLatin1String(kPgUser)).toString();
-        d.pgPassword = m_settings.value(QLatin1String(kPgPassword)).toString();
-        d.pgSslMode =
-            m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("prefer")).toString();
-    } else {
-        d.backend = CatalogueDescriptor::Backend::Sqlite;
-    }
+    d.backend = backend == QStringLiteral("postgres") ? CatalogueDescriptor::Backend::Postgres
+                                                       : CatalogueDescriptor::Backend::Sqlite;
+
+    // Also always populated, regardless of backend -- mirrors sqlitePath
+    // above, so CatalogueSettingsDialog can prefill the Postgres tab with
+    // the last-used connection even after switching back to Local SQLite,
+    // instead of showing it blank. setCatalogueDescriptor() never writes
+    // these keys when saving as SQLite, so the last Postgres values saved
+    // stay put until the user overwrites them by saving as Postgres again.
+    d.pgHost = m_settings.value(QLatin1String(kPgHost)).toString();
+    d.pgPort = m_settings.value(QLatin1String(kPgPort), 5432).toInt();
+    d.pgDbName = m_settings.value(QLatin1String(kPgDbName)).toString();
+    d.pgUser = m_settings.value(QLatin1String(kPgUser)).toString();
+    d.pgPassword = m_settings.value(QLatin1String(kPgPassword)).toString();
+    d.pgSslMode = m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("prefer")).toString();
     return d;
 }
 
@@ -101,6 +104,11 @@ void Settings::setCatalogueDescriptor(const CatalogueDescriptor &descriptor)
         m_settings.setValue(QLatin1String(kCatalogueBackend), QStringLiteral("sqlite"));
         setDatabasePath(descriptor.sqlitePath);
     }
+}
+
+void Settings::sync()
+{
+    m_settings.sync();
 }
 
 QByteArray Settings::mainWindowGeometry() const

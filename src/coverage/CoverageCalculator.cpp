@@ -121,6 +121,7 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
         const Node &n = nodes.value(id);
         TaxonCoverage tc;
         tc.inatId = id;
+        tc.parentInatId = n.parentInatId.value_or(0);
         tc.rank = n.rank;
         tc.name = n.name;
         tc.commonName = n.commonName;

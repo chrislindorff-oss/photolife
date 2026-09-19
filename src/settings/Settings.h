@@ -32,6 +32,15 @@ public:
     CatalogueDescriptor catalogueDescriptor() const;
     void setCatalogueDescriptor(const CatalogueDescriptor &descriptor);
 
+    // Forces any pending writes out to the backing store immediately.
+    // QSettings normally buffers writes (flushed periodically or on
+    // destruction), which is invisible within one process -- a fresh
+    // QSettings in the same process shares the in-memory cache -- but a
+    // just-`setCatalogueDescriptor()`'d value can still be unwritten to disk
+    // when a *new process* (e.g. the self-relaunch after a catalogue change)
+    // starts reading it. Call this before spawning that new process.
+    void sync();
+
     QByteArray mainWindowGeometry() const;
     void setMainWindowGeometry(const QByteArray &geometry);
 

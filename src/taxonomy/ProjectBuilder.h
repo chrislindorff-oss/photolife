@@ -86,6 +86,7 @@ private:
     qint64 m_placeId = 0;
     qint64 m_rootTaxonId = 0;
     int m_projectId = -1;
+    int m_startPage = 1;   // resumed from a checkpoint if one matched this run's params
 
     int m_speciesTotal = 0;
     int m_speciesSeen = 0;
@@ -94,6 +95,7 @@ private:
     bool m_awaitingConfirm = false;
 
     QSet<qint64> m_stored;                 // taxa written this run (inat ids)
+    QSet<qint64> m_excludedTaxonIds;        // deliberately pruned; never re-add (see useRootTaxon)
     QSet<qint64> m_neededAncestors;
     QList<QList<qint64>> m_ancestorBatches;
     int m_ancestorBatchIndex = 0;

@@ -25,6 +25,7 @@ private slots:
     void catalogueDescriptorRoundTripsPostgres();
     void catalogueDescriptorSwitchingBackToSqliteKeepsDatabasePath();
     void catalogueDescriptorPrefillsSqlitePathEvenInPostgresMode();
+    void catalogueDescriptorPrefillsPostgresFieldsEvenInSqliteMode();
     void windowStateRoundTrip();
     void captureCaptionFieldsDefaultsToNameOnly();
     void captureCaptionFieldsRoundTrip();
@@ -161,6 +162,36 @@ void TestSettings::catalogueDescriptorPrefillsSqlitePathEvenInPostgresMode()
     const CatalogueDescriptor d = Settings().catalogueDescriptor();
     QCOMPARE(d.backend, CatalogueDescriptor::Backend::Postgres);
     QCOMPARE(d.sqlitePath, QStringLiteral("/srv/library/custom.db"));
+}
+
+void TestSettings::catalogueDescriptorPrefillsPostgresFieldsEvenInSqliteMode()
+{
+    // Mirrors catalogueDescriptorPrefillsSqlitePathEvenInPostgresMode() in
+    // reverse: CatalogueSettingsDialog's Postgres tab should still show the
+    // last-used connection after switching to Local (SQLite), instead of
+    // blank fields the user has to re-type every time they switch back.
+    Settings writer;
+
+    CatalogueDescriptor postgres;
+    postgres.backend = CatalogueDescriptor::Backend::Postgres;
+    postgres.pgHost = QStringLiteral("db.example.com");
+    postgres.pgPort = 6543;
+    postgres.pgDbName = QStringLiteral("photolife");
+    postgres.pgUser = QStringLiteral("helena");
+    postgres.pgPassword = QStringLiteral("s3cret");
+    postgres.pgSslMode = QStringLiteral("require");
+    writer.setCatalogueDescriptor(postgres);
+
+    writer.setCatalogueDescriptor(CatalogueDescriptor::sqlite(QStringLiteral("/srv/library/custom.db")));
+
+    const CatalogueDescriptor d = Settings().catalogueDescriptor();
+    QCOMPARE(d.backend, CatalogueDescriptor::Backend::Sqlite);
+    QCOMPARE(d.pgHost, postgres.pgHost);
+    QCOMPARE(d.pgPort, postgres.pgPort);
+    QCOMPARE(d.pgDbName, postgres.pgDbName);
+    QCOMPARE(d.pgUser, postgres.pgUser);
+    QCOMPARE(d.pgPassword, postgres.pgPassword);
+    QCOMPARE(d.pgSslMode, postgres.pgSslMode);
 }
 
 void TestSettings::windowStateRoundTrip()

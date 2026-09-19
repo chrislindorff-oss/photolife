@@ -4,6 +4,7 @@
 #include "app/StorageStats.h"
 #include "catalogue/BestShotStore.h"
 #include "db/Database.h"
+#include "db/PostgresConnectionMonitor.h"
 #include "model/CaptureListModel.h"
 #include "model/ReferencePhotoModel.h"
 #include "model/TaxonomyTreeModel.h"
@@ -24,6 +25,7 @@
 #include "net/TileCache.h"
 #include "net/UpdateChecker.h"
 #include "scan/CatalogueMaintenance.h"
+#include "scan/Exif.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
@@ -33,10 +35,13 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/AliasEditorDialog.h"
+#include "ui/CatalogueConnectDialog.h"
 #include "ui/CatalogueSettingsDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
+#include "ui/InatCoordinateConfirmDialog.h"
+#include "ui/LibraryFoldersDialog.h"
 #include "ui/MapView.h"
 #include "ui/NewProjectDialog.h"
 #include "ui/PlaceConfirmDialog.h"
@@ -69,6 +74,7 @@
 #include <QLocale>
 #include <QListView>
 #include <QListWidget>
+#include <QTreeWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -77,8 +83,11 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QDir>
+#include <QEventLoop>
+#include <QFutureWatcher>
 #include <QPainter>
 #include <QProcess>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -92,6 +101,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWidgetAction>
+#include <QtConcurrent>
 
 #include <cmath>
 #include <functional>
@@ -463,6 +473,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 statusBar()->showMessage(total > 0
                                              ? tr("%1 — %2 / %3").arg(phase).arg(done).arg(total)
                                              : phase);
+                updateTaskProgress(phase, done, total);
             });
     connect(m_builder, &taxonomy::ProjectBuilder::confirmMoreSpecies, this,
             [this](int fetched, int total) {
@@ -514,6 +525,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 m_builderIsNewTree = false;
                 m_newTreeAction->setEnabled(true);
                 m_refreshTreeAction->setEnabled(true);
+                endTaskProgress();
                 if (!ok) {
                     statusBar()->showMessage(tr("Reference tree build failed: %1").arg(error),
                                              10000);
@@ -533,10 +545,12 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
             [this](int done, int total) {
                 statusBar()->showMessage(
                     tr("Checking species for subspecies/varieties — %1 / %2").arg(done).arg(total));
+                updateTaskProgress(tr("Checking species for subspecies/varieties…"), done, total);
             });
     connect(m_infraFiller, &taxonomy::InfraspecificFiller::finished, this,
             [this](bool ok, const QString &error, int added) {
                 m_fetchInfraAction->setEnabled(true);
+                endTaskProgress();
                 if (!ok) {
                     statusBar()->showMessage(
                         tr("Fetching subspecies/varieties failed: %1").arg(error), 10000);
@@ -557,11 +571,13 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
             [this](int done, int total) {
                 statusBar()->showMessage(
                     tr("Fetching reference photos — %1 / %2").arg(done).arg(total));
+                updateTaskProgress(tr("Fetching reference photos…"), done, total);
             });
     connect(m_refPhotoFetcher, &taxonomy::ReferencePhotoFetcher::finished, this,
             [this](bool ok, const QString &error, int updated) {
                 if (m_fetchRefPhotosAction)
                     m_fetchRefPhotosAction->setEnabled(true);
+                endTaskProgress();
                 if (!ok) {
                     statusBar()->showMessage(
                         tr("Fetching reference photos failed: %1").arg(error), 10000);
@@ -603,10 +619,12 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     connect(m_checklistImporter, &checklist::ChecklistImporter::progress, this,
             [this](int done, int total) {
                 statusBar()->showMessage(tr("Importing checklist %1 / %2").arg(done).arg(total));
+                updateTaskProgress(tr("Importing checklist…"), done, total);
             });
     connect(m_checklistImporter, &checklist::ChecklistImporter::finished, this,
             [this](bool ok, const QString &error, int imported, int skipped, int unresolved) {
                 m_importChecklistAction->setEnabled(true);
+                endTaskProgress();
                 if (!ok) {
                     statusBar()->showMessage(tr("Checklist import failed: %1").arg(error), 10000);
                     return;
@@ -642,22 +660,27 @@ MainWindow::~MainWindow() = default;
 void MainWindow::buildMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
+    QMenu *libraryMenu = menuBar()->addMenu(tr("&Library"));
 
-    m_addFolderAction = fileMenu->addAction(tr("&Add Folder to Library…"),
-                                            this, &MainWindow::addWatchedFolder);
+    m_addFolderAction = libraryMenu->addAction(tr("&Add Folder to Library…"),
+                                               this, &MainWindow::addWatchedFolder);
     m_addFolderAction->setShortcut(QKeySequence::Open);
 
-    m_scanAction = fileMenu->addAction(tr("&Rescan Library"), this, &MainWindow::startScan);
+    m_manageFoldersAction = libraryMenu->addAction(tr("&Manage Library Folders…"),
+                                                   this, &MainWindow::manageLibraryFolders);
+
+    m_scanAction = libraryMenu->addAction(tr("&Rescan Library"), this, &MainWindow::startScan);
     m_scanAction->setShortcut(QKeySequence::Refresh);
 
-    m_cancelAction = fileMenu->addAction(tr("&Stop Scan"),
-                                         &m_app.scanService(), &scan::ScanService::cancel);
+    m_cancelAction = libraryMenu->addAction(tr("&Stop Scan"),
+                                            &m_app.scanService(), &scan::ScanService::cancel);
     m_cancelAction->setEnabled(false);
+
+    libraryMenu->addAction(tr("Remove Photos With &Missing Files…"),
+                           this, &MainWindow::removeMissingCaptures);
 
     fileMenu->addAction(tr("&Catalogue Settings…"), this, &MainWindow::showCatalogueSettings);
 
-    fileMenu->addAction(tr("Remove Photos With &Missing Files…"),
-                        this, &MainWindow::removeMissingCaptures);
     fileMenu->addAction(tr("Fix RAW Photo &Locations…"), this, &MainWindow::fixRawGeolocation);
     m_fetchLocalitiesAction = fileMenu->addAction(tr("Fetch Photo &Localities"),
                                                   this, &MainWindow::fetchPhotoLocalities);
@@ -667,6 +690,8 @@ void MainWindow::buildMenus()
                                           this, &MainWindow::newReferenceTree);
     m_refreshTreeAction = fileMenu->addAction(tr("Re&fresh Reference Tree"),
                                               this, &MainWindow::refreshReferenceTree);
+    m_addTaxonAction = fileMenu->addAction(tr("&Add Taxon to Reference Tree…"),
+                                           this, &MainWindow::addTaxonToReferenceTree);
     m_deleteTreeAction = fileMenu->addAction(tr("&Delete Reference Tree…"),
                                              this, &MainWindow::deleteReferenceTree);
     m_fetchInfraAction = fileMenu->addAction(tr("Fetch &Subspecies/Varieties…"),
@@ -809,6 +834,39 @@ void MainWindow::buildMenus()
         auto *action = new QWidgetAction(displayMenu);
         action->setDefaultWidget(box);
         displayMenu->addAction(action);
+    }
+
+    // A local SQLite file doesn't have a meaningful "connected" state, so
+    // this only appears for a shared Postgres catalogue -- and it checks
+    // Database::backendFor() (what's actually open), not Settings, since
+    // that's what the indicator needs to be honest about.
+    if (Database::backendFor(m_app.database().connectionName())
+        == CatalogueDescriptor::Backend::Postgres) {
+        m_pgStatusLabel = new QLabel(this);
+        m_pgStatusLabel->setContentsMargins(0, 0, 8, 0);
+        menuBar()->setCornerWidget(m_pgStatusLabel, Qt::TopRightCorner);
+
+        const CatalogueDescriptor descriptor = m_app.settings().catalogueDescriptor();
+        const QString target = QStringLiteral("%1@%2:%3/%4")
+                                    .arg(descriptor.pgUser, descriptor.pgHost)
+                                    .arg(descriptor.pgPort)
+                                    .arg(descriptor.pgDbName);
+
+        m_pgMonitor = new PostgresConnectionMonitor(m_app.database().connectionName(), this);
+        connect(m_pgMonitor, &PostgresConnectionMonitor::connectedChanged, this,
+                [this, target](bool connected) {
+                    m_pgStatusLabel->setText(
+                        connected ? tr("● Postgres Connected")
+                                 : tr("● Postgres Disconnected"));
+                    m_pgStatusLabel->setStyleSheet(
+                        QStringLiteral("color: %1;").arg(connected
+                                                             ? QStringLiteral("#2e7d32")
+                                                             : QStringLiteral("#c62828")));
+                    m_pgStatusLabel->setToolTip(
+                        connected ? tr("Connected to %1").arg(target)
+                                 : tr("Lost connection to %1").arg(target));
+                });
+        m_pgMonitor->start();
     }
 }
 
@@ -1037,15 +1095,11 @@ void MainWindow::onTreeSelectionChanged()
     const int projectScope = currentProjectId();
     // Both "Photos of Tree Selection" and "My Best Shots" are confined to the
     // active reference tree; a taxon scope narrows them further to one branch.
-    m_taxonModel->setProjectScope(projectScope);
-    m_taxonModel->setTaxonScope(m_selectedTaxon);
+    m_taxonModel->setScope(projectScope, m_selectedTaxon);
     if (m_refPhotoModel)
         m_refPhotoModel->setScope(m_selectedTaxon);
-    if (m_bestShotModel) {
-        m_bestShotModel->setProjectScope(projectScope);
-        m_bestShotModel->setTaxonScope(m_selectedTaxon);
-        updateBestShotsTabText();
-    }
+    if (m_bestShotModel)
+        m_bestShotModel->setScope(projectScope, m_selectedTaxon);
     if (m_reviewPane) {
         m_reviewPane->setTreeTaxon(
             m_selectedTaxon,
@@ -1104,45 +1158,106 @@ void MainWindow::onTreeSelectionChanged()
     }
 }
 
+namespace {
+
+QString missingTaxonLabel(const coverage::TaxonCoverage &tc)
+{
+    QString label = tc.name;
+    if (!tc.commonName.isEmpty() && tc.commonName != tc.name)
+        label = QStringLiteral("%1  ·  %2").arg(tc.name, tc.commonName);
+    if (!tc.status.isEmpty())
+        label += QStringLiteral("   — %1").arg(tc.status);
+    return label;
+}
+
+bool matchesFilter(const coverage::TaxonCoverage &tc, const QString &filter)
+{
+    return filter.isEmpty() || tc.name.contains(filter, Qt::CaseInsensitive)
+        || tc.commonName.contains(filter, Qt::CaseInsensitive);
+}
+
+} // namespace
+
 void MainWindow::updateMissingList()
 {
     if (!m_missingList)
         return;
     m_missingList->clear();
 
+    // Every leaf-rank taxon (species, or an infraspecific/hybrid rank below
+    // it) with no photo anywhere in its own subtree.
     QList<coverage::TaxonCoverage> missing;
     for (const auto &tc : m_coverage.byTaxon) {
-        if (taxonomy::TaxonomyStore::isLeafRank(tc.rank) && !tc.subtreeHasPhotos) {
+        if (taxonomy::TaxonomyStore::isLeafRank(tc.rank) && !tc.subtreeHasPhotos)
             missing.append(tc);
+    }
+
+    // Split into missing species (top-level rows) and missing infraspecific
+    // taxa (nested under their parent species) -- e.g. a missing Acacia
+    // verticillata var. ovoidea groups under Acacia verticillata even when
+    // the species itself already has photos of the typical variety.
+    QHash<qint64, coverage::TaxonCoverage> topLevel;   // by species inatId
+    QHash<qint64, QList<coverage::TaxonCoverage>> childrenByParent;
+    for (const auto &tc : missing) {
+        if (taxonomy::TaxonomyStore::isInfraspecificRank(tc.rank) && tc.parentInatId > 0
+            && m_coverage.byTaxon.contains(tc.parentInatId)) {
+            childrenByParent[tc.parentInatId].append(tc);
+        } else {
+            topLevel.insert(tc.inatId, tc);
         }
     }
-    std::sort(missing.begin(), missing.end(),
+    // A species with a missing infraspecific child needs a row to hang it
+    // off even when the species itself isn't missing (it has photos of a
+    // different variety).
+    for (auto it = childrenByParent.constBegin(); it != childrenByParent.constEnd(); ++it) {
+        if (!topLevel.contains(it.key()))
+            topLevel.insert(it.key(), m_coverage.byTaxon.value(it.key()));
+    }
+
+    QList<coverage::TaxonCoverage> topLevelList = topLevel.values();
+    std::sort(topLevelList.begin(), topLevelList.end(),
               [](const coverage::TaxonCoverage &a, const coverage::TaxonCoverage &b) {
                   return a.name < b.name;
               });
 
     const QString filter = m_missingSearch ? m_missingSearch->text().trimmed() : QString();
-    for (const auto &tc : missing) {
-        if (!filter.isEmpty() && !tc.name.contains(filter, Qt::CaseInsensitive)
-            && !tc.commonName.contains(filter, Qt::CaseInsensitive))
+    for (const auto &tc : topLevelList) {
+        QList<coverage::TaxonCoverage> children = childrenByParent.value(tc.inatId);
+        std::sort(children.begin(), children.end(),
+                  [](const coverage::TaxonCoverage &a, const coverage::TaxonCoverage &b) {
+                      return a.name < b.name;
+                  });
+
+        const bool selfMatches = matchesFilter(tc, filter);
+        QList<coverage::TaxonCoverage> visibleChildren;
+        for (const auto &child : children) {
+            if (selfMatches || matchesFilter(child, filter))
+                visibleChildren.append(child);
+        }
+        if (!selfMatches && visibleChildren.isEmpty())
             continue;
 
-        QString label = tc.name;
-        if (!tc.commonName.isEmpty() && tc.commonName != tc.name)
-            label = QStringLiteral("%1  ·  %2").arg(tc.name, tc.commonName);
+        auto *parentItem = new QTreeWidgetItem(m_missingList);
+        parentItem->setText(0, missingTaxonLabel(tc));
+        parentItem->setData(0, Qt::UserRole, tc.inatId);
         if (!tc.status.isEmpty())
-            label += QStringLiteral("   — %1").arg(tc.status);
-        auto *item = new QListWidgetItem(label, m_missingList);
-        item->setData(Qt::UserRole, tc.inatId);
-        if (!tc.status.isEmpty())
-            item->setForeground(QColor(0xB0, 0x50, 0x00));
+            parentItem->setForeground(0, QColor(0xB0, 0x50, 0x00));
+
+        for (const auto &child : visibleChildren) {
+            auto *childItem = new QTreeWidgetItem(parentItem);
+            childItem->setText(0, missingTaxonLabel(child));
+            childItem->setData(0, Qt::UserRole, child.inatId);
+            if (!child.status.isEmpty())
+                childItem->setForeground(0, QColor(0xB0, 0x50, 0x00));
+        }
+        parentItem->setExpanded(true);
     }
 
     const int missingTab = m_tabs->indexOf(m_missingList->parentWidget());
     if (missingTab >= 0)
         m_tabs->setTabText(missingTab, missing.isEmpty()
-                                          ? tr("Missing Species")
-                                          : tr("Missing Species (%1)").arg(missing.size()));
+                                          ? tr("Missing Taxa")
+                                          : tr("Missing Taxa (%1)").arg(missing.size()));
 }
 
 void MainWindow::reassignTaxonPhotos()
@@ -1310,9 +1425,95 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
     m_viewer->setItems(items, start);
 }
 
+bool MainWindow::ensureCatalogueReachable()
+{
+    if (m_app.settings().catalogueDescriptor().backend != CatalogueDescriptor::Backend::Postgres)
+        return true;
+
+    // Probed on a background thread, exactly like the startup connect flow
+    // in main.cpp (Database::probeReachable() over a throwaway connection) --
+    // the point is to let a suspended Neon compute wake up here, where the
+    // GUI thread stays responsive the whole time, rather than during the
+    // first real, synchronous write the caller is about to make, which would
+    // block the GUI thread for however long that takes and can look exactly
+    // like a hang to the OS.
+    CatalogueConnectDialog dialog(this);
+    dialog.hideUseLocalButton();
+    dialog.setStatus(tr("Waking up the shared catalogue…"));
+    dialog.show();
+
+    struct ProbeResult
+    {
+        bool ok = false;
+        QString error;
+    };
+
+    auto *watcher = new QFutureWatcher<ProbeResult>();
+    QEventLoop waitLoop;
+    ProbeResult result;
+    connect(watcher, &QFutureWatcher<ProbeResult>::finished, &waitLoop, [&] {
+        result = watcher->result();
+        waitLoop.quit();
+    });
+    connect(watcher, &QFutureWatcher<ProbeResult>::finished, watcher, &QObject::deleteLater);
+
+    const CatalogueDescriptor descriptor = m_app.settings().catalogueDescriptor();
+    watcher->setFuture(QtConcurrent::run([descriptor] {
+        ProbeResult r;
+        r.ok = Database::probeReachable(descriptor, &r.error);
+        return r;
+    }));
+    waitLoop.exec();
+    dialog.close();
+
+    if (!result.ok) {
+        QMessageBox::warning(this, tr("Shared Catalogue Unreachable"),
+                             tr("Could not reach the shared catalogue:\n\n%1").arg(result.error));
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::beginTaskProgress(const QString &title, std::function<void()> onCancel)
+{
+    delete m_taskProgress;
+    m_taskProgress = new QProgressDialog(title, onCancel ? tr("Cancel") : QString(), 0, 0, this);
+    m_taskProgress->setWindowModality(Qt::ApplicationModal);
+    m_taskProgress->setMinimumDuration(0);
+    m_taskProgress->setAutoClose(false);
+    m_taskProgress->setAutoReset(false);
+    if (onCancel) {
+        connect(m_taskProgress, &QProgressDialog::canceled, this,
+                [onCancel] { onCancel(); });
+    }
+    m_taskProgress->show();
+}
+
+void MainWindow::updateTaskProgress(const QString &phase, int done, int total)
+{
+    if (!m_taskProgress)
+        return;
+    m_taskProgress->setLabelText(phase);
+    if (total > 0) {
+        m_taskProgress->setRange(0, total);
+        m_taskProgress->setValue(done);
+    } else {
+        m_taskProgress->setRange(0, 0);   // busy/indeterminate
+    }
+}
+
+void MainWindow::endTaskProgress()
+{
+    if (!m_taskProgress)
+        return;
+    m_taskProgress->close();
+    m_taskProgress->deleteLater();
+    m_taskProgress = nullptr;
+}
+
 void MainWindow::refreshReferenceTree()
 {
-    if (m_builder->isRunning())
+    if (m_builder->isRunning() || m_addingTaxon)
         return;
     const int pid = currentProjectId();
     if (pid <= 0) {
@@ -1320,6 +1521,8 @@ void MainWindow::refreshReferenceTree()
                                 tr("Select a reference tree first."));
         return;
     }
+    if (!ensureCatalogueReachable())
+        return;
 
     QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
     q.prepare(QStringLiteral(
@@ -1342,12 +1545,77 @@ void MainWindow::refreshReferenceTree()
 
     m_refreshTreeAction->setEnabled(false);
     statusBar()->showMessage(tr("Refreshing reference tree…"));
+    beginTaskProgress(tr("Refreshing Reference Tree"), [this] { m_builder->cancel(); });
     m_builder->start(request);
+}
+
+void MainWindow::addTaxonToReferenceTree()
+{
+    if (m_builder->isRunning() || m_addingTaxon)
+        return;
+    const int pid = currentProjectId();
+    if (pid <= 0) {
+        QMessageBox::information(this, tr("Add Taxon to Reference Tree"),
+                                tr("Select a reference tree first."));
+        return;
+    }
+    if (!ensureCatalogueReachable())
+        return;
+
+    TaxonConfirmDialog dialog(m_app.inat(), QString(), QString(), this,
+                              tr("Add Taxon to Reference Tree"));
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const auto chosen = dialog.chosenTaxon();
+    if (!chosen)
+        return;
+
+    m_addingTaxon = true;
+    m_addTaxonAction->setEnabled(false);
+    m_newTreeAction->setEnabled(false);
+    m_refreshTreeAction->setEnabled(false);
+    m_deleteTreeAction->setEnabled(false);
+    statusBar()->showMessage(tr("Fetching \"%1\" from iNaturalist…").arg(chosen->name));
+    beginTaskProgress(tr("Fetching \"%1\" from iNaturalist…").arg(chosen->name));
+
+    const qint64 inatId = chosen->inatId;
+    const QString name = chosen->name;
+    m_app.inat().fetchTaxon(inatId, [this, pid, name](pl::net::Outcome<pl::net::TaxonDetail> out) {
+        m_addingTaxon = false;
+        m_addTaxonAction->setEnabled(true);
+        m_newTreeAction->setEnabled(true);
+        m_refreshTreeAction->setEnabled(true);
+        m_deleteTreeAction->setEnabled(true);
+        endTaskProgress();
+
+        if (!out.ok()) {
+            statusBar()->showMessage(tr("Could not fetch \"%1\": %2").arg(name, out.error), 8000);
+            return;
+        }
+        // The tree may have been switched, deleted or rebuilt while the
+        // (async, non-modal) fetch above was in flight.
+        if (currentProjectId() != pid) {
+            statusBar()->showMessage(
+                tr("The reference tree changed before \"%1\" could be added.").arg(name), 8000);
+            return;
+        }
+        if (!m_app.taxonomyStore().addTaxonWithAncestors(pid, out.value.ancestors, out.value.taxon)) {
+            QMessageBox::warning(this, tr("Add Taxon to Reference Tree"),
+                                 tr("Could not add \"%1\".").arg(name));
+            return;
+        }
+
+        mutateTreePreservingState([this, pid] { m_treeModel->setProject(pid); });
+        refreshCoverage();
+        updateMissingList();
+        reloadProjectList();
+        statusBar()->showMessage(tr("Added \"%1\" to the tree.").arg(name), 6000);
+    });
 }
 
 void MainWindow::deleteReferenceTree()
 {
-    if (m_builder->isRunning())
+    if (m_builder->isRunning() || m_addingTaxon)
         return;
     const int pid = currentProjectId();
     if (pid <= 0) {
@@ -1392,6 +1660,8 @@ void MainWindow::startInfraspecificFetch(qint64 scopeInatId, const QString &scop
                                 tr("Select a reference tree first."));
         return;
     }
+    if (!ensureCatalogueReachable())
+        return;
 
     const bool scoped = scopeInatId > 0;
     const QString where = scoped && !scopeName.isEmpty() ? scopeName
@@ -1422,6 +1692,7 @@ void MainWindow::startInfraspecificFetch(qint64 scopeInatId, const QString &scop
 
     m_fetchInfraAction->setEnabled(false);
     statusBar()->showMessage(tr("Checking species for subspecies/varieties…"));
+    beginTaskProgress(tr("Fetching Subspecies/Varieties"), [this] { m_infraFiller->cancel(); });
     m_infraFiller->start(pid, scopeInatId);
 }
 
@@ -1461,15 +1732,62 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
             QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
     });
 
+    // Pruning the tree's own root isn't meaningful -- Delete Reference Tree
+    // is the action for that -- so this is left off the menu for it.
+    const auto rootId = m_app.taxonomyStore().projectRootTaxonInatId(currentProjectId());
+    if (!rootId || *rootId != inatId) {
+        menu.addSeparator();
+        QAction *prune = menu.addAction(tr("Prune from Reference Tree…"));
+        connect(prune, &QAction::triggered, this,
+                [this, inatId, name] { pruneTaxonFromTree(inatId, name); });
+    }
+
     menu.exec(m_treeView->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::pruneTaxonFromTree(qint64 inatId, const QString &name)
+{
+    if (m_addingTaxon)
+        return;
+    const int pid = currentProjectId();
+    if (pid <= 0)
+        return;
+
+    auto &store = m_app.taxonomyStore();
+    const int count = store.projectPruneCount(pid, inatId);
+    if (count <= 0)
+        return;
+
+    const auto reply = QMessageBox::question(
+        this, tr("Prune from Reference Tree"),
+        tr("Remove \"%1\" and %n other taxa from this tree? A future refresh "
+           "won't bring them back. Photos and matches already made are not "
+           "affected.",
+           nullptr, count - 1)
+            .arg(name),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (reply != QMessageBox::Yes)
+        return;
+
+    if (store.pruneTaxonFromProject(pid, inatId) < 0) {
+        QMessageBox::warning(this, tr("Prune from Reference Tree"),
+                             tr("Could not prune \"%1\".").arg(name));
+        return;
+    }
+
+    mutateTreePreservingState([this, pid] { m_treeModel->setProject(pid); });
+    refreshCoverage();
+    updateMissingList();
+    reloadProjectList();
+    statusBar()->showMessage(tr("Pruned \"%1\" from the tree.").arg(name), 6000);
 }
 
 void MainWindow::showMissingListContextMenu(const QPoint &pos)
 {
-    QListWidgetItem *item = m_missingList->itemAt(pos);
+    QTreeWidgetItem *item = m_missingList->itemAt(pos);
     if (!item)
         return;
-    const qint64 inatId = item->data(Qt::UserRole).toLongLong();
+    const qint64 inatId = item->data(0, Qt::UserRole).toLongLong();
     if (inatId <= 0)
         return;
 
@@ -1505,6 +1823,8 @@ void MainWindow::importChecklist()
                                 tr("Select or create a reference tree to import into first."));
         return;
     }
+    if (!ensureCatalogueReachable())
+        return;
 
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Import Checklist CSV"), QDir::homePath(),
@@ -1541,6 +1861,7 @@ void MainWindow::importChecklist()
 
     m_importChecklistAction->setEnabled(false);
     statusBar()->showMessage(tr("Importing %1 checklist rows…").arg(entries.size()));
+    beginTaskProgress(tr("Importing Checklist"), [this] { m_checklistImporter->cancel(); });
     m_checklistImporter->start(request);
 }
 
@@ -1555,9 +1876,16 @@ void MainWindow::reloadProjectList()
 
     if (m_app.database().isOpen()) {
         QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
-        q.exec(QStringLiteral("SELECT id, name FROM project ORDER BY name"));
-        while (q.next())
-            m_projectCombo->addItem(q.value(1).toString(), q.value(0).toInt());
+        q.exec(QStringLiteral(
+            "SELECT p.id, p.name, "
+            "  EXISTS(SELECT 1 FROM project_excluded_taxon pe WHERE pe.project_id = p.id) "
+            "FROM project p ORDER BY p.name"));
+        while (q.next()) {
+            const QString name = q.value(1).toString();
+            const bool pruned = q.value(2).toBool();
+            m_projectCombo->addItem(pruned ? tr("%1 (customized)").arg(name) : name,
+                                    q.value(0).toInt());
+        }
     }
 
     if (m_projectCombo->count() == 0) {
@@ -1594,6 +1922,8 @@ void MainWindow::newReferenceTree()
 {
     if (m_builder->isRunning())
         return;
+    if (!ensureCatalogueReachable())
+        return;
 
     NewProjectDialog dialog(this);
     if (dialog.exec() != QDialog::Accepted)
@@ -1616,6 +1946,7 @@ void MainWindow::newReferenceTree()
     m_newTreeAction->setEnabled(false);
     m_builderIsNewTree = true;
     statusBar()->showMessage(tr("Building reference tree…"));
+    beginTaskProgress(tr("Building Reference Tree"), [this] { m_builder->cancel(); });
     m_builder->start(request);
 }
 
@@ -1685,6 +2016,7 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
         }
 
         QMenu menu(grid);
+        menu.setToolTipsVisible(true);
         QAction *reveal = menu.addAction(tr("Open in File Manager"));
         reveal->setEnabled(!path.isEmpty());
         connect(reveal, &QAction::triggered, this, [path] { revealInFileManager(path); });
@@ -1703,6 +2035,32 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
         removeBest->setEnabled(nBest > 0);
         connect(removeBest, &QAction::triggered, this,
                 [this, grid] { setBestShotForSelection(grid, false); });
+
+        menu.addSeparator();
+        QAction *fetchCoords = menu.addAction(tr("Attempt to fetch coordinates from iNat"));
+        // Exclude "pending" -- MatchEngine only leaves a match pending when
+        // its confidence fell below the auto-apply threshold, i.e. an
+        // uncertain guess that hasn't been reviewed yet, and searching
+        // iNaturalist under the wrong species (a real catalogue taxon, just
+        // not this photo's) reliably turns up no observations. "auto" is
+        // fine: it already means a high-confidence match against the real
+        // catalogue taxonomy, not merely raw filename text; "confirmed"
+        // means a human verified or reassigned it.
+        const QString matchStatus = idx.data(model::CaptureListModel::MatchStatusRole).toString();
+        const bool canFetchCoords =
+            selected == 1 && !idx.data(model::CaptureListModel::HasGpsRole).toBool()
+            && idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong() > 0
+            && matchStatus != QLatin1String("pending")
+            && !idx.data(model::CaptureListModel::CapturedOnRole).toString().isEmpty()
+            && !idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
+        fetchCoords->setEnabled(canFetchCoords);
+        if (!canFetchCoords)
+            fetchCoords->setToolTip(tr("Available for a single, JPEG-backed photo with an "
+                                       "auto or confirmed species identification (not a "
+                                       "pending, unreviewed guess), a captured date, and no "
+                                       "GPS yet."));
+        connect(fetchCoords, &QAction::triggered, this,
+                [this, idx] { fetchCoordinatesFromInat(idx); });
 
         menu.addSeparator();
         QAction *remove = menu.addAction(
@@ -1805,6 +2163,73 @@ void MainWindow::removeSelectedCaptures(QListView *grid)
     updateBestShotsTabText();
     statusBar()->showMessage(
         tr("Removed %n photo(s) from the catalogue.", nullptr, removed), 6000);
+}
+
+void MainWindow::fetchCoordinatesFromInat(const QModelIndex &idx)
+{
+    const QString username = m_app.settings().inatUsername();
+    if (username.isEmpty()) {
+        QMessageBox::information(
+            this, tr("Attempt to Fetch Coordinates"),
+            tr("Set up your iNaturalist username on the \"Download from iNaturalist\" tab "
+               "first."));
+        return;
+    }
+    // The shared INatClient's token is otherwise only ever applied from the
+    // Download tab's own search button -- it can't be assumed already set.
+    m_app.inat().setAccessToken(m_app.settings().inatApiToken());
+
+    const int captureId = idx.data(model::CaptureListModel::IdRole).toInt();
+    const qint64 taxonInatId =
+        idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong();
+    // Never search iNaturalist under a low-confidence, unreviewed guess --
+    // see the same guard on the context-menu action for why.
+    if (taxonInatId <= 0
+        || idx.data(model::CaptureListModel::MatchStatusRole).toString()
+               == QLatin1String("pending"))
+        return;
+    const QDate capturedOn = QDate::fromString(
+        idx.data(model::CaptureListModel::CapturedOnRole).toString().left(10), Qt::ISODate);
+    const QString path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
+
+    InatCoordinateConfirmDialog dialog(m_app.inat(), m_app.photoCache(), taxonInatId, username,
+                                       capturedOn, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const auto chosen = dialog.chosenObservation();
+    if (!chosen || !chosen->latitude || !chosen->longitude)
+        return;
+
+    inat::ExifFields fields;
+    fields.latitude = chosen->latitude;
+    fields.longitude = chosen->longitude;
+    QString error;
+    if (!inat::writeExifSafely(path, fields, &error)) {
+        QMessageBox::warning(this, tr("Attempt to Fetch Coordinates"),
+                             tr("Could not write coordinates into %1:\n%2").arg(path, error));
+        return;
+    }
+
+    // Re-read rather than trust the values just written, so the catalogue
+    // reflects exactly what's now actually in the file.
+    const scan::ExifData reread = scan::readJpegExif(path);
+    if (!reread.hasGps()) {
+        statusBar()->showMessage(
+            tr("Coordinates were written to the file but could not be re-read."), 8000);
+        return;
+    }
+
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral("UPDATE capture SET latitude = ?, longitude = ? WHERE id = ?"));
+    q.addBindValue(*reread.latitude);
+    q.addBindValue(*reread.longitude);
+    q.addBindValue(captureId);
+    q.exec();
+
+    m_model->applyGps(captureId, *reread.latitude, *reread.longitude);
+    m_taxonModel->applyGps(captureId, *reread.latitude, *reread.longitude);
+    m_bestShotModel->applyGps(captureId, *reread.latitude, *reread.longitude);
+    statusBar()->showMessage(tr("Coordinates added from iNaturalist."), 6000);
 }
 
 void MainWindow::removeMissingCaptures()
@@ -1998,7 +2423,7 @@ void MainWindow::buildCentralWidget()
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(buildBrowsePage(), tr("Photos of Tree Selection"));
     m_tabs->addTab(buildMapPage(), tr("Map"));
-    m_tabs->addTab(buildMissingPage(), tr("Missing Species"));
+    m_tabs->addTab(buildMissingPage(), tr("Missing Taxa"));
     m_tabs->addTab(buildReferencePhotosPage(), tr("Reference Photos"));
     m_tabs->addTab(buildInatDownloadPage(), tr("Download from iNaturalist"));
     m_tabs->addTab(buildBestShotsPage(), tr("My Best Shots"));
@@ -2087,6 +2512,11 @@ QWidget *MainWindow::buildBestShotsPage()
 {
     m_bestShotModel = new model::CaptureListModel(m_app.database(), m_app.thumbnails(), this);
     m_bestShotModel->setBestShotOnly(true);
+    // setScope() (driven by tree clicks) reloads asynchronously, so the many
+    // explicit updateBestShotsTabText() calls after a sync reload() aren't
+    // enough on their own -- this catches every reset, sync or async.
+    connect(m_bestShotModel, &QAbstractItemModel::modelReset, this,
+            &MainWindow::updateBestShotsTabText);
 
     m_bestShotHeader = new QLabel(this);
     m_bestShotHeader->setWordWrap(true);
@@ -2113,10 +2543,11 @@ QWidget *MainWindow::buildMissingPage()
     m_missingSearch->setClearButtonEnabled(true);
     connect(m_missingSearch, &QLineEdit::textChanged, this, &MainWindow::updateMissingList);
 
-    m_missingList = new QListWidget(this);
+    m_missingList = new QTreeWidget(this);
+    m_missingList->setHeaderHidden(true);
     m_missingList->setAlternatingRowColors(true);
-    connect(m_missingList, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
-        selectTaxonInTree(item->data(Qt::UserRole).toLongLong());
+    connect(m_missingList, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem *item) {
+        selectTaxonInTree(item->data(0, Qt::UserRole).toLongLong());
         switchToTreeTab(m_tabs->widget(0));   // Browse
     });
     m_missingList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -2225,6 +2656,8 @@ void MainWindow::fetchReferencePhotos()
                                 tr("Select a reference tree first."));
         return;
     }
+    if (!ensureCatalogueReachable())
+        return;
     if (m_app.taxonomyStore().projectLeafTaxaMissingPhoto(pid).isEmpty()) {
         QMessageBox::information(
             this, tr("Fetch Reference Photos"),
@@ -2237,6 +2670,7 @@ void MainWindow::fetchReferencePhotos()
     if (m_fetchRefPhotosAction)
         m_fetchRefPhotosAction->setEnabled(false);
     statusBar()->showMessage(tr("Fetching reference photos from iNaturalist…"));
+    beginTaskProgress(tr("Fetching Reference Photos"), [this] { m_refPhotoFetcher->cancel(); });
     m_refPhotoFetcher->start(pid);
 }
 
@@ -2638,6 +3072,30 @@ void MainWindow::addWatchedFolder()
     m_app.scanService().start({clean});
 }
 
+void MainWindow::manageLibraryFolders()
+{
+    if (m_app.scanService().isRunning()) {
+        QMessageBox::information(this, tr("Manage Library Folders"),
+                                 tr("Wait for the current scan to finish first."));
+        return;
+    }
+
+    LibraryFoldersDialog dialog(m_app, this);
+    connect(&dialog, &LibraryFoldersDialog::librariesChanged, this, [this] {
+        m_app.libraryWatcher().refresh();
+        m_model->reload();
+        m_taxonModel->reload();
+        m_bestShotModel->reload();
+        m_reviewPane->reload();
+        updateEmptyState();
+        refreshCoverage();
+        updateReviewTabText();
+        updateBestShotsTabText();
+        statusBar()->showMessage(tr("Library folders updated."), 6000);
+    });
+    dialog.exec();
+}
+
 void MainWindow::startScan()
 {
     const QStringList roots = m_app.settings().watchedRoots();
@@ -2655,6 +3113,7 @@ void MainWindow::startScan()
 void MainWindow::setScanUiRunning(bool running)
 {
     m_addFolderAction->setEnabled(!running);
+    m_manageFoldersAction->setEnabled(!running);
     m_scanAction->setEnabled(!running);
     m_cancelAction->setEnabled(running);
     if (running)
@@ -2772,14 +3231,57 @@ void MainWindow::showStorageUsage()
 
 void MainWindow::showCatalogueSettings()
 {
-    CatalogueSettingsDialog dialog(m_app.settings().catalogueDescriptor(), this);
+    const CatalogueDescriptor before = m_app.settings().catalogueDescriptor();
+    CatalogueSettingsDialog dialog(before, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
 
-    m_app.settings().setCatalogueDescriptor(dialog.descriptor());
-    QMessageBox::information(
-        this, tr("Catalogue Settings"),
-        tr("Saved. Restart PhotoLife for the new catalogue to take effect."));
+    const CatalogueDescriptor after = dialog.descriptor();
+    m_app.settings().setCatalogueDescriptor(after);
+
+    // Backend-aware: only the fields relevant to whichever backend is now
+    // active matter -- dialog.descriptor() leaves the *other* tab's fields
+    // at their struct defaults, so comparing every field unconditionally
+    // would spuriously look "changed" on a same-backend no-op save.
+    const bool changed = after.backend != before.backend
+        || (after.backend == CatalogueDescriptor::Backend::Postgres
+                ? (after.pgHost != before.pgHost || after.pgPort != before.pgPort
+                   || after.pgDbName != before.pgDbName || after.pgUser != before.pgUser
+                   || after.pgPassword != before.pgPassword || after.pgSslMode != before.pgSslMode)
+                : after.sqlitePath != before.sqlitePath);
+    if (!changed)
+        return;
+
+    // Nothing today can re-point an already-open Database/ScanService/
+    // MatchService at a new descriptor (see Settings::catalogueDescriptor()),
+    // so take effect via a full relaunch instead of asking the user to do it
+    // manually -- a fresh process just re-reads the now-updated settings.
+    if (m_app.scanService().isRunning() || m_app.matchService().isRunning()
+        || m_builder->isRunning() || m_infraFiller->isRunning()) {
+        const auto reply = QMessageBox::question(
+            this, tr("Catalogue Settings"),
+            tr("PhotoLife needs to restart to use the new catalogue, but a "
+               "background operation is still running. Cancel it and restart now?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+        m_app.scanService().cancel();
+        m_app.matchService().cancel();
+        m_builder->cancel();
+        m_infraFiller->cancel();
+    }
+
+    // Force the new descriptor out to disk before the relaunched process
+    // starts reading it -- QSettings otherwise buffers writes (flushed
+    // periodically or on destruction), which a same-process re-read can't
+    // tell apart from a real write but a brand-new process can: without
+    // this, the child can start and read the old settings before this
+    // process's buffered write ever reaches disk.
+    m_app.settings().sync();
+
+    QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                            QCoreApplication::arguments().mid(1));
+    QCoreApplication::quit();
 }
 
 } // namespace pl

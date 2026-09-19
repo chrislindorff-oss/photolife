@@ -14,10 +14,11 @@
 namespace pl {
 
 TaxonConfirmDialog::TaxonConfirmDialog(pl::net::INatClient &inat, const QString &initialQuery,
-                                       const QString &initialRank, QWidget *parent)
+                                       const QString &initialRank, QWidget *parent,
+                                       const QString &title)
     : QDialog(parent), m_inat(inat)
 {
-    setWindowTitle(tr("Confirm Root Taxon"));
+    setWindowTitle(title.isEmpty() ? tr("Confirm Root Taxon") : title);
     setModal(true);
     resize(420, 480);
 

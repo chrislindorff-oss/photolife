@@ -1,7 +1,10 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QEventLoop>
-#include <QSplashScreen>
+#include <QFutureWatcher>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QtConcurrent>
 #include <QTimer>
 #include <QWidget>
 #include <QAction>
@@ -10,6 +13,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <optional>
 
 #include <QFile>
 #include <QSqlDatabase>
@@ -25,6 +29,8 @@
 #include "settings/Settings.h"
 #include "taxonomy/ProjectBuilder.h"
 #include "taxonomy/TaxonomyStore.h"
+#include "ui/CatalogueConnectDialog.h"
+#include "pl/Version.h"
 
 namespace {
 
@@ -198,11 +204,108 @@ int runHeadlessChecklist(pl::Application &app, const QString &path, const QStrin
     return exitCode;
 }
 
+// What resolveStartupCatalogue() decided: either quit outright (the user
+// declined to fall back after a failed shared-catalogue connect), or open
+// `descriptorOverride` instead of the caller's descriptor if it's set, or
+// proceed with the caller's own descriptor unchanged if it's not.
+struct StartupCatalogueChoice
+{
+    bool quit = false;
+    std::optional<pl::CatalogueDescriptor> descriptorOverride;
+};
+
+// Settles which catalogue an interactive launch should actually open when
+// Settings names a shared Postgres one. Reachability is probed on a
+// background thread (a throwaway connection, see Database::probeReachable())
+// purely so `dialog`'s "Use Local Catalogue" button stays clickable the
+// whole time -- otherwise the GUI thread would sit blocked inside the real,
+// synchronous connect attempt with no way to respond to it. Once resolved,
+// the caller performs the real, single Database::open() on the GUI thread as
+// usual; this never touches the app's own long-lived connection.
+StartupCatalogueChoice resolveStartupCatalogue(const pl::CatalogueDescriptor &descriptor,
+                                               pl::CatalogueConnectDialog &dialog)
+{
+    struct ProbeResult
+    {
+        bool ok = false;
+        QString error;
+    };
+
+    dialog.show();
+
+    auto *watcher = new QFutureWatcher<ProbeResult>();
+    QEventLoop waitLoop;
+    bool useLocalClicked = false;
+    ProbeResult result;
+
+    QMetaObject::Connection localConn = QObject::connect(
+        &dialog, &pl::CatalogueConnectDialog::useLocalRequested, &waitLoop, [&] {
+            useLocalClicked = true;
+            waitLoop.quit();
+        });
+    QMetaObject::Connection finishedConn =
+        QObject::connect(watcher, &QFutureWatcher<ProbeResult>::finished, &waitLoop, [&] {
+            result = watcher->result();
+            waitLoop.quit();
+        });
+    // Self-cleanup, independent of the connections above -- if the user
+    // bails out early, this watcher (and the probe still running on a
+    // thread-pool thread behind it) must stay alive and valid until the
+    // probe genuinely finishes, just with nothing left listening by then.
+    QObject::connect(watcher, &QFutureWatcher<ProbeResult>::finished, watcher,
+                      &QObject::deleteLater);
+
+    watcher->setFuture(QtConcurrent::run([descriptor] {
+        ProbeResult r;
+        r.ok = pl::Database::probeReachable(descriptor, &r.error);
+        return r;
+    }));
+
+    waitLoop.exec();
+    // The decision is made either way now -- disconnect so a probe that's
+    // still running in the background can't later touch waitLoop/result
+    // after this function has returned and they've gone out of scope.
+    QObject::disconnect(localConn);
+    QObject::disconnect(finishedConn);
+
+    if (useLocalClicked) {
+        dialog.hideUseLocalButton();
+        return {false, pl::CatalogueDescriptor::sqlite(pl::Settings().databasePath())};
+    }
+
+    if (!result.ok) {
+        dialog.hide();
+        QMessageBox box(QMessageBox::Warning, QObject::tr("Can't Reach Shared Catalogue"),
+                        QObject::tr("Could not connect to the shared catalogue:\n\n%1")
+                            .arg(result.error));
+        QPushButton *useLocalButton =
+            box.addButton(QObject::tr("Use Local Catalogue"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Close);
+        box.setDefaultButton(useLocalButton);
+        box.exec();
+        if (box.clickedButton() == useLocalButton)
+            return {false, pl::CatalogueDescriptor::sqlite(pl::Settings().databasePath())};
+        return {true, std::nullopt};
+    }
+
+    dialog.hideUseLocalButton();
+    return {false, std::nullopt};
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
 {
     QApplication qtApp(argc, argv);
+
+    // Set before any QSettings is constructed (including the pre-init
+    // catalogueDescriptor() peek below): QSettings' default constructor
+    // resolves its file from QCoreApplication::organizationName()/
+    // applicationName(), which are otherwise still unset at this point --
+    // that peek would silently read a different, nonexistent settings file
+    // (Application::initialize() sets these again below, harmlessly).
+    QCoreApplication::setApplicationName(QString::fromLatin1(pl::kAppName));
+    QCoreApplication::setOrganizationName(QString::fromLatin1(pl::kOrgName));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -274,22 +377,35 @@ int main(int argc, char *argv[])
     // network round-trip, or waking a suspended database), with nothing on
     // screen the whole time otherwise -- that looks exactly like PhotoLife
     // has hung. A quick peek at Settings (cheap, local, no network) decides
-    // whether a short-lived status window is worth showing while it connects.
-    std::unique_ptr<QSplashScreen> connecting;
-    if (interactiveGui
-        && pl::Settings().catalogueDescriptor().backend
-               == pl::CatalogueDescriptor::Backend::Postgres) {
-        QPixmap background(420, 90);
-        background.fill(QColor(0xf6, 0xf1, 0xe3));
-        connecting = std::make_unique<QSplashScreen>(background);
-        connecting->showMessage(QStringLiteral("Connecting to shared catalogue…"),
-                                Qt::AlignCenter, QColor(0x24, 0x40, 0x22));
-        connecting->show();
-        qtApp.processEvents();
+    // whether a status window -- with an escape hatch to the local catalogue
+    // if it's actually stalled or dead -- is worth showing while it connects.
+    std::unique_ptr<pl::CatalogueConnectDialog> connecting;
+    std::optional<pl::CatalogueDescriptor> descriptorOverride;
+    if (interactiveGui) {
+        const pl::CatalogueDescriptor descriptor = pl::Settings().catalogueDescriptor();
+        if (descriptor.backend == pl::CatalogueDescriptor::Backend::Postgres) {
+            connecting = std::make_unique<pl::CatalogueConnectDialog>();
+            const StartupCatalogueChoice choice = resolveStartupCatalogue(descriptor, *connecting);
+            if (choice.quit)
+                return 0;
+            descriptorOverride = choice.descriptorOverride;
+        }
     }
 
     pl::Application app;
-    const bool initialized = app.initialize();
+    // Each callback fires between real steps (the connect attempt, then one
+    // per migration) so the dialog reflects actual progress and stays
+    // painted/responsive instead of freezing as a static "please wait" image
+    // for the whole connect+migrate duration.
+    const bool initialized =
+        app.initialize(
+            [&connecting, &qtApp](const QString &status) {
+                if (connecting) {
+                    connecting->setStatus(status);
+                    qtApp.processEvents();
+                }
+            },
+            descriptorOverride);
     if (connecting)
         connecting->close();
     if (!initialized)
@@ -316,7 +432,7 @@ int main(int argc, char *argv[])
             // Reference Tree / All Library Photos / Review Unmatched view-mode split, and
             // across the Map tab's insertion into the Reference Tree tab row):
             //   0 Photos of Tree Selection, 1 All Library Photos, 2 Review Unmatched,
-            //   3 Missing Species, 4 Reference Photos, 5 My Best Shots, 6 Map.
+            //   3 Missing Taxa, 4 Reference Photos, 5 My Best Shots, 6 Map.
             // Values are indices within the Reference Tree mode's QTabWidget.
             static const int kTreeTabIndex[] = {0, -1, -1, 2, 3, 4, 1};
             for (QWidget *w : QApplication::topLevelWidgets()) {

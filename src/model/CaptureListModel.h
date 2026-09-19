@@ -1,10 +1,16 @@
 #pragma once
 
+#include "db/CatalogueDescriptor.h"
+
 #include <QAbstractListModel>
 #include <QHash>
 #include <QIcon>
 #include <QList>
+#include <QMetaType>
 #include <QString>
+
+class QThread;
+class QSqlDatabase;
 
 namespace pl {
 class Database;
@@ -46,6 +52,9 @@ public:
                           // line — for the full-size viewer, which has room
                           // for real text and no on-image badge of its own
         LocalityRole,      // reverse-geocoded "Town, State, Country", or empty
+        MatchedTaxonInatIdRole,   // matched taxon's iNat id, or 0 if unmatched
+        PreviewIsRawRole,  // true when PreviewPathRole's rendition is a RAW file
+                          // (only possible when the capture has no JPEG rendition)
     };
 
     // Which fields the Qt::DisplayRole caption (shown under each grid thumbnail)
@@ -61,6 +70,7 @@ public:
 
     CaptureListModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
                      QObject *parent = nullptr);
+    ~CaptureListModel() override;
 
     int rowCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -87,6 +97,12 @@ public:
     void setProjectScope(int projectId);
     int projectScope() const { return m_projectScope; }
 
+    // Combined setTaxonScope()+setProjectScope(), reloading (asynchronously,
+    // see below) at most once and only if something actually changed --
+    // MainWindow::onTreeSelectionChanged() sets both on every tree click, and
+    // separate setters would otherwise mean two redundant reloads per click.
+    void setScope(int projectId, qint64 taxonInatId);
+
     // When true, the grid is restricted to captures the user has starred as a
     // best shot (the best_shot table). Combines with the status and taxon
     // filters.
@@ -98,6 +114,12 @@ public:
     // from the grid. Rows not currently loaded are ignored.
     void applyBestShot(const QList<int> &captureIds, bool on);
 
+    // Patches a single capture's GPS in place (no model reset), for the
+    // "Attempt to fetch coordinates from iNat" action -- reloading the whole
+    // ~16k-capture library to reflect one row's change would be wasteful.
+    // A no-op if the capture isn't currently loaded in this model.
+    void applyGps(int captureId, double latitude, double longitude);
+
     // OR of CaptionField bits controlling the grid caption. Purely a display
     // setting — no re-query needed, so this just repaints.
     void setCaptionFields(int fields);
@@ -105,7 +127,10 @@ public:
 
     int captureCount() const { return int(m_rows.size()); }
 
-private:
+    // One catalogue row as loaded by reload()/fetchRows(). Public rather than
+    // private so it can cross the async worker thread's queued-connection
+    // boundary (see Q_DECLARE_METATYPE below -- that needs the type nameable
+    // from outside the class).
     struct Row
     {
         int id = 0;
@@ -124,15 +149,43 @@ private:
         double longitude = 0.0;
         bool isBestShot = false;
         QString locality;
+        qint64 matchedTaxonInatId = 0;
+        bool previewIsRaw = false;
     };
 
+    // Parameters that fully determine which rows a query returns -- shared by
+    // the synchronous (reload()) and asynchronous (background-thread) paths.
+    struct QueryParams
+    {
+        QString statusFilter;
+        qint64 taxonScope = 0;
+        int projectScope = 0;
+        bool bestShotOnly = false;
+    };
+
+signals:
+    // Internal: drives the background worker thread. Connected to
+    // Worker::run() with an (implicitly queued, cross-thread) connection.
+    void requestFetch(quint64 generation, pl::model::CaptureListModel::QueryParams params);
+
+private:
+    class Worker;
+
+    static QList<Row> fetchRows(QSqlDatabase db, const QueryParams &params);
+
     void onThumbnailReady(const QString &contentHash, int longestEdge);
+    void ensureWorker();
+    void reloadAsync();
+    void onRowsReady(quint64 generation, QList<Row> rows);
 
     pl::Database &m_db;
     pl::thumb::ThumbnailCache &m_thumbs;
     QList<Row> m_rows;
     QHash<QString, QList<int>> m_rowsByHash;   // preview hash -> row indices
     QIcon m_placeholder;
+    QThread *m_workerThread = nullptr;
+    Worker *m_worker = nullptr;
+    quint64 m_generation = 0;   // bumped per request; discards superseded replies
     QString m_statusFilter;
     qint64 m_taxonScope = 0;
     int m_projectScope = 0;
@@ -141,3 +194,6 @@ private:
 };
 
 } // namespace pl::model
+
+Q_DECLARE_METATYPE(pl::model::CaptureListModel::Row)
+Q_DECLARE_METATYPE(pl::model::CaptureListModel::QueryParams)

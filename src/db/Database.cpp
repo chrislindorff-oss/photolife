@@ -84,6 +84,22 @@ int nextConnectionSuffix()
     return counter.fetch_add(1);
 }
 
+// A managed instance that has gone to sleep (e.g. Neon's free-tier
+// autosuspend, see docs/postgres-backend.md) can take several seconds to
+// wake, but a connection that can't be reached at all -- wrong host, network
+// down -- would otherwise hang until the OS TCP timeout (minutes).
+// connect_timeout caps that at a bounded, clearly reported failure instead.
+void configurePostgresConnection(QSqlDatabase &db, const CatalogueDescriptor &descriptor)
+{
+    db.setHostName(descriptor.pgHost);
+    db.setPort(descriptor.pgPort);
+    db.setDatabaseName(descriptor.pgDbName);
+    db.setUserName(descriptor.pgUser);
+    db.setPassword(descriptor.pgPassword);
+    db.setConnectOptions(
+        QStringLiteral("sslmode=%1;connect_timeout=15").arg(descriptor.pgSslMode));
+}
+
 } // namespace
 
 Database::Database()
@@ -130,7 +146,7 @@ bool Database::open(const QString &sqlitePath)
     return open(CatalogueDescriptor::sqlite(sqlitePath));
 }
 
-bool Database::open(const CatalogueDescriptor &descriptor)
+bool Database::open(const CatalogueDescriptor &descriptor, const ProgressCallback &onProgress)
 {
     close();
     m_error.clear();
@@ -154,13 +170,14 @@ bool Database::open(const CatalogueDescriptor &descriptor)
         pragma.exec(QStringLiteral("PRAGMA journal_mode = WAL"));
         pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
     } else {
+        if (onProgress)
+            onProgress(QStringLiteral("Connecting to %1@%2:%3/%4…")
+                           .arg(descriptor.pgUser, descriptor.pgHost)
+                           .arg(descriptor.pgPort)
+                           .arg(descriptor.pgDbName));
+
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QPSQL"), m_connectionName);
-        db.setHostName(descriptor.pgHost);
-        db.setPort(descriptor.pgPort);
-        db.setDatabaseName(descriptor.pgDbName);
-        db.setUserName(descriptor.pgUser);
-        db.setPassword(descriptor.pgPassword);
-        db.setConnectOptions(QStringLiteral("sslmode=%1").arg(descriptor.pgSslMode));
+        configurePostgresConnection(db, descriptor);
         if (!db.open()) {
             return fail(QStringLiteral("Cannot connect to %1@%2:%3/%4")
                              .arg(descriptor.pgUser, descriptor.pgHost)
@@ -170,12 +187,32 @@ bool Database::open(const CatalogueDescriptor &descriptor)
         }
     }
 
-    if (!applyPendingMigrations()) {
+    if (!applyPendingMigrations(onProgress)) {
         close();
         return false;
     }
 
     return true;
+}
+
+bool Database::probeReachable(const CatalogueDescriptor &descriptor, QString *errorOut)
+{
+    if (descriptor.backend != CatalogueDescriptor::Backend::Postgres)
+        return true;
+
+    const QString connectionName =
+        QStringLiteral("photolife-probe-%1").arg(nextConnectionSuffix());
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QPSQL"), connectionName);
+        configurePostgresConnection(db, descriptor);
+        ok = db.open();
+        if (!ok && errorOut)
+            *errorOut = db.lastError().text();
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return ok;
 }
 
 void Database::close()
@@ -259,7 +296,7 @@ bool Database::runScript(const QString &sql)
     return true;
 }
 
-bool Database::applyPendingMigrations()
+bool Database::applyPendingMigrations(const ProgressCallback &onProgress)
 {
     if (!ensureMigrationsTableExists())
         return false;
@@ -270,9 +307,21 @@ bool Database::applyPendingMigrations()
         return fail(QStringLiteral("Cannot read schema version"), {});
 
     const QList<Migration> migrations = discoverMigrations(m_descriptor.backend);
+    int pendingIndex = 0;
+    int pendingCount = 0;
+    for (const Migration &migration : migrations) {
+        if (migration.version > current)
+            ++pendingCount;
+    }
+
     for (const Migration &migration : migrations) {
         if (migration.version <= current)
             continue;
+        ++pendingIndex;
+        if (onProgress)
+            onProgress(QStringLiteral("Applying catalogue update %1 of %2…")
+                            .arg(pendingIndex)
+                            .arg(pendingCount));
 
         QFile file(migration.resourcePath);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {

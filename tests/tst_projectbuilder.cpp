@@ -79,6 +79,10 @@ private slots:
     void cancellationStopsTheBuild();
     void usesConfirmedMatchesWithoutSearching();
     void largeSpeciesListChecksInWithTheUser();
+    void refreshSkipsPrunedTaxaAndTheirNewChildren();
+    void resumeAfterInterruptionCompletesWithoutDroppingAPage();
+    void mismatchedCheckpointParamsAreDiscarded();
+    void checkpointClearedOnSuccessfulFinish();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -293,6 +297,226 @@ void TestProjectBuilder::largeSpeciesListChecksInWithTheUser()
     const int projectId = finishSpy.at(0).at(2).toInt();
     QVERIFY(projectId > 0);
     QVERIFY(m_store->projectTaxonInatIds(projectId).size() >= 15000);
+}
+
+void TestProjectBuilder::refreshSkipsPrunedTaxaAndTheirNewChildren()
+{
+    // A refresh must never resurrect a deliberately pruned taxon, and pruning
+    // a whole genus must keep excluding species iNaturalist adds under it
+    // *after* the prune too, not just the ones that existed at prune time.
+    bool refreshing = false;
+    wire([&refreshing](const Transport::Request &req, int) -> Transport::Reply {
+        if (req.url.path().contains(QLatin1String("/observations/species_counts"))) {
+            const QString extra = refreshing
+                ? QStringLiteral(
+                      ",{\"count\":1,\"taxon\":{\"id\":902,\"rank\":\"species\","
+                      "\"rank_level\":10,\"name\":\"Caladenia nova\","
+                      "\"ancestry\":\"48460/47126/47217/801\"}}")
+                : QString();
+            return FakeTransport::ok(
+                QStringLiteral(
+                    "{\"total_results\":%1,\"page\":1,\"per_page\":200,\"results\":["
+                    "{\"count\":100,\"taxon\":{\"id\":900,\"rank\":\"species\",\"rank_level\":10,"
+                    "\"name\":\"Diuris pardina\",\"ancestry\":\"48460/47126/47217/800\"}},"
+                    "{\"count\":50,\"taxon\":{\"id\":901,\"rank\":\"species\",\"rank_level\":10,"
+                    "\"name\":\"Caladenia carnea\",\"ancestry\":\"48460/47126/47217/801\"}}"
+                    "%2]}")
+                    .arg(refreshing ? 3 : 2)
+                    .arg(extra)
+                    .toUtf8());
+        }
+        return route(req);
+    });
+
+    QSignalSpy spy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(request());
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+    const int projectId = spy.at(0).at(2).toInt();
+    QVERIFY(projectId > 0);
+    QCOMPARE(m_store->projectTaxonInatIds(projectId).size(), 7);
+
+    // Prune one species directly, and a whole genus (with its one species).
+    QVERIFY(m_store->pruneTaxonFromProject(projectId, 900) >= 0);   // Diuris pardina
+    QVERIFY(m_store->pruneTaxonFromProject(projectId, 801) >= 0);   // Caladenia genus + species
+
+    const auto afterPrune = m_store->projectTaxonInatIds(projectId);
+    QVERIFY(!afterPrune.contains(900));
+    QVERIFY(!afterPrune.contains(801));
+    QVERIFY(!afterPrune.contains(901));
+
+    refreshing = true;
+    spy.clear();
+    m_builder->start(request());   // same project name -> same project: a "refresh"
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+    QCOMPARE(spy.at(0).at(2).toInt(), projectId);
+
+    const auto afterRefresh = m_store->projectTaxonInatIds(projectId);
+    QVERIFY(!afterRefresh.contains(900));   // directly pruned -- still gone
+    QVERIFY(!afterRefresh.contains(801));   // pruned genus -- still gone
+    QVERIFY(!afterRefresh.contains(901));   // its species -- still gone
+    QVERIFY(!afterRefresh.contains(902));   // new species under the pruned genus -- also excluded
+    QVERIFY(afterRefresh.contains(800));    // untouched sibling genus/species survive
+    QVERIFY(afterRefresh.contains(47217));
+}
+
+namespace {
+
+// Serves a synthetic species_counts list of `total` species (all in one
+// genus, 800, under the standard Orchidaceae/Plantae ancestry from route()),
+// paginated by the request's own page/per_page query params -- unlike
+// route()'s canned species_counts response, this one actually varies by page,
+// which the resume tests below need.
+Transport::Reply pagedSpecies(const Transport::Request &req, int total)
+{
+    const QUrlQuery q(req.url);
+    const int page = q.queryItemValue(QStringLiteral("page")).toInt();
+    const int perPage = q.queryItemValue(QStringLiteral("per_page")).toInt();
+    const int start = (page - 1) * perPage;
+    QStringList rows;
+    for (int i = start; i < qMin(start + perPage, total); ++i) {
+        const qint64 id = 100000 + i;
+        rows << QStringLiteral(
+            "{\"count\":1,\"taxon\":{\"id\":%1,\"rank\":\"species\","
+            "\"rank_level\":10,\"name\":\"Testus sp%1\","
+            "\"ancestry\":\"48460/47126/47217/800\"}}").arg(id);
+    }
+    return FakeTransport::ok(
+        QStringLiteral("{\"total_results\":%1,\"page\":%2,\"per_page\":%3,\"results\":[%4]}")
+            .arg(total).arg(page).arg(perPage).arg(rows.join(QLatin1Char(',')))
+            .toUtf8());
+}
+
+// route()'s generic "/taxa/<ids>" ancestor-batch fallback always returns a
+// fixed two-genus (800 and 801) response regardless of which ids were
+// actually requested -- fine for fixtures that need both, but the resume
+// tests below need only genus 800, so they route that one request here
+// instead of falling through to route().
+Transport::Reply singleGenusBatch()
+{
+    return FakeTransport::ok(R"({"results":[
+        {"id":800,"rank":"genus","rank_level":20,"name":"Diuris","ancestry":"48460/47126/47217"}
+    ]})");
+}
+
+} // namespace
+
+void TestProjectBuilder::resumeAfterInterruptionCompletesWithoutDroppingAPage()
+{
+    constexpr int kTotal = 40;
+    constexpr int kPerPage = 10;   // 4 pages
+
+    int speciesCalls = 0;
+    wire([&](const Transport::Request &req, int) -> Transport::Reply {
+        if (req.url.path().contains(QLatin1String("/observations/species_counts"))) {
+            ++speciesCalls;
+            // Interrupted (app killed / connection dropped) right as the 3rd
+            // page's response arrives -- pages 1 and 2 are already committed
+            // (with a checkpoint) by this point; this response never gets
+            // processed because checkCancelled() fires first.
+            if (speciesCalls == 3)
+                m_builder->cancel();
+            return pagedSpecies(req, kTotal);
+        }
+        return route(req);
+    });
+
+    ProjectBuilder::Request r = request();
+    r.perPage = kPerPage;
+
+    QSignalSpy spy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(r);
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.at(0).at(0).toBool(), false);   // "interrupted"
+    const int projectId = spy.at(0).at(2).toInt();
+    QVERIFY(projectId > 0);
+
+    const auto checkpoint = m_store->buildCheckpoint(projectId);
+    QVERIFY(checkpoint.has_value());
+    QCOMPARE(checkpoint->nextPage, 3);   // only pages 1 and 2 made it in
+    QVERIFY(m_store->projectTaxonInatIds(projectId).size() < kTotal);
+
+    // "Relaunch": a fresh HttpClient/INatClient/ProjectBuilder (a new app
+    // session), but the same TaxonomyStore/Database (the same catalogue).
+    speciesCalls = 0;
+    wire([&](const Transport::Request &req, int) -> Transport::Reply {
+        if (req.url.path().contains(QLatin1String("/observations/species_counts"))) {
+            ++speciesCalls;
+            return pagedSpecies(req, kTotal);
+        }
+        if (req.url.path().endsWith(QLatin1String("/taxa/800")))
+            return singleGenusBatch();
+        return route(req);
+    });
+
+    QSignalSpy resumeSpy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(r);
+    QVERIFY(resumeSpy.wait(5000));
+    QCOMPARE(resumeSpy.at(0).at(0).toBool(), true);
+    QCOMPARE(resumeSpy.at(0).at(2).toInt(), projectId);
+
+    // Resumed at page 2 (nextPage(3) - 1), not page 1 -- one page re-fetched
+    // for boundary safety, not the whole list.
+    QCOMPARE(speciesCalls, 3);   // pages 2, 3, 4
+
+    // Every species made it in, including the last page's -- the seen/total
+    // bookkeeping across the resume must not overcount and stop early.
+    const auto finalIds = m_store->projectTaxonInatIds(projectId);
+    for (int i = 0; i < kTotal; ++i)
+        QVERIFY(finalIds.contains(100000 + i));
+    // + family, kingdom, phylum, genus (800): the ancestor fill also covers
+    // species that were only ever committed by the FIRST (interrupted) run,
+    // via projectSpeciesAncestorIds() -- not just species this run fetched.
+    QCOMPARE(finalIds.size(), kTotal + 4);
+
+    QVERIFY(!m_store->buildCheckpoint(projectId).has_value());
+}
+
+void TestProjectBuilder::mismatchedCheckpointParamsAreDiscarded()
+{
+    wire([](const Transport::Request &req, int) { return route(req); });
+
+    QSignalSpy spy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(request());
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+    const int projectId = spy.at(0).at(2).toInt();
+
+    // A checkpoint left over from a build with a different page size --
+    // must never be trusted for this run's resume.
+    BuildCheckpoint stale;
+    stale.rootTaxonInatId = 47217;
+    stale.perPage = 999;
+    stale.nextPage = 50;
+    stale.speciesSeen = 49000;
+    stale.speciesTotal = 50000;
+    QVERIFY(m_store->saveBuildCheckpoint(projectId, stale));
+
+    wire([](const Transport::Request &req, int) { return route(req); });
+    QSignalSpy spy2(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(request());
+    QVERIFY(spy2.wait(5000));
+    QCOMPARE(spy2.at(0).at(0).toBool(), true);
+    QCOMPARE(spy2.at(0).at(2).toInt(), projectId);
+
+    // Ran a normal full build from page 1 (route()'s fixed 2-species page),
+    // not whatever a resume at the bogus nextPage=50 would have produced.
+    QCOMPARE(m_store->projectTaxonInatIds(projectId).size(), 7);
+    QVERIFY(!m_store->buildCheckpoint(projectId).has_value());
+}
+
+void TestProjectBuilder::checkpointClearedOnSuccessfulFinish()
+{
+    wire([](const Transport::Request &req, int) { return route(req); });
+
+    QSignalSpy spy(m_builder.get(), &ProjectBuilder::finished);
+    m_builder->start(request());
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+    const int projectId = spy.at(0).at(2).toInt();
+
+    QVERIFY(!m_store->buildCheckpoint(projectId).has_value());
 }
 
 QTEST_GUILESS_MAIN(TestProjectBuilder)

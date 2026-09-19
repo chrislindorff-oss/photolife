@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -28,9 +29,13 @@ private slots:
     void taxonScopeAloneSpansEveryTreeSharingTheAncestor();
     void projectScopeConfinesTaxonScopeToTheActiveTree();
     void projectScopeAloneConfinesToTheActiveTree();
+    void setScopeCoalescesIntoOneReload();
+    void rapidSetScopeCallsOnlyApplyTheLatest();
     void captionLocalityShownOnlyWhenEnabledAndCached();
+    void applyGpsPatchesRowInPlaceWithoutReset();
 
 private:
+    std::unique_ptr<QTemporaryDir> m_dbDir;
     std::unique_ptr<Database> m_db;
     std::unique_ptr<QTemporaryDir> m_thumbDir;
     std::unique_ptr<thumb::ThumbnailCache> m_thumbs;
@@ -43,8 +48,11 @@ private:
 
 void TestCaptureListModel::init()
 {
+    m_dbDir = std::make_unique<QTemporaryDir>();
+    QVERIFY(m_dbDir->isValid());
     m_db = std::make_unique<Database>();
-    QVERIFY2(m_db->open(QStringLiteral(":memory:")), qPrintable(m_db->error()));
+    QVERIFY2(m_db->open(m_dbDir->filePath(QStringLiteral("catalogue.sqlite"))),
+             qPrintable(m_db->error()));
     m_thumbDir = std::make_unique<QTemporaryDir>();
     m_thumbs = std::make_unique<thumb::ThumbnailCache>(m_thumbDir->path());
     seed();
@@ -55,6 +63,7 @@ void TestCaptureListModel::cleanup()
     m_thumbs.reset();
     m_thumbDir.reset();
     m_db.reset();
+    m_dbDir.reset();
 }
 
 void TestCaptureListModel::seed()
@@ -129,7 +138,9 @@ QStringList TestCaptureListModel::names(CaptureListModel &m) const
 void TestCaptureListModel::taxonScopeAloneSpansEveryTreeSharingTheAncestor()
 {
     CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
     model.setTaxonScope(48460);   // "Life" — no project scope
+    QVERIFY(spy.wait(2000));
     QCOMPARE(names(model),
              (QStringList{QStringLiteral("Caladenia carnea"), QStringLiteral("Corvus mellori")}));
 }
@@ -137,15 +148,23 @@ void TestCaptureListModel::taxonScopeAloneSpansEveryTreeSharingTheAncestor()
 void TestCaptureListModel::projectScopeConfinesTaxonScopeToTheActiveTree()
 {
     CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
     model.setProjectScope(m_birdProject);
+    QVERIFY(spy.wait(2000));
 
+    spy.clear();
     model.setTaxonScope(48460);   // selecting the "Life" stub in the bird tree
+    QVERIFY(spy.wait(2000));
     QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
 
+    spy.clear();
     model.setTaxonScope(900);     // selecting the genus
+    QVERIFY(spy.wait(2000));
     QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
 
+    spy.clear();
     model.setTaxonScope(101);     // a taxon not in this tree at all
+    QVERIFY(spy.wait(2000));
     QCOMPARE(model.rowCount(), 0);
 }
 
@@ -155,11 +174,43 @@ void TestCaptureListModel::projectScopeAloneConfinesToTheActiveTree()
     model.reload();
     QCOMPARE(model.rowCount(), 2);          // no scope at all -> whole library
 
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
     model.setProjectScope(m_birdProject);   // a tree is active, nothing selected
+    QVERIFY(spy.wait(2000));
     QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
 
+    spy.clear();
     model.setProjectScope(0);               // no tree -> back to the whole library
+    QVERIFY(spy.wait(2000));
     QCOMPARE(model.rowCount(), 2);
+}
+
+void TestCaptureListModel::setScopeCoalescesIntoOneReload()
+{
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    model.setScope(m_birdProject, 900);   // one call, both project and taxon scope
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
+}
+
+void TestCaptureListModel::rapidSetScopeCallsOnlyApplyTheLatest()
+{
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    // Fired back-to-back, as rapid tree clicks/arrow-key moves would --
+    // only the second (latest) request's rows must ever be applied.
+    model.setScope(m_birdProject, 101);   // a taxon not in this tree: 0 rows
+    model.setScope(m_birdProject, 900);   // the genus: 1 row
+
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
+
+    // Give any (incorrectly superseding) stale reply a chance to land, then
+    // confirm the result still reflects only the latest request.
+    QTest::qWait(200);
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
 }
 
 void TestCaptureListModel::captionLocalityShownOnlyWhenEnabledAndCached()
@@ -201,6 +252,45 @@ void TestCaptureListModel::captionLocalityShownOnlyWhenEnabledAndCached()
 
     model.setCaptionFields(CaptureListModel::CaptionName);   // Locality unchecked
     QVERIFY(!model.index(row).data(Qt::DisplayRole).toString().contains(QStringLiteral("Melbourne")));
+}
+
+void TestCaptureListModel::applyGpsPatchesRowInPlaceWithoutReset()
+{
+    const int captureId = addCaptureMatchedTo(QStringLiteral("crow3"), 901);
+
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    model.reload();
+
+    int row = -1;
+    for (int r = 0; r < model.rowCount(); ++r) {
+        if (model.index(r).data(CaptureListModel::IdRole).toInt() == captureId) {
+            row = r;
+            break;
+        }
+    }
+    QVERIFY(row >= 0);
+    QVERIFY(!model.index(row).data(CaptureListModel::HasGpsRole).toBool());
+    QCOMPARE(model.index(row).data(CaptureListModel::MatchedTaxonInatIdRole).toLongLong(),
+             qint64(901));
+    QVERIFY(!model.index(row).data(CaptureListModel::PreviewIsRawRole).toBool());
+
+    QSignalSpy resetSpy(&model, &QAbstractItemModel::modelReset);
+    QSignalSpy dataChangedSpy(&model, &QAbstractItemModel::dataChanged);
+
+    model.applyGps(captureId, -37.8136, 144.9631);
+
+    QCOMPARE(resetSpy.count(), 0);   // patched in place, not a full reload
+    QCOMPARE(dataChangedSpy.count(), 1);
+
+    const QModelIndex idx = model.index(row);
+    QVERIFY(idx.data(CaptureListModel::HasGpsRole).toBool());
+    QCOMPARE(idx.data(CaptureListModel::LatitudeRole).toDouble(), -37.8136);
+    QCOMPARE(idx.data(CaptureListModel::LongitudeRole).toDouble(), 144.9631);
+
+    // A capture id not currently loaded in this model is a harmless no-op.
+    dataChangedSpy.clear();
+    model.applyGps(999999, 1.0, 2.0);
+    QCOMPARE(dataChangedSpy.count(), 0);
 }
 
 QTEST_MAIN(TestCaptureListModel)

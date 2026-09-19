@@ -1,5 +1,7 @@
 #include "ui/ImageViewer.h"
 
+#include "raw/RawPreview.h"
+
 #include <QDesktopServices>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -122,6 +124,13 @@ void ImageViewer::showCurrent()
     QImageReader reader(item.path);
     reader.setAutoTransform(true);
     m_current = reader.read();
+
+    if (m_current.isNull() && raw::isAvailable()) {
+        // QImageReader can't decode camera-RAW formats; fall back to the
+        // embedded preview JPEG that RAW files carry (same source the
+        // thumbnail cache uses), at full size (no downscale cap).
+        m_current = raw::extractPreview(item.path, 0);
+    }
 
     if (m_current.isNull()) {
         m_image->setPixmap({});

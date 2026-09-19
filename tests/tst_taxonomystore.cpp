@@ -23,6 +23,7 @@ private slots:
     void cleanup();
 
     void foldNameNormalises();
+    void foldSearchTextNormalisesHybridMarker();
     void placeRoundTrips();
     void taxonUpsertStoresNamesAndIsIdempotent();
     void reUpsertReplacesNamesWithoutDuplicating();
@@ -31,8 +32,24 @@ private slots:
     void taxonPhotoPersistsAndSurvivesPhotolessUpsert();
     void projectLeafPhotosListAndMissing();
     void deleteProjectRemovesItAndItsMembership();
+    void pruneTaxonFromProjectRemovesSelfOnly();
+    void pruneTaxonFromProjectCascadesToDescendants();
+    void pruneTaxonFromProjectDoesNotAffectOtherProjects();
+    void projectIsPrunedReflectsExclusions();
+    void addTaxonWithAncestorsAddsWholeChain();
+    void addTaxonWithAncestorsClearsPriorExclusion();
+    void addTaxonWithAncestorsIsIdempotent();
+    void upsertTaxaWritesAllRowsInOnePass();
+    void upsertTaxaDedupesRepeatedInatId();
+    void upsertTaxaChunksLargeBatches();
+    void addProjectTaxaLinksAllAndMergesFlags();
     void httpCacheRoundTrips();
+    void buildCheckpointRoundTripsUpsertsAndClears();
+    void projectSpeciesAncestorIdsDerivedFromAncestryColumn();
     void pgAddProjectTaxonMergesFlagsOnConflict();
+    void pgRollbackBatchRecoversConnectionAfterFailure();
+    void pgSaveBuildCheckpointParticipatesInBatch();
+    void pgUpsertTaxaDedupeAvoidsConflictError();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -62,6 +79,25 @@ void TestTaxonomyStore::foldNameNormalises()
              QStringLiteral("cladia"));
     QCOMPARE(TaxonomyStore::foldName(QString::fromUtf8("Acacia \xC3\x97 grayana")),
              QString::fromUtf8("acacia \xC3\x97 grayana"));  // multiplication sign kept
+}
+
+void TestTaxonomyStore::foldSearchTextNormalisesHybridMarker()
+{
+    // A user types a bare "x" for the hybrid marker; the stored taxon name
+    // carries the multiplication sign, so a typed search needs to be folded
+    // the same way to find it.
+    QCOMPARE(TaxonomyStore::foldSearchText(QStringLiteral("Eucalyptus x carolaniae")),
+             QString::fromUtf8("eucalyptus \xC3\x97 carolaniae"));
+    QCOMPARE(TaxonomyStore::foldSearchText(QStringLiteral("Eucalyptus X carolaniae")),
+             QString::fromUtf8("eucalyptus \xC3\x97 carolaniae"));
+    // Already-typed multiplication sign passes through unchanged.
+    QCOMPARE(TaxonomyStore::foldSearchText(QString::fromUtf8("Eucalyptus \xC3\x97 carolaniae")),
+             QString::fromUtf8("eucalyptus \xC3\x97 carolaniae"));
+    // "x" inside a word (not a standalone token) is never touched.
+    QCOMPARE(TaxonomyStore::foldSearchText(QStringLiteral("Xanthorrhoea")),
+             QStringLiteral("xanthorrhoea"));
+    QCOMPARE(TaxonomyStore::foldSearchText(QStringLiteral("Banksia rex")),
+             QStringLiteral("banksia rex"));
 }
 
 void TestTaxonomyStore::placeRoundTrips()
@@ -371,6 +407,341 @@ void TestTaxonomyStore::deleteProjectRemovesItAndItsMembership()
     QVERIFY(m_store->taxonLocalId(60815).has_value());       // shared taxon cache untouched
 }
 
+void TestTaxonomyStore::pruneTaxonFromProjectRemovesSelfOnly()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    Taxon sp;
+    sp.inatId = 200000;
+    sp.parentInatId = 60815;
+    sp.rank = QStringLiteral("species");
+    sp.name = QStringLiteral("Diuris pardina");
+    m_store->upsertTaxon(sp);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 200000, true, false));
+    QCOMPARE(m_store->projectTaxonInatIds(proj).size(), 2);
+
+    QCOMPARE(m_store->projectPruneCount(proj, 200000), 1);
+    QCOMPARE(m_store->pruneTaxonFromProject(proj, 200000), 1);
+
+    const auto remaining = m_store->projectTaxonInatIds(proj);
+    QCOMPARE(remaining.size(), 1);
+    QVERIFY(remaining.contains(60815));
+    QVERIFY(m_store->taxonLocalId(200000).has_value());   // shared cache untouched
+}
+
+void TestTaxonomyStore::pruneTaxonFromProjectCascadesToDescendants()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    Taxon sp1;
+    sp1.inatId = 200000;
+    sp1.parentInatId = 60815;
+    sp1.rank = QStringLiteral("species");
+    sp1.name = QStringLiteral("Diuris pardina");
+    m_store->upsertTaxon(sp1);
+
+    Taxon sp2;
+    sp2.inatId = 200001;
+    sp2.parentInatId = 60815;
+    sp2.rank = QStringLiteral("species");
+    sp2.name = QStringLiteral("Diuris sulphurea");
+    m_store->upsertTaxon(sp2);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 200000, true, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 200001, true, false));
+    QCOMPARE(m_store->projectTaxonInatIds(proj).size(), 3);
+
+    QCOMPARE(m_store->projectPruneCount(proj, 60815), 3);
+    QCOMPARE(m_store->pruneTaxonFromProject(proj, 60815), 3);
+
+    QVERIFY(m_store->projectTaxonInatIds(proj).isEmpty());
+    QVERIFY(m_store->taxonLocalId(60815).has_value());     // shared cache untouched
+    QVERIFY(m_store->taxonLocalId(200000).has_value());
+    QVERIFY(m_store->taxonLocalId(200001).has_value());
+
+    const auto excluded = m_store->projectExcludedTaxonIds(proj);
+    QCOMPARE(excluded.size(), 3);
+    QVERIFY(excluded.contains(60815));
+    QVERIFY(excluded.contains(200000));
+    QVERIFY(excluded.contains(200001));
+}
+
+void TestTaxonomyStore::pruneTaxonFromProjectDoesNotAffectOtherProjects()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    const int projA = m_store->ensureProject(QStringLiteral("Project A"), 60815, std::nullopt,
+                                             QStringLiteral("inat"));
+    const int projB = m_store->ensureProject(QStringLiteral("Project B"), 60815, std::nullopt,
+                                             QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(projA, 60815, false, false));
+    QVERIFY(m_store->addProjectTaxon(projB, 60815, false, false));
+
+    QCOMPARE(m_store->pruneTaxonFromProject(projA, 60815), 1);
+
+    QVERIFY(m_store->projectTaxonInatIds(projA).isEmpty());
+    QCOMPARE(m_store->projectTaxonInatIds(projB).size(), 1);
+    QVERIFY(!m_store->projectIsPruned(projB));
+}
+
+void TestTaxonomyStore::projectIsPrunedReflectsExclusions()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
+
+    QVERIFY(!m_store->projectIsPruned(proj));
+    QVERIFY(m_store->pruneTaxonFromProject(proj, 60815) >= 0);
+    QVERIFY(m_store->projectIsPruned(proj));
+}
+
+void TestTaxonomyStore::addTaxonWithAncestorsAddsWholeChain()
+{
+    // The project's own root, unrelated to the chain being added.
+    Taxon root;
+    root.inatId = 1;
+    root.rank = QStringLiteral("kingdom");
+    root.name = QStringLiteral("Animalia");
+    m_store->upsertTaxon(root);
+    const int proj = m_store->ensureProject(QStringLiteral("Animals"), 1, std::nullopt,
+                                            QStringLiteral("inat"));
+
+    Taxon kingdom;
+    kingdom.inatId = 48460;
+    kingdom.rank = QStringLiteral("kingdom");
+    kingdom.name = QStringLiteral("Plantae");
+
+    Taxon family;
+    family.inatId = 47217;
+    family.parentInatId = 48460;
+    family.rank = QStringLiteral("family");
+    family.name = QStringLiteral("Orchidaceae");
+
+    Taxon species;
+    species.inatId = 900;
+    species.parentInatId = 47217;
+    species.rank = QStringLiteral("species");
+    species.name = QStringLiteral("Diuris pardina");
+
+    QVERIFY(m_store->addTaxonWithAncestors(proj, {kingdom, family}, species));
+
+    const auto ids = m_store->projectTaxonInatIds(proj);
+    QVERIFY(ids.contains(48460));
+    QVERIFY(ids.contains(47217));
+    QVERIFY(ids.contains(900));
+
+    const auto tree = m_store->projectTree(proj);
+    auto nodeFor = [&](qint64 inatId) {
+        return std::find_if(tree.begin(), tree.end(),
+                            [&](const auto &n) { return n.inatId == inatId; });
+    };
+    QVERIFY(nodeFor(900) != tree.end());
+    QVERIFY(nodeFor(900)->inRegion);        // a leaf-rank taxon
+    QVERIFY(!nodeFor(48460)->inRegion);     // ancestors are never in-region
+    QVERIFY(!nodeFor(47217)->inRegion);
+    QCOMPARE(nodeFor(900)->parentInatId.value_or(-1), qint64(47217));
+}
+
+void TestTaxonomyStore::addTaxonWithAncestorsClearsPriorExclusion()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    Taxon sp;
+    sp.inatId = 200000;
+    sp.parentInatId = 60815;
+    sp.rank = QStringLiteral("species");
+    sp.name = QStringLiteral("Diuris pardina");
+    m_store->upsertTaxon(sp);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(proj, 60815, false, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 200000, true, false));
+
+    QCOMPARE(m_store->pruneTaxonFromProject(proj, 60815), 2);   // genus + species
+    QVERIFY(m_store->projectTaxonInatIds(proj).isEmpty());
+    auto excluded = m_store->projectExcludedTaxonIds(proj);
+    QVERIFY(excluded.contains(60815));
+    QVERIFY(excluded.contains(200000));
+
+    // Explicitly re-adding the species (with the genus as its one ancestor)
+    // must clear both exclusions, not just add the rows back.
+    QVERIFY(m_store->addTaxonWithAncestors(proj, {genus}, sp));
+
+    excluded = m_store->projectExcludedTaxonIds(proj);
+    QVERIFY(!excluded.contains(60815));
+    QVERIFY(!excluded.contains(200000));
+
+    const auto ids = m_store->projectTaxonInatIds(proj);
+    QVERIFY(ids.contains(60815));
+    QVERIFY(ids.contains(200000));
+}
+
+void TestTaxonomyStore::addTaxonWithAncestorsIsIdempotent()
+{
+    Taxon family;
+    family.inatId = 47217;
+    family.rank = QStringLiteral("family");
+    family.name = QStringLiteral("Orchidaceae");
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 47217, std::nullopt,
+                                            QStringLiteral("inat"));
+
+    Taxon species;
+    species.inatId = 900;
+    species.parentInatId = 47217;
+    species.rank = QStringLiteral("species");
+    species.name = QStringLiteral("Diuris pardina");
+
+    QVERIFY(m_store->addTaxonWithAncestors(proj, {family}, species));
+    QVERIFY(m_store->addTaxonWithAncestors(proj, {family}, species));
+
+    QCOMPARE(m_store->projectTaxonInatIds(proj).size(), 2);   // no duplicates
+    QCOMPARE(m_store->taxonCount(), 2);
+}
+
+void TestTaxonomyStore::upsertTaxaWritesAllRowsInOnePass()
+{
+    Taxon a;
+    a.inatId = 900;
+    a.rank = QStringLiteral("species");
+    a.name = QStringLiteral("Diuris pardina");
+    a.commonName = QStringLiteral("Leopard Doubletail");
+    a.synonyms = {QStringLiteral("Diuris punctata var. pardina")};
+    a.vernacular = {QStringLiteral("Leopard Doubletail"), QStringLiteral("Spotted Doubletail")};
+
+    Taxon b;
+    b.inatId = 901;
+    b.rank = QStringLiteral("species");
+    b.name = QStringLiteral("Caladenia carnea");
+
+    const auto ids = m_store->upsertTaxa({a, b});
+    QCOMPARE(ids.size(), 2);
+    QVERIFY(ids.contains(900));
+    QVERIFY(ids.contains(901));
+    QCOMPARE(m_store->taxonCount(), 2);
+    QCOMPARE(m_store->taxonLocalId(900).value_or(-1), qint64(ids.value(900)));
+
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM taxon_name WHERE taxon_id = ?"));
+    q.addBindValue(ids.value(900));
+    QVERIFY(q.exec() && q.next());
+    QCOMPARE(q.value(0).toInt(), 4);   // accepted + 1 synonym + 2 vernacular
+
+    // Re-upserting with a smaller name set replaces, doesn't accumulate.
+    a.synonyms.clear();
+    a.vernacular.clear();
+    QVERIFY(!m_store->upsertTaxa({a}).isEmpty());
+    q.addBindValue(ids.value(900));
+    QVERIFY(q.exec() && q.next());
+    QCOMPARE(q.value(0).toInt(), 1);   // just "accepted" now
+}
+
+void TestTaxonomyStore::upsertTaxaDedupesRepeatedInatId()
+{
+    Taxon first;
+    first.inatId = 900;
+    first.rank = QStringLiteral("species");
+    first.name = QStringLiteral("Diuris pardina");
+
+    Taxon second = first;
+    second.name = QStringLiteral("Diuris pardina (updated)");
+
+    // Two entries sharing the same inat_id in one call -- must not error
+    // (a naive multi-row Postgres UPSERT would reject this), and the last
+    // one wins.
+    const auto ids = m_store->upsertTaxa({first, second});
+    QCOMPARE(ids.size(), 1);
+    QCOMPARE(m_store->taxonCount(), 1);
+
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.prepare(QStringLiteral("SELECT name FROM taxon WHERE inat_id = 900"));
+    QVERIFY(q.exec() && q.next());
+    QCOMPARE(q.value(0).toString(), second.name);
+}
+
+void TestTaxonomyStore::upsertTaxaChunksLargeBatches()
+{
+    QList<Taxon> taxa;
+    constexpr int kCount = 250;   // bigger than one chunk at the current budget
+    for (int i = 0; i < kCount; ++i) {
+        Taxon t;
+        t.inatId = 100000 + i;
+        t.rank = QStringLiteral("species");
+        t.name = QStringLiteral("Testus sp%1").arg(i);
+        taxa.append(t);
+    }
+
+    const auto ids = m_store->upsertTaxa(taxa);
+    QCOMPARE(ids.size(), kCount);
+    QCOMPARE(m_store->taxonCount(), kCount);
+    for (int i = 0; i < kCount; ++i)
+        QVERIFY(ids.contains(100000 + i));
+}
+
+void TestTaxonomyStore::addProjectTaxaLinksAllAndMergesFlags()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+
+    Taxon species;
+    species.inatId = 900;
+    species.parentInatId = 60815;
+    species.rank = QStringLiteral("species");
+    species.name = QStringLiteral("Diuris pardina");
+
+    const auto ids = m_store->upsertTaxa({genus, species});
+    const int proj = m_store->ensureProject(QStringLiteral("Diuris"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+
+    // Two entries for the same taxon in one call, with different flags --
+    // must merge (OR), matching what the DB's own ON CONFLICT does, not
+    // just take one of them.
+    QVERIFY(m_store->addProjectTaxa(
+        proj, {{ids.value(60815), false, false},
+               {ids.value(900), true, false},
+               {ids.value(900), false, true}}));
+
+    const auto tree = m_store->projectTree(proj);
+    auto nodeFor = [&](qint64 inatId) {
+        return std::find_if(tree.begin(), tree.end(),
+                            [&](const auto &n) { return n.inatId == inatId; });
+    };
+    QCOMPARE(tree.size(), 2);
+    QVERIFY(!nodeFor(60815)->inRegion);
+    QVERIFY(nodeFor(900)->inRegion);
+}
+
 void TestTaxonomyStore::httpCacheRoundTrips()
 {
     const QString url = QStringLiteral("https://api.inaturalist.org/v1/taxa/47217");
@@ -387,6 +758,84 @@ void TestTaxonomyStore::httpCacheRoundTrips()
     QVERIFY(m_store->storeResponse(url, QStringLiteral("\"def456\""), QString(), 200,
                                    QByteArrayLiteral("{\"results\":[1]}")));
     QCOMPARE(m_store->cachedResponse(url)->etag, QStringLiteral("\"def456\""));
+}
+
+void TestTaxonomyStore::buildCheckpointRoundTripsUpsertsAndClears()
+{
+    Taxon genus;
+    genus.inatId = 60815;
+    genus.rank = QStringLiteral("genus");
+    genus.name = QStringLiteral("Diuris");
+    m_store->upsertTaxon(genus);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 60815, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(!m_store->buildCheckpoint(proj).has_value());
+
+    BuildCheckpoint c;
+    c.rootTaxonInatId = 60815;
+    c.placeInatId = 6744;
+    c.perPage = 200;
+    c.nextPage = 3;
+    c.speciesSeen = 400;
+    c.speciesTotal = 900;
+    QVERIFY(m_store->saveBuildCheckpoint(proj, c));
+
+    auto got = m_store->buildCheckpoint(proj);
+    QVERIFY(got.has_value());
+    QCOMPARE(got->rootTaxonInatId, qint64(60815));
+    QCOMPARE(got->placeInatId.value_or(-1), qint64(6744));
+    QCOMPARE(got->perPage, 200);
+    QCOMPARE(got->nextPage, 3);
+    QCOMPARE(got->speciesSeen, 400);
+    QCOMPARE(got->speciesTotal, 900);
+
+    // Saving again (as a later page of the same run would) upserts in place,
+    // one row per project -- not a growing history.
+    c.nextPage = 4;
+    c.speciesSeen = 600;
+    QVERIFY(m_store->saveBuildCheckpoint(proj, c));
+    QCOMPARE(m_store->buildCheckpoint(proj)->nextPage, 4);
+    QCOMPARE(m_store->buildCheckpoint(proj)->speciesSeen, 600);
+
+    QVERIFY(m_store->clearBuildCheckpoint(proj));
+    QVERIFY(!m_store->buildCheckpoint(proj).has_value());
+}
+
+void TestTaxonomyStore::projectSpeciesAncestorIdsDerivedFromAncestryColumn()
+{
+    Taxon fam;
+    fam.inatId = 47217;
+    fam.rank = QStringLiteral("family");
+    fam.name = QStringLiteral("Orchidaceae");
+    m_store->upsertTaxon(fam);
+
+    Taxon sp1;
+    sp1.inatId = 900;
+    sp1.parentInatId = 47217;
+    sp1.rank = QStringLiteral("species");
+    sp1.name = QStringLiteral("Diuris pardina");
+    sp1.ancestry = QStringLiteral("48460/47126/47217/800");
+    m_store->upsertTaxon(sp1);
+
+    Taxon sp2;
+    sp2.inatId = 901;
+    sp2.parentInatId = 47217;
+    sp2.rank = QStringLiteral("species");
+    sp2.name = QStringLiteral("Caladenia carnea");
+    sp2.ancestry = QStringLiteral("48460/47126/47217/801");
+    m_store->upsertTaxon(sp2);
+
+    const int proj = m_store->ensureProject(QStringLiteral("Orchids"), 47217, std::nullopt,
+                                            QStringLiteral("inat"));
+    QVERIFY(m_store->addProjectTaxon(proj, 47217, false, false));   // not in_region: excluded
+    QVERIFY(m_store->addProjectTaxon(proj, 900, true, false));
+    QVERIFY(m_store->addProjectTaxon(proj, 901, true, false));
+
+    const auto ids = m_store->projectSpeciesAncestorIds(proj);
+    QCOMPARE(ids.size(), 5);
+    for (qint64 id : {qint64(48460), qint64(47126), qint64(47217), qint64(800), qint64(801)})
+        QVERIFY(ids.contains(id));
 }
 
 void TestTaxonomyStore::pgAddProjectTaxonMergesFlagsOnConflict()
@@ -425,6 +874,119 @@ void TestTaxonomyStore::pgAddProjectTaxonMergesFlagsOnConflict()
     const auto tree = store.projectTree(proj);
     QCOMPARE(tree.size(), 1);
     QVERIFY(tree.first().inRegion);
+}
+
+void TestTaxonomyStore::pgRollbackBatchRecoversConnectionAfterFailure()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed TaxonomyStore tests");
+
+    // Regression test: on Postgres, any failed statement inside a
+    // begin/commit batch marks the whole transaction "aborted" -- every
+    // later statement on that connection then fails until an explicit
+    // ROLLBACK. ProjectBuilder used to never call rollbackBatch() on a
+    // failed batch, so one bad write during a tree build could silently
+    // poison the shared connection for the rest of the session (surfacing
+    // later as "can't refresh"/"can't delete" on an unrelated reference
+    // tree). This confirms rollbackBatch() actually restores the connection.
+    Database db;
+    QVERIFY2(db.open(*descriptor), qPrintable(db.error()));
+    QSqlDatabase conn = QSqlDatabase::database(db.connectionName(), false);
+    conn.exec(QStringLiteral("TRUNCATE taxon, project, project_taxon RESTART IDENTITY CASCADE"));
+
+    TaxonomyStore store(db.connectionName());
+    QVERIFY(store.beginBatch());
+
+    QSqlQuery bad(conn);
+    QVERIFY(!bad.exec(QStringLiteral("SELECT 1/0")));
+
+    store.rollbackBatch();
+
+    Taxon t;
+    t.inatId = 999999;
+    t.rank = QStringLiteral("species");
+    t.name = QStringLiteral("Testus regressus");
+    QVERIFY2(store.upsertTaxon(t) > 0, qPrintable(conn.lastError().text()));
+}
+
+void TestTaxonomyStore::pgSaveBuildCheckpointParticipatesInBatch()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed TaxonomyStore tests");
+
+    // ProjectBuilder::fetchSpeciesPage() saves the checkpoint inside the same
+    // beginBatch()/commitBatch() transaction as the page's own writes, so a
+    // rollback must undo both together, and a commit must persist both.
+    Database db;
+    QVERIFY2(db.open(*descriptor), qPrintable(db.error()));
+    QSqlDatabase conn = QSqlDatabase::database(db.connectionName(), false);
+    conn.exec(QStringLiteral(
+        "TRUNCATE taxon, project, project_taxon, project_build_checkpoint "
+        "RESTART IDENTITY CASCADE"));
+
+    TaxonomyStore store(db.connectionName());
+    Taxon fam;
+    fam.inatId = 47217;
+    fam.rank = QStringLiteral("family");
+    fam.name = QStringLiteral("Orchidaceae");
+    QVERIFY(store.upsertTaxon(fam) > 0);
+    const int proj = store.ensureProject(QStringLiteral("Orchids"), 47217, std::nullopt,
+                                         QStringLiteral("inat"));
+    QVERIFY(proj > 0);
+
+    BuildCheckpoint c;
+    c.rootTaxonInatId = 47217;
+    c.perPage = 200;
+    c.nextPage = 2;
+    c.speciesSeen = 100;
+    c.speciesTotal = 500;
+
+    QVERIFY(store.beginBatch());
+    QVERIFY2(store.saveBuildCheckpoint(proj, c), qPrintable(conn.lastError().text()));
+    store.rollbackBatch();
+    QVERIFY(!store.buildCheckpoint(proj).has_value());   // rolled back with the rest of the batch
+
+    QVERIFY(store.beginBatch());
+    QVERIFY2(store.saveBuildCheckpoint(proj, c), qPrintable(conn.lastError().text()));
+    QVERIFY(store.commitBatch());
+    const auto got = store.buildCheckpoint(proj);
+    QVERIFY(got.has_value());
+    QCOMPARE(got->nextPage, 2);
+}
+
+void TestTaxonomyStore::pgUpsertTaxaDedupeAvoidsConflictError()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed TaxonomyStore tests");
+
+    // Regression test: Postgres's ON CONFLICT ... DO UPDATE raises "cannot
+    // affect row a second time" if one multi-row INSERT targets the same
+    // conflicting key (inat_id) twice -- SQLite silently tolerates this, so
+    // only a real Postgres run catches a missing/broken dedup step.
+    Database db;
+    QVERIFY2(db.open(*descriptor), qPrintable(db.error()));
+    QSqlDatabase conn = QSqlDatabase::database(db.connectionName(), false);
+    conn.exec(QStringLiteral("TRUNCATE taxon, taxon_name RESTART IDENTITY CASCADE"));
+
+    TaxonomyStore store(db.connectionName());
+    Taxon first;
+    first.inatId = 900;
+    first.rank = QStringLiteral("species");
+    first.name = QStringLiteral("Diuris pardina");
+    Taxon second = first;
+    second.name = QStringLiteral("Diuris pardina (updated)");
+
+    const auto ids = store.upsertTaxa({first, second});
+    QVERIFY2(!ids.isEmpty(), qPrintable(conn.lastError().text()));
+    QCOMPARE(ids.size(), 1);
+
+    QSqlQuery q(conn);
+    q.prepare(QStringLiteral("SELECT name FROM taxon WHERE inat_id = 900"));
+    QVERIFY(q.exec() && q.next());
+    QCOMPARE(q.value(0).toString(), second.name);
 }
 
 QTEST_GUILESS_MAIN(TestTaxonomyStore)

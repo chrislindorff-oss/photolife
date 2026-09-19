@@ -7,6 +7,7 @@
 #include <QEventLoop>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <cmath>
 
 namespace pl::taxonomy {
@@ -46,6 +47,7 @@ void ProjectBuilder::start(const Request &request)
     m_placeId = 0;
     m_rootTaxonId = 0;
     m_projectId = -1;
+    m_startPage = 1;
     m_speciesTotal = 0;
     m_speciesSeen = 0;
     m_nextConfirmAt = kFirstConfirmAt;
@@ -172,7 +174,46 @@ void ProjectBuilder::useRootTaxon(const Taxon &taxon)
         fail(tr("could not create the project"));
         return;
     }
-    m_store.addProjectTaxon(m_projectId, m_rootTaxonId, false, false);
+
+    // Loaded once per run (not per taxon, to avoid a query per row inside the
+    // batches below): taxa deliberately pruned from this project earlier,
+    // which a refresh must never resurrect. Empty for a brand-new project.
+    const QList<qint64> excluded = m_store.projectExcludedTaxonIds(m_projectId);
+    m_excludedTaxonIds = QSet<qint64>(excluded.begin(), excluded.end());
+
+    if (!m_excludedTaxonIds.contains(m_rootTaxonId))
+        m_store.addProjectTaxon(m_projectId, m_rootTaxonId, false, false);
+
+    // Resume an interrupted run's species pagination if an earlier run left a
+    // checkpoint whose resolved parameters match this one -- otherwise a
+    // stale checkpoint (e.g. from a build against a different place) is
+    // discarded rather than trusted. Back up one page: iNaturalist's
+    // species_counts pagination isn't guaranteed stable across separate
+    // calls, so resuming exactly at nextPage risks silently skipping a
+    // handful of species at the boundary; every write is an idempotent
+    // upsert, so redoing one page is cheap insurance.
+    if (const auto checkpoint = m_store.buildCheckpoint(m_projectId)) {
+        const bool sameParams = checkpoint->rootTaxonInatId == m_rootTaxonId
+            && checkpoint->placeInatId == (m_placeId > 0 ? std::optional<qint64>(m_placeId)
+                                                          : std::nullopt)
+            && checkpoint->perPage == m_request.perPage;
+        if (sameParams) {
+            m_startPage = std::max(1, checkpoint->nextPage - 1);
+            // checkpoint->speciesSeen was the cumulative count AFTER the
+            // backed-up page finished; since that page is about to be
+            // re-fetched and re-counted, subtract it back out first so the
+            // seen-vs-total check below doesn't overcount and stop a whole
+            // page short of the real total. (A no-op adjustment when
+            // resuming at page 1, since there is nothing before it.)
+            m_speciesSeen = m_startPage > 1
+                ? std::max(0, checkpoint->speciesSeen - checkpoint->perPage)
+                : 0;
+            m_speciesTotal = checkpoint->speciesTotal;
+            emit progress(tr("Resuming an interrupted build…"), m_speciesSeen, m_speciesTotal);
+        } else {
+            m_store.clearBuildCheckpoint(m_projectId);
+        }
+    }
 
     fetchRootDetail();
 }
@@ -185,17 +226,41 @@ void ProjectBuilder::fetchRootDetail()
         if (checkCancelled())
             return;
         if (out.ok()) {
-            // The spine above the root (kingdom .. order) and its immediate children.
-            m_store.beginBatch();
+            // The spine above the root (kingdom .. order), plus the root
+            // taxon's own detail -- upserted together in one call, but only
+            // the spine gets a project_taxon link (useRootTaxon() already
+            // linked the root itself before this ever runs).
+            QList<Taxon> toUpsert;
             for (const Taxon &a : out.value.ancestors) {
-                m_store.upsertTaxon(a);
-                m_stored.insert(a.inatId);
-                m_store.addProjectTaxon(m_projectId, a.inatId, false, false);
+                if (!m_excludedTaxonIds.contains(a.inatId))
+                    toUpsert.append(a);
             }
-            m_store.upsertTaxon(out.value.taxon);
-            m_store.commitBatch();
+            toUpsert.append(out.value.taxon);
+
+            bool ok = m_store.beginBatch();
+            QHash<qint64, int> localIds;
+            if (ok)
+                localIds = m_store.upsertTaxa(toUpsert);
+            ok = ok && localIds.size() == toUpsert.size();
+            if (ok) {
+                QList<TaxonomyStore::ProjectTaxonLink> links;
+                for (const Taxon &a : out.value.ancestors) {
+                    if (m_excludedTaxonIds.contains(a.inatId))
+                        continue;
+                    m_stored.insert(a.inatId);
+                    links.append({localIds.value(a.inatId), false, false});
+                }
+                ok = m_store.addProjectTaxa(m_projectId, links);
+            }
+            if (ok)
+                ok = m_store.commitBatch();
+            if (!ok) {
+                m_store.rollbackBatch();
+                fail(tr("could not save the reference tree"));
+                return;
+            }
         }
-        fetchSpeciesPage(1);
+        fetchSpeciesPage(m_startPage);
     });
 }
 
@@ -219,13 +284,21 @@ void ProjectBuilder::fetchSpeciesPage(int page)
 
         const int pageCount = int(out.value.results.size());
         int written = 0;
-        m_store.beginBatch();
+        QList<Taxon> toUpsert;
         for (const pl::net::SpeciesCount &sc : out.value.results) {
-            m_store.upsertTaxon(sc.taxon);
-            m_stored.insert(sc.taxon.inatId);
-            m_store.addProjectTaxon(m_projectId, sc.taxon.inatId, true, false);
-            for (qint64 anc : sc.ancestorIds)
-                m_neededAncestors.insert(anc);
+            // Skip a species that was deliberately pruned, or that sits under
+            // a pruned group -- iNaturalist has no notion of our exclusions,
+            // so a group prune must keep excluding whatever it finds under
+            // that group on every future refresh, not just what existed when
+            // it was pruned.
+            const bool excluded = m_excludedTaxonIds.contains(sc.taxon.inatId)
+                || std::any_of(sc.ancestorIds.begin(), sc.ancestorIds.end(),
+                               [this](qint64 a) { return m_excludedTaxonIds.contains(a); });
+            if (!excluded) {
+                toUpsert.append(sc.taxon);
+                for (qint64 anc : sc.ancestorIds)
+                    m_neededAncestors.insert(anc);
+            }
             ++m_speciesSeen;
             ++written;
             if (written % kYieldEvery == 0 || written == pageCount) {
@@ -236,7 +309,43 @@ void ProjectBuilder::fetchSpeciesPage(int page)
             }
             maybeYield(written);
         }
-        m_store.commitBatch();
+
+        // The whole page's writes collapse into a small, constant number of
+        // round trips (one multi-row upsert of the taxa, one of the
+        // project_taxon links) instead of ~5 PER species -- the difference
+        // between a build taking seconds and minutes against a remote
+        // Postgres catalogue.
+        bool ok = m_store.beginBatch();
+        QHash<qint64, int> localIds;
+        if (ok && !toUpsert.isEmpty())
+            localIds = m_store.upsertTaxa(toUpsert);
+        ok = ok && (toUpsert.isEmpty() || localIds.size() == toUpsert.size());
+        if (ok && !localIds.isEmpty()) {
+            QList<TaxonomyStore::ProjectTaxonLink> links;
+            for (auto it = localIds.constBegin(); it != localIds.constEnd(); ++it) {
+                m_stored.insert(it.key());
+                links.append({it.value(), true, false});
+            }
+            ok = m_store.addProjectTaxa(m_projectId, links);
+        }
+        if (ok) {
+            BuildCheckpoint checkpoint;
+            checkpoint.rootTaxonInatId = m_rootTaxonId;
+            checkpoint.placeInatId =
+                m_placeId > 0 ? std::optional<qint64>(m_placeId) : std::nullopt;
+            checkpoint.perPage = m_request.perPage;
+            checkpoint.nextPage = page + 1;
+            checkpoint.speciesSeen = m_speciesSeen;
+            checkpoint.speciesTotal = m_speciesTotal;
+            ok = m_store.saveBuildCheckpoint(m_projectId, checkpoint);
+        }
+        if (ok)
+            ok = m_store.commitBatch();
+        if (!ok) {
+            m_store.rollbackBatch();
+            fail(tr("could not save species to the catalogue"));
+            return;
+        }
 
         emit progress(tr("Fetching species"), m_speciesSeen, m_speciesTotal);
 
@@ -284,9 +393,24 @@ void ProjectBuilder::fillAncestors()
     if (checkCancelled())
         return;
 
+    // Species pagination is done, whether exhausted or the user stopped via
+    // stopFetching() -- clear the checkpoint now rather than only on overall
+    // success, so a build that fails partway through the (cheaper, already
+    // self-resuming) ancestor fill doesn't cause the next run to re-walk
+    // species pages it already finished.
+    m_store.clearBuildCheckpoint(m_projectId);
+
+    // A resumed run's in-memory m_neededAncestors only reflects species
+    // fetched THIS run -- species committed by an earlier, interrupted run
+    // never populate it, so their ancestors would otherwise silently go
+    // unfilled. Folding this in unconditionally (not just when resumed)
+    // keeps this function correct-by-construction.
+    for (qint64 id : m_store.projectSpeciesAncestorIds(m_projectId))
+        m_neededAncestors.insert(id);
+
     QList<qint64> pending;
     for (qint64 id : m_neededAncestors) {
-        if (id <= 0 || m_stored.contains(id))
+        if (id <= 0 || m_stored.contains(id) || m_excludedTaxonIds.contains(id))
             continue;
         if (m_store.taxonLocalId(id)) {
             // Already cached from a previous run; still link it into this project.
@@ -325,20 +449,36 @@ void ProjectBuilder::fillNextAncestorBatch()
             fail(tr("filling the tree failed: %1").arg(out.error));
             return;
         }
-        const int batchCount = int(out.value.size());
-        int written = 0;
-        m_store.beginBatch();
+        QList<Taxon> toUpsert;
         for (const Taxon &t : out.value) {
-            m_store.upsertTaxon(t);
-            m_store.addProjectTaxon(m_projectId, t.inatId, false, false);
-            m_stored.insert(t.inatId);
-            ++m_ancestorFilled;
-            ++written;
-            if (written % kYieldEvery == 0 || written == batchCount)
-                emit progress(tr("Filling intermediate taxa"), m_ancestorFilled, m_ancestorTotal);
-            maybeYield(written);
+            if (!m_excludedTaxonIds.contains(t.inatId))
+                toUpsert.append(t);
         }
-        m_store.commitBatch();
+
+        bool ok = m_store.beginBatch();
+        QHash<qint64, int> localIds;
+        if (ok && !toUpsert.isEmpty())
+            localIds = m_store.upsertTaxa(toUpsert);
+        ok = ok && (toUpsert.isEmpty() || localIds.size() == toUpsert.size());
+        if (ok && !localIds.isEmpty()) {
+            QList<TaxonomyStore::ProjectTaxonLink> links;
+            for (auto it = localIds.constBegin(); it != localIds.constEnd(); ++it)
+                links.append({it.value(), false, false});
+            ok = m_store.addProjectTaxa(m_projectId, links);
+        }
+        if (ok) {
+            for (qint64 inatId : localIds.keys()) {
+                m_stored.insert(inatId);
+                ++m_ancestorFilled;
+            }
+            ok = m_store.commitBatch();
+        }
+        if (!ok) {
+            m_store.rollbackBatch();
+            fail(tr("could not save the reference tree"));
+            return;
+        }
+        emit progress(tr("Filling intermediate taxa"), m_ancestorFilled, m_ancestorTotal);
         fillNextAncestorBatch();
     });
 }

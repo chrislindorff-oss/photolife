@@ -16,10 +16,38 @@ knowing before you rely on it.
 
 ## Provisioning a database
 
-Any reachable Postgres 13+ server works. The walkthrough below uses
-[Google Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres),
-since that's a natural fit for a small group of collaborators who don't want
-to run their own server.
+Any reachable Postgres 13+ server works — PhotoLife only ever speaks
+ordinary Postgres wire protocol to it, so nothing below is Google-specific.
+The walkthrough uses [Google Cloud SQL for
+PostgreSQL](https://cloud.google.com/sql/docs/postgres), but that costs money
+from the moment the instance exists (there's no free tier — even the
+smallest `db-f1-micro` tier bills by the hour).
+
+### Free-tier alternatives
+
+If cost matters more than staying inside Google Cloud, a managed Postgres
+host with a genuine free tier is a drop-in swap for Cloud SQL below — sign
+up, create a database, and paste its host/port/database/user/password into
+PhotoLife's Settings dialog exactly the same way. No code or packaging
+changes needed either way; it's all still `QPSQL` talking to Postgres.
+
+- **[Neon](https://neon.tech)** — serverless Postgres, free tier includes
+  0.5 GB storage and autosuspends when idle (a small catalogue fits
+  comfortably; the DSN it gives you already includes `sslmode=require`).
+- **[Supabase](https://supabase.com)** — free tier includes 500 MB database
+  storage; built on plain Postgres, so the "connection string" it shows you
+  maps directly onto the Settings dialog's fields.
+- **[Railway](https://railway.app)** — usage-based free credit rather than
+  a permanent free tier, simplest of the three to click through.
+
+Google's Firestore and BigQuery both have real always-free tiers too, but
+neither is usable here: Firestore is a NoSQL document store with no SQL
+interface (PhotoLife's schema is relational — joins, foreign keys,
+`WITH RECURSIVE` taxonomy-tree queries — none of which map onto documents
+without rewriting every query in the codebase), and BigQuery is an
+analytics warehouse tuned for scanning large batches, not the frequent
+small transactional reads/writes a photo catalogue does constantly (and it
+bills per byte scanned, which adds up fast under that access pattern).
 
 1. **Create the instance** (Cloud Console, or `gcloud`):
 
@@ -34,19 +62,64 @@ to run their own server.
    not millions) — scale up only if a full library scan or match run over a
    shared connection feels slow.
 
-2. **Create the database and a role per collaborator** (or one shared role,
-   if you'd rather not manage several):
+   **Or, using Neon** (free tier — see above): sign up at
+   [neon.tech](https://neon.tech), click **New Project**, give it a name
+   and region, and create it. Unlike Cloud SQL, that single step already
+   gives you a database and a role — there's no separate "create database"
+   / "create user" step (skip straight to [Connecting from
+   PhotoLife](#connecting-from-photolife) below). The project dashboard
+   shows a connection string like:
+
+   ```
+   postgresql://alex:AbCdEf123456@ep-cool-lab-12345.us-east-2.aws.neon.tech/neondb?sslmode=require
+   ```
+
+   which maps onto PhotoLife's Settings fields as Host
+   `ep-cool-lab-12345.us-east-2.aws.neon.tech`, Port `5432`, Database
+   `neondb`, User `alex`, Password `AbCdEf123456`, SSL mode `require`.
+
+   **Or, using Supabase** (free tier — see above): sign up at
+   [supabase.com](https://supabase.com), click **New Project**, set a
+   database password (this becomes the `postgres` user's password) and
+   pick a region. Once it's provisioned, go to **Project Settings →
+   Database** for the connection details. Supabase shows two connection
+   strings — use the **direct connection** (port `5432`), not the
+   "connection pooling" one (port `6543`/PgBouncer): PhotoLife's queries
+   rely on server-side prepared statements (`QSqlQuery::prepare()`), which
+   a transaction-mode connection pooler generally can't support reliably.
+
+   **Or, using Railway** (usage-based free credit — see above): sign up at
+   [railway.app](https://railway.app), start a **New Project**, and choose
+   **Provision PostgreSQL** from the template gallery — this spins up a
+   Postgres service with a database and role already created. Open that
+   service and go to its **Connect** tab (or the **Variables** tab, which
+   lists the same details as `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/
+   `PGPASSWORD`) for a connection string like:
+
+   ```
+   postgresql://postgres:AbCdEf123456@viaduct.proxy.rlwy.net:41234/railway
+   ```
+
+   which maps onto PhotoLife's Settings fields the same way as Neon's above
+   — Railway's proxy host already speaks TLS, so `require` is a safe SSL
+   mode default here too.
+
+2. **Create the database and a role per collaborator** (Cloud SQL only —
+   Neon, Supabase and Railway already did this in step 1; skip to step 4).
+   Or one shared role, if you'd rather not manage several:
 
    ```
    gcloud sql databases create photolife --instance=photolife-catalogue
-   gcloud sql users create helena --instance=photolife-catalogue --password=...
+   gcloud sql users create [username] --instance=photolife-catalogue --password=...
    ```
 
    PhotoLife doesn't currently attribute writes to individual users in the
    UI, so separate roles buy you audit trail (via Postgres's own logs) and
    independent revocation, not a visibly different in-app experience.
 
-3. **Decide how clients will reach it.** Two supported approaches:
+3. **Decide how clients will reach it** (Cloud SQL only — Neon, Supabase
+   and Railway are all reachable over the internet with TLS by default, no
+   networking step needed). Two supported approaches:
 
    - **Authorized networks + `sslmode=require`** — simplest to set up if
      every collaborator has a static IP or a small, stable IP range (add
@@ -94,6 +167,35 @@ The password is stored the same way PhotoLife already stores an iNaturalist
 API token: in the OS's native settings store (`QSettings`, e.g. the Windows
 registry, macOS defaults, or a config file under `~/.config` on Linux) —
 **not encrypted**. Treat it like any other locally-stored credential.
+
+## Where do the photos live?
+
+Postgres (or SQLite) only ever holds the catalogue's *metadata* — file
+paths, taxonomy, match decisions — never the photo files themselves.
+PhotoLife has always worked this way, even in local SQLite mode: it indexes
+whatever folder you add as a watched root, wherever that folder actually
+lives.
+
+That means the photo files can live somewhere other than each
+collaborator's local disk — e.g. a Google Cloud Storage bucket — as long as
+it's mounted as an ordinary local filesystem path (e.g. via
+[`gcsfuse`](https://cloud.google.com/storage/docs/gcs-fuse)) before adding
+it as a watched folder. PhotoLife just reads files at a path; it doesn't
+know or care whether that path resolves to local disk, a network mount, or
+a FUSE-mounted bucket.
+
+**Known limitation — same path on every machine, required today.**
+PhotoLife stores each file's *absolute* path in the catalogue
+(`folder.path`, `rendition.path`) and has no relative-path or per-machine
+path-remapping support yet. For a shared catalogue's photo paths to resolve
+for everyone, every collaborator currently has to mount the shared storage
+at the *exact same absolute path*. That's achievable within one OS (e.g.
+every Linux collaborator using `/mnt/photolife-photos`), but **not** across
+a mixed Linux/Windows group — the two platforms don't share a path syntax
+at all (`/mnt/photolife-photos` vs `G:\...` or `\\...`), so there is no
+single mount point that works on both today. Supporting that properly needs
+a real change (paths stored relative to a per-machine-configurable library
+root) that hasn't been built yet.
 
 ## Runtime dependency: `libpq`
 

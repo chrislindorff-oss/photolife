@@ -30,7 +30,8 @@ class TaxonConfirmDialog : public QDialog
 
 public:
     TaxonConfirmDialog(pl::net::INatClient &inat, const QString &initialQuery,
-                       const QString &initialRank, QWidget *parent = nullptr);
+                       const QString &initialRank, QWidget *parent = nullptr,
+                       const QString &title = QString());
 
     std::optional<pl::taxonomy::Taxon> chosenTaxon() const;
 

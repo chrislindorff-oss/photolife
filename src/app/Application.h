@@ -1,8 +1,12 @@
 #pragma once
 
+#include "db/CatalogueDescriptor.h"
+#include "db/Database.h"
+
 #include <QObject>
 
 #include <memory>
+#include <optional>
 
 namespace pl {
 
@@ -48,7 +52,14 @@ public:
 
     // Sets application metadata, installs logging, loads settings, opens and
     // migrates the catalogue database. Returns false (and logs) on failure.
-    bool initialize();
+    // `onProgress`, if given, is called with a status line while connecting
+    // to and migrating a shared (Postgres) catalogue, so a caller can show a
+    // "please wait" UI that reflects real progress instead of a frozen splash.
+    // `descriptorOverride`, if given, is opened instead of Settings's own
+    // catalogueDescriptor() -- e.g. a caller that bailed out of a stalled
+    // Postgres connect to open the local catalogue instead.
+    bool initialize(const Database::ProgressCallback &onProgress = {},
+                     std::optional<CatalogueDescriptor> descriptorOverride = {});
 
     void showMainWindow();
 

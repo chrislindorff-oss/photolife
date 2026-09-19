@@ -253,6 +253,14 @@ void TestTaxonomyTreeModel::findTaxaMatchesNameAndCommonName()
     // Common-name match, case-insensitive.
     QCOMPARE(model.findTaxa(QStringLiteral("leopard")), QList<qint64>{qint64(900)});
 
+    // A hybrid stored with the multiplication sign (as iNaturalist names it)
+    // is still found when the user types a plain "x" for the hybrid marker.
+    m_store->upsertTaxon(taxon(902, 800, QStringLiteral("hybrid"), 5,
+                               QString::fromUtf8("Diuris \xC3\x97 fallax")));
+    m_store->addProjectTaxon(m_projectId, 902, false, false);
+    model.setProject(m_projectId);   // re-load to pick up the new project member
+    QCOMPARE(model.findTaxa(QStringLiteral("Diuris x fallax")), QList<qint64>{qint64(902)});
+
     // Hidden taxa are still searchable (findTaxa works off the full project set).
     coverage::ProjectCoverage cov;
     for (qint64 id : {qint64(47217), qint64(800), qint64(900)})

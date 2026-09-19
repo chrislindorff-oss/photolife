@@ -32,7 +32,8 @@ Application::Application() = default;
 
 Application::~Application() = default;
 
-bool Application::initialize()
+bool Application::initialize(const Database::ProgressCallback &onProgress,
+                              std::optional<CatalogueDescriptor> descriptorOverride)
 {
     QCoreApplication::setApplicationName(QString::fromLatin1(kAppName));
     QCoreApplication::setApplicationVersion(QString::fromLatin1(kAppVersion));
@@ -50,8 +51,9 @@ bool Application::initialize()
     m_settings = std::make_unique<Settings>();
 
     m_database = std::make_unique<Database>();
-    const CatalogueDescriptor descriptor = m_settings->catalogueDescriptor();
-    if (!m_database->open(descriptor)) {
+    const CatalogueDescriptor descriptor =
+        descriptorOverride ? *descriptorOverride : m_settings->catalogueDescriptor();
+    if (!m_database->open(descriptor, onProgress)) {
         qCritical() << "Could not open catalogue database:" << m_database->error();
         return false;
     }

@@ -109,7 +109,7 @@ QList<TaxonCandidate> CandidateFinder::forCapture(qint64 captureId) const
 QList<TaxonCandidate> CandidateFinder::search(const QString &text, int limit) const
 {
     QList<TaxonCandidate> out;
-    const QString folded = taxonomy::TaxonomyStore::foldName(text);
+    const QString folded = taxonomy::TaxonomyStore::foldSearchText(text);
     if (folded.isEmpty())
         return out;
 

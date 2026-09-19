@@ -220,8 +220,8 @@ void INatClient::observationCount(qint64 taxonId, qint64 placeId,
 }
 
 void INatClient::fetchObservations(const QString &userLogin, const QList<qint64> &taxonIds,
-                                   qint64 placeId, int page,
-                                   std::function<void(Outcome<ObservationPage>)> done)
+                                   qint64 placeId, const QDate &dateFrom, const QDate &dateTo,
+                                   int page, std::function<void(Outcome<ObservationPage>)> done)
 {
     QStringList ids;
     ids.reserve(taxonIds.size());
@@ -234,6 +234,10 @@ void INatClient::fetchObservations(const QString &userLogin, const QList<qint64>
     q.addQueryItem(QStringLiteral("taxon_id"), ids.join(QLatin1Char(',')));
     if (placeId > 0)
         q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    if (dateFrom.isValid())
+        q.addQueryItem(QStringLiteral("d1"), dateFrom.toString(Qt::ISODate));
+    if (dateTo.isValid())
+        q.addQueryItem(QStringLiteral("d2"), dateTo.toString(Qt::ISODate));
     q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
     q.addQueryItem(QStringLiteral("page"), QString::number(page));
     q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("200"));

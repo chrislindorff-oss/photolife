@@ -24,6 +24,22 @@ public:
     // rows actually removed, or 0 on error (see error()).
     int forgetCaptures(const QList<int> &captureIds);
 
+    // Number of captures catalogued under the given watched-root folder path
+    // (that folder itself plus every descendant folder). Used to tell the
+    // user what a purge would remove before they commit to it. `rootPath`
+    // must match a `folder.path` exactly (e.g. a value from
+    // Settings::watchedRoots(), already QDir::cleanPath()-clean). Returns 0
+    // if the path isn't catalogued, or on error (see error()).
+    int captureCountUnderFolder(const QString &rootPath) const;
+
+    // Deletes the catalogued folder at `rootPath` -- and, via ON DELETE
+    // CASCADE, every descendant folder, their captures, and those captures'
+    // renditions and matches. Matches `folder.path` exactly (no LIKE-prefix
+    // matching). Returns the number of captures removed (0 if the path
+    // wasn't catalogued -- not an error), or -1 on a real database error
+    // (see error()).
+    int purgeFolder(const QString &rootPath);
+
     // A catalogued capture with no backing file left on disk.
     struct MissingCapture
     {

@@ -24,4 +24,12 @@ struct ExifFields
 // failed write costs metadata, not the photo.
 bool writeExif(const QString &path, const ExifFields &fields, QString *error = nullptr);
 
+// Same as writeExif(), but for a file that must not end up damaged: writes
+// into a working copy, verifies the result still opens as a valid image, and
+// only then replaces `path` with it. `path` is left completely untouched on
+// any failure. Use this instead of writeExif() whenever `path` is someone's
+// only copy of the original (as opposed to a freshly-downloaded file that's
+// disposable if something goes wrong).
+bool writeExifSafely(const QString &path, const ExifFields &fields, QString *error = nullptr);
+
 } // namespace pl::inat

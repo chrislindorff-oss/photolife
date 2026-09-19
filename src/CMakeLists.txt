@@ -8,6 +8,7 @@ qt_add_library(photolife_core STATIC
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
+    db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
     geo/GeoBox.h            geo/GeoBox.cpp
     geo/LocalityFetcher.h   geo/LocalityFetcher.cpp
     geo/LocalityStore.h     geo/LocalityStore.cpp
@@ -58,10 +59,13 @@ qt_add_library(photolife_core STATIC
     taxonomy/TaxonomyTypes.h
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
     ui/AliasEditorDialog.h  ui/AliasEditorDialog.cpp
+    ui/CatalogueConnectDialog.h ui/CatalogueConnectDialog.cpp
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
+    ui/InatCoordinateConfirmDialog.h ui/InatCoordinateConfirmDialog.cpp
+    ui/LibraryFoldersDialog.h ui/LibraryFoldersDialog.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
     ui/MapView.h            ui/MapView.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
@@ -131,6 +135,8 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/009_best_shots.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/010_locality_cache.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/011_inat_import.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/012_prune_taxa.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/013_build_checkpoint.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -142,6 +148,8 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/009_best_shots.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/010_locality_cache.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/011_inat_import.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/012_prune_taxa.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/013_build_checkpoint.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

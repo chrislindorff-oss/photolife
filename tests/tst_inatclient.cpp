@@ -19,6 +19,8 @@ private slots:
     void fetchTaxonReturnsAncestorsAndChildren();
     void speciesCountsParsesPageAndAncestry();
     void observationCountReadsTotalResults();
+    void fetchObservationsSendsDateRangeWhenProvided();
+    void fetchObservationsOmitsDateParamsWhenInvalid();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
 
@@ -171,6 +173,49 @@ void TestINatClient::observationCountReadsTotalResults()
     QVERIFY(url.contains(QStringLiteral("place_id=6744")));
     QVERIFY(url.contains(QStringLiteral("verifiable=true")));
     QVERIFY(url.contains(QStringLiteral("per_page=0")));
+}
+
+void TestINatClient::fetchObservationsSendsDateRangeWhenProvided()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(
+            R"({"total_results": 1, "results": [
+                {"id": 1, "observed_on": "2025-01-10", "taxon": {"id": 900},
+                 "geojson": {"type": "Point", "coordinates": [144.9631, -37.8136]},
+                 "photos": [{"id": 1, "url": "https://x/1/square.jpg"}]}
+            ]})"));
+    });
+
+    Outcome<ObservationPage> got;
+    bool done = false;
+    m_inat->fetchObservations(QStringLiteral("someone"), {900}, 0, QDate(2025, 1, 9),
+                              QDate(2025, 1, 11), 1, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+
+    QVERIFY(got.ok());
+    QCOMPARE(got.value.totalResults, 1);
+    QCOMPARE(got.value.results.size(), 1);
+    QCOMPARE(got.value.results.first().latitude.value(), -37.8136);
+
+    const QString url = m_transport->received.at(0).url.toString();
+    QVERIFY(url.contains(QStringLiteral("d1=2025-01-09")));
+    QVERIFY(url.contains(QStringLiteral("d2=2025-01-11")));
+}
+
+void TestINatClient::fetchObservationsOmitsDateParamsWhenInvalid()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(R"({"total_results": 0, "results": []})"));
+    });
+
+    bool done = false;
+    m_inat->fetchObservations(QStringLiteral("someone"), {900}, 0, QDate(), QDate(), 1,
+                              [&](auto) { done = true; });
+    QTRY_VERIFY(done);
+
+    const QString url = m_transport->received.at(0).url.toString();
+    QVERIFY(!url.contains(QStringLiteral("d1=")));
+    QVERIFY(!url.contains(QStringLiteral("d2=")));
 }
 
 void TestINatClient::httpErrorBecomesOutcomeError()

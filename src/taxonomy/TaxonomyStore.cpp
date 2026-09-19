@@ -1,11 +1,16 @@
 #include "taxonomy/TaxonomyStore.h"
 
 #include "db/Database.h"
+#include "net/INatParse.h"
 
+#include <QRegularExpression>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
+
+#include <algorithm>
 
 namespace pl::taxonomy {
 namespace {
@@ -21,6 +26,36 @@ QVariant opt(const std::optional<int> &v)
 QVariant opt(const std::optional<double> &v)
 {
     return v ? QVariant(*v) : QVariant();
+}
+
+// Safe bind-parameter budget for one multi-row INSERT built by
+// upsertTaxa()/addProjectTaxa() -- comfortably under SQLite's classic
+// default SQLITE_LIMIT_VARIABLE_NUMBER of 999 (don't assume a given build
+// links a newer SQLite that raises it). Rows-per-statement is this divided
+// by the number of bind params per row, so a wide table (taxon: 10) chunks
+// more aggressively than a narrow one (taxon_name/project_taxon: 4).
+constexpr int kMaxBatchBindParams = 900;
+
+// Local taxon.id of `taxonInatId` and every descendant beneath it, by the
+// shared taxon cache's parent_inat_id chain (the "prune this group" fan-out).
+// Includes the taxon itself. Empty on a query failure.
+QList<qint64> subtreeLocalIds(QSqlDatabase &db, qint64 taxonInatId)
+{
+    QList<qint64> ids;
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "WITH RECURSIVE sub(inat_id) AS ("
+        "  SELECT ? "
+        "  UNION ALL "
+        "  SELECT t.inat_id FROM taxon t JOIN sub ON t.parent_inat_id = sub.inat_id"
+        ") "
+        "SELECT t.id FROM taxon t JOIN sub ON t.inat_id = sub.inat_id"));
+    q.addBindValue(taxonInatId);
+    if (!q.exec())
+        return ids;
+    while (q.next())
+        ids.append(q.value(0).toLongLong());
+    return ids;
 }
 
 } // namespace
@@ -65,6 +100,14 @@ QString TaxonomyStore::foldName(const QString &name)
     return out.simplified();
 }
 
+QString TaxonomyStore::foldSearchText(const QString &text)
+{
+    static const QRegularExpression hybridToken(QStringLiteral("(?<=^|\\s)[xX](?=\\s|$)"));
+    QString normalized = text;
+    normalized.replace(hybridToken, QString::fromUtf8("\xC3\x97"));   // U+00D7
+    return foldName(normalized);
+}
+
 bool TaxonomyStore::upsertPlace(const Place &place)
 {
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
@@ -92,68 +135,154 @@ bool TaxonomyStore::upsertPlace(const Place &place)
 
 int TaxonomyStore::upsertTaxon(const Taxon &taxon)
 {
+    const QHash<qint64, int> result = upsertTaxa({taxon});
+    const auto it = result.constFind(taxon.inatId);
+    return it == result.constEnd() ? -1 : it.value();
+}
+
+QHash<qint64, int> TaxonomyStore::upsertTaxa(const QList<Taxon> &taxa)
+{
+    QHash<qint64, int> result;
+    if (taxa.isEmpty())
+        return result;
+
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
 
-    QSqlQuery up(db);
-    up.prepare(QStringLiteral(
-        "INSERT INTO taxon (inat_id, parent_inat_id, rank, rank_level, name, common_name, "
-        "  ancestry, is_active, photo_url, photo_attribution, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %1) "
-        "ON CONFLICT(inat_id) DO UPDATE SET parent_inat_id = excluded.parent_inat_id, "
-        "  rank = excluded.rank, rank_level = excluded.rank_level, name = excluded.name, "
-        "  common_name = excluded.common_name, ancestry = excluded.ancestry, "
-        "  is_active = excluded.is_active, fetched_at = excluded.fetched_at, "
-        // Keep an existing photo when this upsert carries none (most callers
-        // don't request default_photo); a non-empty value always wins.
-        "  photo_url = COALESCE(excluded.photo_url, taxon.photo_url), "
-        "  photo_attribution = COALESCE(excluded.photo_attribution, taxon.photo_attribution)")
-                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
-    up.addBindValue(qlonglong(taxon.inatId));
-    up.addBindValue(opt(taxon.parentInatId));
-    up.addBindValue(taxon.rank);
-    up.addBindValue(opt(taxon.rankLevel));
-    up.addBindValue(taxon.name);
-    up.addBindValue(taxon.commonName.isEmpty() ? QVariant() : taxon.commonName);
-    up.addBindValue(taxon.ancestry.isEmpty() ? QVariant() : taxon.ancestry);
-    up.addBindValue(taxon.isActive ? 1 : 0);
-    up.addBindValue(taxon.photoUrl.isEmpty() ? QVariant() : taxon.photoUrl);
-    up.addBindValue(taxon.photoAttribution.isEmpty() ? QVariant() : taxon.photoAttribution);
-    if (!up.exec())
-        return -1;
+    // Dedupe by inat_id (last one wins) -- see the header comment: a
+    // multi-row Postgres UPSERT can't target the same conflicting key twice
+    // in one statement.
+    QList<Taxon> deduped;
+    QHash<qint64, int> indexByInatId;
+    for (const Taxon &t : taxa) {
+        const auto it = indexByInatId.constFind(t.inatId);
+        if (it == indexByInatId.constEnd()) {
+            indexByInatId.insert(t.inatId, int(deduped.size()));
+            deduped.append(t);
+        } else {
+            deduped[it.value()] = t;
+        }
+    }
 
-    QSqlQuery idq(db);
-    idq.prepare(QStringLiteral("SELECT id FROM taxon WHERE inat_id = ?"));
-    idq.addBindValue(qlonglong(taxon.inatId));
-    if (!idq.exec() || !idq.next())
-        return -1;
-    const int localId = idq.value(0).toInt();
+    const QString nowExpr = Database::nowIsoExpr(Database::backendFor(m_connectionName));
+    constexpr int kParamsPerRow = 10;
+    const int chunkSize = std::max(1, kMaxBatchBindParams / kParamsPerRow);
 
-    QSqlQuery del(db);
-    del.prepare(QStringLiteral("DELETE FROM taxon_name WHERE taxon_id = ?"));
-    del.addBindValue(localId);
-    del.exec();
+    for (int offset = 0; offset < deduped.size(); offset += chunkSize) {
+        const QList<Taxon> chunk = deduped.mid(offset, chunkSize);
+        const QStringList rowPlaceholders(chunk.size(),
+                                          QStringLiteral("(?,?,?,?,?,?,?,?,?,?,%1)"));
 
-    auto addName = [&](const QString &name, const QString &kind) {
-        if (name.trimmed().isEmpty())
-            return;
+        QSqlQuery up(db);
+        up.prepare((QStringLiteral(
+            "INSERT INTO taxon (inat_id, parent_inat_id, rank, rank_level, name, common_name, "
+            "  ancestry, is_active, photo_url, photo_attribution, fetched_at) VALUES ")
+                    + rowPlaceholders.join(QLatin1Char(','))
+                    + QStringLiteral(
+            " ON CONFLICT(inat_id) DO UPDATE SET parent_inat_id = excluded.parent_inat_id, "
+            "  rank = excluded.rank, rank_level = excluded.rank_level, name = excluded.name, "
+            "  common_name = excluded.common_name, ancestry = excluded.ancestry, "
+            "  is_active = excluded.is_active, fetched_at = excluded.fetched_at, "
+            // Keep an existing photo when this upsert carries none (most
+            // callers don't request default_photo); a non-empty value wins.
+            "  photo_url = COALESCE(excluded.photo_url, taxon.photo_url), "
+            "  photo_attribution = COALESCE(excluded.photo_attribution, taxon.photo_attribution)"))
+                       .arg(nowExpr));
+        for (const Taxon &t : chunk) {
+            up.addBindValue(qlonglong(t.inatId));
+            up.addBindValue(opt(t.parentInatId));
+            up.addBindValue(t.rank);
+            up.addBindValue(opt(t.rankLevel));
+            up.addBindValue(t.name);
+            up.addBindValue(t.commonName.isEmpty() ? QVariant() : t.commonName);
+            up.addBindValue(t.ancestry.isEmpty() ? QVariant() : t.ancestry);
+            up.addBindValue(t.isActive ? 1 : 0);
+            up.addBindValue(t.photoUrl.isEmpty() ? QVariant() : t.photoUrl);
+            up.addBindValue(t.photoAttribution.isEmpty() ? QVariant() : t.photoAttribution);
+        }
+        if (!up.exec())
+            return {};
+    }
+
+    // Resolve local ids for every upserted taxon in one round trip.
+    {
+        const QStringList placeholders(deduped.size(), QStringLiteral("?"));
+        QSqlQuery idq(db);
+        idq.prepare(QStringLiteral("SELECT id, inat_id FROM taxon WHERE inat_id IN (%1)")
+                        .arg(placeholders.join(QLatin1Char(','))));
+        for (const Taxon &t : deduped)
+            idq.addBindValue(qlonglong(t.inatId));
+        if (!idq.exec())
+            return {};
+        while (idq.next())
+            result.insert(idq.value(1).toLongLong(), idq.value(0).toInt());
+    }
+    if (result.size() != deduped.size())
+        return {};
+
+    // Replace every one of these taxa's name rows: one delete, then one
+    // multi-row insert for all of them combined.
+    const QList<int> localIds = result.values();
+    {
+        const QStringList placeholders(localIds.size(), QStringLiteral("?"));
+        QSqlQuery del(db);
+        del.prepare(QStringLiteral("DELETE FROM taxon_name WHERE taxon_id IN (%1)")
+                        .arg(placeholders.join(QLatin1Char(','))));
+        for (int id : localIds)
+            del.addBindValue(id);
+        if (!del.exec())
+            return {};
+    }
+
+    struct NameRow
+    {
+        int taxonLocalId;
+        QString name;
+        QString kind;
+    };
+    QList<NameRow> names;
+    QSet<QString> seenNameKeys;   // dedupe (taxon_id, name, kind) -- see above
+    for (const Taxon &t : deduped) {
+        const int localId = result.value(t.inatId);
+        auto addName = [&](const QString &name, const QString &kind) {
+            const QString trimmed = name.trimmed();
+            if (trimmed.isEmpty())
+                return;
+            const QString key = QString::number(localId) + QLatin1Char('\x1f') + kind
+                + QLatin1Char('\x1f') + trimmed;
+            if (seenNameKeys.contains(key))
+                return;
+            seenNameKeys.insert(key);
+            names.append({localId, trimmed, kind});
+        };
+        addName(t.name, QStringLiteral("accepted"));
+        for (const QString &syn : t.synonyms)
+            addName(syn, QStringLiteral("synonym"));
+        for (const QString &vern : t.vernacular)
+            addName(vern, QStringLiteral("vernacular"));
+    }
+
+    constexpr int kNameParamsPerRow = 4;
+    const int nameChunkSize = std::max(1, kMaxBatchBindParams / kNameParamsPerRow);
+    for (int offset = 0; offset < names.size(); offset += nameChunkSize) {
+        const QList<NameRow> chunk = names.mid(offset, nameChunkSize);
+        const QStringList rowPlaceholders(chunk.size(), QStringLiteral("(?,?,?,?)"));
+
         QSqlQuery ins(db);
         ins.prepare(QStringLiteral(
-            "INSERT INTO taxon_name (taxon_id, name, name_folded, kind) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT(taxon_id, name, kind) DO NOTHING"));
-        ins.addBindValue(localId);
-        ins.addBindValue(name.trimmed());
-        ins.addBindValue(foldName(name));
-        ins.addBindValue(kind);
-        ins.exec();
-    };
+            "INSERT INTO taxon_name (taxon_id, name, name_folded, kind) VALUES ")
+                    + rowPlaceholders.join(QLatin1Char(','))
+                    + QStringLiteral(" ON CONFLICT(taxon_id, name, kind) DO NOTHING"));
+        for (const NameRow &n : chunk) {
+            ins.addBindValue(n.taxonLocalId);
+            ins.addBindValue(n.name);
+            ins.addBindValue(foldName(n.name));
+            ins.addBindValue(n.kind);
+        }
+        if (!ins.exec())
+            return {};
+    }
 
-    addName(taxon.name, QStringLiteral("accepted"));
-    for (const QString &syn : taxon.synonyms)
-        addName(syn, QStringLiteral("synonym"));
-    for (const QString &vern : taxon.vernacular)
-        addName(vern, QStringLiteral("vernacular"));
-
-    return localId;
+    return result;
 }
 
 bool TaxonomyStore::addStatus(qint64 taxonInatId, const StatusRecord &status)
@@ -269,6 +398,155 @@ bool TaxonomyStore::deleteProject(int projectId)
     return q.exec();
 }
 
+int TaxonomyStore::projectPruneCount(int projectId, qint64 taxonInatId) const
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    const QList<qint64> ids = subtreeLocalIds(db, taxonInatId);
+    if (ids.isEmpty())
+        return 0;
+
+    QStringList marks;
+    marks.reserve(ids.size());
+    for (int i = 0; i < ids.size(); ++i)
+        marks << QStringLiteral("?");
+
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+                  "SELECT COUNT(*) FROM project_taxon WHERE project_id = ? AND taxon_id IN (%1)")
+                  .arg(marks.join(QLatin1Char(','))));
+    q.addBindValue(projectId);
+    for (qint64 id : ids)
+        q.addBindValue(id);
+    if (!q.exec() || !q.next())
+        return 0;
+    return q.value(0).toInt();
+}
+
+int TaxonomyStore::pruneTaxonFromProject(int projectId, qint64 taxonInatId)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    const QList<qint64> ids = subtreeLocalIds(db, taxonInatId);
+    if (ids.isEmpty())
+        return 0;
+
+    if (!db.transaction())
+        return -1;
+
+    QStringList marks;
+    marks.reserve(ids.size());
+    for (int i = 0; i < ids.size(); ++i)
+        marks << QStringLiteral("?");
+
+    QSqlQuery del(db);
+    del.prepare(QStringLiteral(
+                    "DELETE FROM project_taxon WHERE project_id = ? AND taxon_id IN (%1)")
+                    .arg(marks.join(QLatin1Char(','))));
+    del.addBindValue(projectId);
+    for (qint64 id : ids)
+        del.addBindValue(id);
+    if (!del.exec()) {
+        db.rollback();
+        return -1;
+    }
+    const int removed = del.numRowsAffected();
+
+    for (qint64 id : ids) {
+        QSqlQuery ins(db);
+        ins.prepare(QStringLiteral(
+            "INSERT INTO project_excluded_taxon (project_id, taxon_id) VALUES (?, ?) "
+            "ON CONFLICT (project_id, taxon_id) DO NOTHING"));
+        ins.addBindValue(projectId);
+        ins.addBindValue(id);
+        if (!ins.exec()) {
+            db.rollback();
+            return -1;
+        }
+    }
+
+    if (!db.commit())
+        return -1;
+    return removed;
+}
+
+bool TaxonomyStore::projectIsPruned(int projectId) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT 1 FROM project_excluded_taxon WHERE project_id = ? LIMIT 1"));
+    q.addBindValue(projectId);
+    return q.exec() && q.next();
+}
+
+QList<qint64> TaxonomyStore::projectExcludedTaxonIds(int projectId) const
+{
+    QList<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT t.inat_id FROM project_excluded_taxon pe "
+        "JOIN taxon t ON t.id = pe.taxon_id WHERE pe.project_id = ?"));
+    q.addBindValue(projectId);
+    if (!q.exec())
+        return ids;
+    while (q.next())
+        ids.append(q.value(0).toLongLong());
+    return ids;
+}
+
+bool TaxonomyStore::clearProjectExclusion(int projectId, qint64 taxonInatId)
+{
+    const auto local = taxonLocalId(taxonInatId);
+    if (!local)
+        return true;   // not cached, so it can't be excluded either
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "DELETE FROM project_excluded_taxon WHERE project_id = ? AND taxon_id = ?"));
+    q.addBindValue(projectId);
+    q.addBindValue(qlonglong(*local));
+    return q.exec();
+}
+
+bool TaxonomyStore::addTaxonWithAncestors(int projectId, const QList<Taxon> &ancestors,
+                                          const Taxon &taxon)
+{
+    if (!beginBatch())
+        return false;
+
+    auto link = [&](const Taxon &t, bool inRegion) {
+        if (upsertTaxon(t) < 0)
+            return false;
+        if (!addProjectTaxon(projectId, t.inatId, inRegion, false))
+            return false;
+        return clearProjectExclusion(projectId, t.inatId);
+    };
+
+    bool ok = true;
+    for (const Taxon &ancestor : ancestors) {
+        if (!link(ancestor, false)) {
+            ok = false;
+            break;
+        }
+    }
+    if (ok)
+        ok = link(taxon, isLeafRank(taxon.rank));
+
+    if (!ok) {
+        rollbackBatch();
+        return false;
+    }
+    return commitBatch();
+}
+
+std::optional<qint64> TaxonomyStore::projectRootTaxonInatId(int projectId) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("SELECT root_taxon_inat_id FROM project WHERE id = ?"));
+    q.addBindValue(projectId);
+    if (!q.exec() || !q.next() || q.value(0).isNull())
+        return std::nullopt;
+    return q.value(0).toLongLong();
+}
+
 QList<qint64> TaxonomyStore::projectSpeciesNeedingInfraCheck(int projectId,
                                                              qint64 scopeInatId) const
 {
@@ -334,24 +612,133 @@ bool TaxonomyStore::addProjectTaxon(int projectId, qint64 taxonInatId, bool inRe
     const auto local = taxonLocalId(taxonInatId);
     if (!local)
         return false;
+    return addProjectTaxa(projectId, {{int(*local), inRegion, fromChecklist}});
+}
 
+bool TaxonomyStore::addProjectTaxa(int projectId, const QList<ProjectTaxonLink> &links)
+{
+    if (links.isEmpty())
+        return true;
+
+    // Dedupe by taxonLocalId (merging flags with OR, matching the DB's own
+    // ON CONFLICT merge) -- same "can't target a conflicting key twice in
+    // one multi-row UPSERT" reasoning as upsertTaxa().
+    QHash<int, int> indexByLocalId;
+    QList<ProjectTaxonLink> deduped;
+    for (const ProjectTaxonLink &link : links) {
+        const auto it = indexByLocalId.constFind(link.taxonLocalId);
+        if (it == indexByLocalId.constEnd()) {
+            indexByLocalId.insert(link.taxonLocalId, int(deduped.size()));
+            deduped.append(link);
+        } else {
+            ProjectTaxonLink &existing = deduped[it.value()];
+            existing.inRegion = existing.inRegion || link.inRegion;
+            existing.fromChecklist = existing.fromChecklist || link.fromChecklist;
+        }
+    }
+
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    constexpr int kParamsPerRow = 4;
+    const int chunkSize = std::max(1, kMaxBatchBindParams / kParamsPerRow);
+
+    for (int offset = 0; offset < deduped.size(); offset += chunkSize) {
+        const QList<ProjectTaxonLink> chunk = deduped.mid(offset, chunkSize);
+        const QStringList rowPlaceholders(chunk.size(), QStringLiteral("(?,?,?,?)"));
+
+        QSqlQuery q(db);
+        // "|" (bitwise OR) instead of max(a, b): SQLite's max() is a scalar
+        // function when given 2+ args (returns the larger value), but Postgres's
+        // max() is aggregate-only and has no such overload -- a | b gives the
+        // same result as max(a, b) here specifically because these columns are
+        // always exactly 0 or 1, never any other integer.
+        q.prepare(QStringLiteral(
+            "INSERT INTO project_taxon (project_id, taxon_id, in_region, from_checklist) VALUES ")
+                  + rowPlaceholders.join(QLatin1Char(','))
+                  + QStringLiteral(
+            " ON CONFLICT(project_id, taxon_id) DO UPDATE SET "
+            "  in_region = project_taxon.in_region | excluded.in_region, "
+            "  from_checklist = project_taxon.from_checklist | excluded.from_checklist"));
+        for (const ProjectTaxonLink &link : chunk) {
+            q.addBindValue(projectId);
+            q.addBindValue(link.taxonLocalId);
+            q.addBindValue(link.inRegion ? 1 : 0);
+            q.addBindValue(link.fromChecklist ? 1 : 0);
+        }
+        if (!q.exec())
+            return false;
+    }
+    return true;
+}
+
+bool TaxonomyStore::saveBuildCheckpoint(int projectId, const BuildCheckpoint &checkpoint)
+{
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
-    // "|" (bitwise OR) instead of max(a, b): SQLite's max() is a scalar
-    // function when given 2+ args (returns the larger value), but Postgres's
-    // max() is aggregate-only and has no such overload -- a | b gives the
-    // same result as max(a, b) here specifically because these columns are
-    // always exactly 0 or 1, never any other integer.
     q.prepare(QStringLiteral(
-        "INSERT INTO project_taxon (project_id, taxon_id, in_region, from_checklist) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(project_id, taxon_id) DO UPDATE SET "
-        "  in_region = project_taxon.in_region | excluded.in_region, "
-        "  from_checklist = project_taxon.from_checklist | excluded.from_checklist"));
+        "INSERT INTO project_build_checkpoint "
+        "  (project_id, root_taxon_inat_id, place_inat_id, per_page, next_page, "
+        "   species_seen, species_total, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, %1) "
+        "ON CONFLICT(project_id) DO UPDATE SET "
+        "  root_taxon_inat_id = excluded.root_taxon_inat_id, "
+        "  place_inat_id = excluded.place_inat_id, per_page = excluded.per_page, "
+        "  next_page = excluded.next_page, species_seen = excluded.species_seen, "
+        "  species_total = excluded.species_total, updated_at = excluded.updated_at")
+                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(projectId);
-    q.addBindValue(qlonglong(*local));
-    q.addBindValue(inRegion ? 1 : 0);
-    q.addBindValue(fromChecklist ? 1 : 0);
+    q.addBindValue(qlonglong(checkpoint.rootTaxonInatId));
+    q.addBindValue(opt(checkpoint.placeInatId));
+    q.addBindValue(checkpoint.perPage);
+    q.addBindValue(checkpoint.nextPage);
+    q.addBindValue(checkpoint.speciesSeen);
+    q.addBindValue(checkpoint.speciesTotal);
     return q.exec();
+}
+
+std::optional<BuildCheckpoint> TaxonomyStore::buildCheckpoint(int projectId) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT root_taxon_inat_id, place_inat_id, per_page, next_page, species_seen, "
+        "       species_total "
+        "FROM project_build_checkpoint WHERE project_id = ?"));
+    q.addBindValue(projectId);
+    if (!q.exec() || !q.next())
+        return std::nullopt;
+
+    BuildCheckpoint c;
+    c.rootTaxonInatId = q.value(0).toLongLong();
+    if (!q.value(1).isNull())
+        c.placeInatId = q.value(1).toLongLong();
+    c.perPage = q.value(2).toInt();
+    c.nextPage = q.value(3).toInt();
+    c.speciesSeen = q.value(4).toInt();
+    c.speciesTotal = q.value(5).toInt();
+    return c;
+}
+
+bool TaxonomyStore::clearBuildCheckpoint(int projectId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("DELETE FROM project_build_checkpoint WHERE project_id = ?"));
+    q.addBindValue(projectId);
+    return q.exec();
+}
+
+QList<qint64> TaxonomyStore::projectSpeciesAncestorIds(int projectId) const
+{
+    QSet<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT t.ancestry FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "WHERE pt.project_id = ? AND pt.in_region = 1"));
+    q.addBindValue(projectId);
+    if (!q.exec())
+        return {};
+    while (q.next()) {
+        for (qint64 id : pl::net::inat::ancestryIds(q.value(0).toString()))
+            ids.insert(id);
+    }
+    return QList<qint64>(ids.begin(), ids.end());
 }
 
 std::optional<TaxonomyStore::CacheEntry> TaxonomyStore::cachedResponse(const QString &url) const

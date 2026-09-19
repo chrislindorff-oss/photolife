@@ -46,6 +46,20 @@ struct StatusRecord
     QString source;            // "inat" | "VBA 2021" | ...
 };
 
+// Resume point for an interrupted build/refresh's species-pagination phase
+// (see ProjectBuilder, project_build_checkpoint). Tied to the exact query
+// parameters a run resolved -- a later run only honours it if its own
+// resolved root taxon, place and page size all match.
+struct BuildCheckpoint
+{
+    qint64 rootTaxonInatId = 0;
+    std::optional<qint64> placeInatId;
+    int perPage = 0;
+    int nextPage = 0;
+    int speciesSeen = 0;
+    int speciesTotal = 0;
+};
+
 // One row of a project's cached tree, for display.
 struct TreeNode
 {
