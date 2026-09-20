@@ -112,7 +112,7 @@ bool writeExifSafely(const QString &path, const ExifFields &fields, QString *err
     try {
         ImagePtr check = Exiv2::ImageFactory::open(tempPath.toStdString());
         if (!check.get())
-            throw Exiv2::Error(Exiv2::kerErrorMessage, "reopen failed");
+            throw Exiv2::Error(Exiv2::ErrorCode::kerErrorMessage, "reopen failed");
         check->readMetadata();
     } catch (const Exiv2::Error &e) {
         QFile::remove(tempPath);
