@@ -9,6 +9,7 @@
 #include "taxonomy/TaxonomyTypes.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/ImageViewer.h"
+#include "ui/Theme.h"
 
 #include <QCheckBox>
 #include <QDesktopServices>
@@ -147,7 +148,8 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
 
     m_refCaption = new QLabel(this);
     m_refCaption->setWordWrap(true);
-    m_refCaption->setStyleSheet(QStringLiteral("color:gray"));
+    m_refCaption->setStyleSheet(
+        QStringLiteral("color: %1;").arg(pl::themeColors(pl::currentThemeVariant()).mutedText.name()));
 
     m_refDebounce = new QTimer(this);
     m_refDebounce->setSingleShot(true);
@@ -466,10 +468,11 @@ void ReviewPane::showCurrent()
                              .arg(guessName.toHtmlEscaped())
                              .arg(int(conf * 100)));
     else
-        m_guess->setText(QStringLiteral("<span style='color:gray'>%1</span>")
-                             .arg((note.isEmpty() ? tr("No engine guess for this photo.")
-                                                  : note)
-                                      .toHtmlEscaped()));
+        m_guess->setText(
+            QStringLiteral("<span style='color:%1'>%2</span>")
+                .arg(pl::themeColors(pl::currentThemeVariant()).mutedText.name(),
+                     (note.isEmpty() ? tr("No engine guess for this photo.") : note)
+                         .toHtmlEscaped()));
 
     const QString path = idx.data(ReviewQueueModel::PreviewPathRole).toString();
     m_capturePixmapSrc = path.isEmpty()
@@ -559,8 +562,11 @@ void ReviewPane::renderCaptureInfo()
     const int w = qMax(80, m_info->width() - 4);
     const QString shortFolder =
         QFontMetrics(m_info->font()).elidedText(m_captureFolder, Qt::ElideLeft, w);
-    m_info->setText(QStringLiteral("<b>%1</b><br><span style='color:gray'>%2</span>")
-                        .arg(m_captureName.toHtmlEscaped(), shortFolder.toHtmlEscaped()));
+    m_info->setText(
+        QStringLiteral("<b>%1</b><br><span style='color:%2'>%3</span>")
+            .arg(m_captureName.toHtmlEscaped(),
+                 pl::themeColors(pl::currentThemeVariant()).mutedText.name(),
+                 shortFolder.toHtmlEscaped()));
     m_info->setToolTip(m_captureFolder);
 }
 

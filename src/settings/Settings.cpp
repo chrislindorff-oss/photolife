@@ -17,6 +17,7 @@ constexpr auto kPgSslMode = "library/pg/sslMode";
 constexpr auto kWindowGeometry = "ui/mainWindow/geometry";
 constexpr auto kWindowState = "ui/mainWindow/state";
 constexpr auto kCaptionFields = "ui/captureGrid/captionFields";
+constexpr auto kDarkMode = "ui/darkMode";
 constexpr auto kInatUsername = "inat/username";
 constexpr auto kInatApiToken = "inat/apiToken";
 
@@ -139,6 +140,16 @@ int Settings::captureCaptionFields() const
 void Settings::setCaptureCaptionFields(int fields)
 {
     m_settings.setValue(QLatin1String(kCaptionFields), fields);
+}
+
+bool Settings::darkModeEnabled() const
+{
+    return m_settings.value(QLatin1String(kDarkMode), false).toBool();
+}
+
+void Settings::setDarkModeEnabled(bool enabled)
+{
+    m_settings.setValue(QLatin1String(kDarkMode), enabled);
 }
 
 QString Settings::inatUsername() const

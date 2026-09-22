@@ -3,6 +3,7 @@
 #include "geo/WebMercator.h"
 #include "model/CaptureListModel.h"
 #include "net/TileCache.h"
+#include "ui/Theme.h"
 
 #include <QLabel>
 #include <QLineF>
@@ -47,8 +48,12 @@ MapView::MapView(model::CaptureListModel &model, net::TileCache &tiles, QWidget 
     m_attribution->setText(tr("<a href=\"https://www.openstreetmap.org/copyright\">"
                               "© OpenStreetMap contributors</a>"));
     m_attribution->setOpenExternalLinks(true);
-    m_attribution->setStyleSheet(
-        QStringLiteral("background-color: rgba(255,255,255,190); padding: 2px 5px;"));
+    {
+        const QColor panel = pl::themeColors(pl::currentThemeVariant()).panel;
+        m_attribution->setStyleSheet(
+            QStringLiteral("background-color: rgba(%1,%2,%3,190); padding: 2px 5px;")
+                .arg(panel.red()).arg(panel.green()).arg(panel.blue()));
+    }
     m_attribution->adjustSize();
 
     m_emptyOverlay = new QLabel(tr("No geotagged photos in this selection."), this);

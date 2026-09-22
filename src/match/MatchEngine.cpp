@@ -11,6 +11,7 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <optional>
 
 namespace pl::match {
 namespace {
@@ -96,6 +97,34 @@ ParsedName genusOnly(const QString &genus)
     p.raw = genus;
     p.genus = genus;
     return p;
+}
+
+// A capture's best keyword-derived taxon hint, imported from a Lightroom
+// catalog (see LightroomImportEngine) -- reuses the taxon_id/confidence it
+// stored at import time rather than re-resolving, which is cheap enough for
+// one capture at a time but not for a library-wide matchAll() pass.
+struct KeywordHint
+{
+    qint64 taxonId = 0;
+    QString rank;
+    double confidence = 0.0;
+};
+
+std::optional<KeywordHint> loadKeywordHint(QSqlDatabase &db, qint64 captureId)
+{
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT ckh.taxon_id, ckh.confidence, t.rank FROM capture_keyword_hint ckh "
+        "JOIN taxon t ON t.id = ckh.taxon_id "
+        "WHERE ckh.capture_id = ? ORDER BY ckh.confidence DESC LIMIT 1"));
+    q.addBindValue(qlonglong(captureId));
+    if (!q.exec() || !q.next())
+        return std::nullopt;
+    KeywordHint hint;
+    hint.taxonId = q.value(0).toLongLong();
+    hint.confidence = q.value(1).toDouble();
+    hint.rank = q.value(2).toString();
+    return hint;
 }
 
 } // namespace
@@ -214,7 +243,28 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId) const
         out.method = topFolder->matchedVia == QLatin1String("fuzzy") ? QStringLiteral("fuzzy")
                                                                      : QStringLiteral("folder");
         out.confidence = topFolder->score * 0.9;
-    } else {
+    }
+
+    const auto keywordHint = loadKeywordHint(db, captureId);
+    if (keywordHint) {
+        if (!out.hasTaxon()) {
+            out.taxonId = keywordHint->taxonId;
+            out.matchedRank = keywordHint->rank;
+            out.method = QStringLiteral("keyword");
+            out.confidence = keywordHint->confidence;
+            out.note = QStringLiteral("matched from an imported keyword");
+        } else if (keywordHint->taxonId == out.taxonId) {
+            out.confidence = std::min(1.0, out.confidence + 0.05);
+        } else if (keywordHint->confidence > out.confidence) {
+            out.taxonId = keywordHint->taxonId;
+            out.matchedRank = keywordHint->rank;
+            out.method = QStringLiteral("keyword");
+            out.confidence = keywordHint->confidence;
+            out.note = QStringLiteral("keyword and filename/folder disagree");
+        }
+    }
+
+    if (!out.hasTaxon()) {
         out.note = fileParsed.hasGenus() || folderParsed.hasGenus()
                        ? QStringLiteral("no taxonomy match — is a project covering this group built?")
                        : QStringLiteral("no name to match");

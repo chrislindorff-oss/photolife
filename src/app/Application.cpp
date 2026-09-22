@@ -5,6 +5,7 @@
 #include "db/Database.h"
 #include "pl/Version.h"
 #include "inat/InatPhotoDownloader.h"
+#include "lightroom/LightroomImporter.h"
 #include "net/GeocodeClient.h"
 #include "net/HttpClient.h"
 #include "net/INatClient.h"
@@ -78,6 +79,8 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
 
     m_matchService = std::make_unique<match::MatchService>(descriptor);
 
+    m_lightroomImporter = std::make_unique<lightroom::LightroomImporter>(descriptor);
+
     m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
     m_http = std::make_unique<net::HttpClient>(
         std::make_unique<net::QtNetworkTransport>(), m_taxonomyStore.get());
@@ -145,6 +148,11 @@ scan::LibraryWatcher &Application::libraryWatcher()
 match::MatchService &Application::matchService()
 {
     return *m_matchService;
+}
+
+lightroom::LightroomImporter &Application::lightroomImporter()
+{
+    return *m_lightroomImporter;
 }
 
 thumb::ThumbnailCache &Application::thumbnails()

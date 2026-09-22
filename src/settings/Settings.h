@@ -52,6 +52,11 @@ public:
     int captureCaptionFields() const;
     void setCaptureCaptionFields(int fields);
 
+    // Whether the app should use pl::ThemeVariant::Dark instead of the
+    // default Light theme. Set from the View menu's "Dark Mode" toggle.
+    bool darkModeEnabled() const;
+    void setDarkModeEnabled(bool enabled);
+
     // iNaturalist username the "Download from iNaturalist" tab searches by
     // default (still editable per search). Empty until the user sets one.
     QString inatUsername() const;

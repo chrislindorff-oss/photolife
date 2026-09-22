@@ -19,6 +19,9 @@ qt_add_library(photolife_core STATIC
     inat/InatImportService.h inat/InatImportService.cpp
     inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
     inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
+    lightroom/LightroomCatalogReader.h lightroom/LightroomCatalogReader.cpp
+    lightroom/LightroomImportEngine.h lightroom/LightroomImportEngine.cpp
+    lightroom/LightroomImporter.h lightroom/LightroomImporter.cpp
     match/CandidateFinder.h match/CandidateFinder.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
     match/MatchReviewer.h   match/MatchReviewer.cpp
@@ -74,6 +77,7 @@ qt_add_library(photolife_core STATIC
     ui/ReviewPane.h         ui/ReviewPane.cpp
     ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp
     ui/TaxonPickerDialog.h  ui/TaxonPickerDialog.cpp
+    ui/Theme.h              ui/Theme.cpp
 )
 
 configure_file(Version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/pl/Version.h" @ONLY)
@@ -137,6 +141,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/011_inat_import.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/012_prune_taxa.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/013_build_checkpoint.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/014_lightroom_keywords.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -150,6 +155,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/011_inat_import.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/012_prune_taxa.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/013_build_checkpoint.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/014_lightroom_keywords.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"
@@ -157,6 +163,16 @@ qt_add_resources(photolife_core "photolife_help"
     BASE "${CMAKE_SOURCE_DIR}/resources"
     FILES
         "${CMAKE_SOURCE_DIR}/resources/help/help.html"
+)
+
+# Application-wide QSS theme (see src/ui/Theme.cpp, which loads this at
+# ":/styles/theme.qss" and substitutes @token@ placeholders with the active
+# ThemeColors' hex values).
+qt_add_resources(photolife_core "photolife_styles"
+    PREFIX "/"
+    BASE "${CMAKE_SOURCE_DIR}/resources"
+    FILES
+        "${CMAKE_SOURCE_DIR}/resources/styles/theme.qss"
 )
 
 # GUI executable.

@@ -98,6 +98,25 @@ QList<TaxonCandidate> CandidateFinder::forCapture(qint64 captureId) const
     if (folderParsed.hasGenus())
         merge(resolver.resolve(folderParsed, hints));
 
+    // Keyword hints imported from a Lightroom catalog (see
+    // LightroomImportEngine) -- re-resolved rather than trusting the stored
+    // taxon_id, which is cheap here (one capture at a time, on-demand) and
+    // lets manual review benefit even when a hint didn't clear the stricter
+    // auto-match bar at import time.
+    {
+        QSqlQuery kw(db);
+        kw.prepare(QStringLiteral(
+            "SELECT DISTINCT raw_keyword FROM capture_keyword_hint WHERE capture_id = ?"));
+        kw.addBindValue(qlonglong(captureId));
+        if (kw.exec()) {
+            while (kw.next()) {
+                const ParsedName keywordParsed = parseName(kw.value(0).toString());
+                if (keywordParsed.hasGenus())
+                    merge(resolver.resolve(keywordParsed, hints));
+            }
+        }
+    }
+
     QList<TaxonCandidate> result = best.values();
     std::sort(result.begin(), result.end(),
               [](const TaxonCandidate &a, const TaxonCandidate &b) { return a.score > b.score; });
