@@ -50,9 +50,10 @@ everything is cached, so afterwards PhotoLife works offline.</p>
 <p>The toolbar (and the <b>View</b> menu) has three mutually-exclusive modes:</p>
 <ul>
   <li><b>Reference Tree</b> &mdash; the default. The tab row underneath shows
-      <b>Photos of Tree Selection</b>, <b>Map</b>, <b>Missing Taxa</b>,
-      <b>Reference Photos</b> and <b>My Best Shots</b> &mdash; all of them scoped to
-      whatever taxon or reference tree you have selected on the left.</li>
+      <b>Photos of Tree Selection</b>, <b>Map</b>, <b>My Best Shots</b>,
+      <b>Unphotographed Taxa</b>, <b>Reference Photos</b> and <b>Download from
+      iNaturalist</b> &mdash; all of them scoped to whatever taxon or reference
+      tree you have selected on the left.</li>
   <li><b>All Library Photos</b> &mdash; every photo in the catalogue, regardless of
       any reference tree. This is where the <b>Show</b> status filter and the
       right-click photo menu live.</li>
@@ -64,13 +65,13 @@ stays visible no matter which mode you're in, so you can still search or select 
 taxon while reviewing or browsing the whole library.</p>
 
 <h2 id="library">1. Add your photo folders</h2>
-<p><b>File &rarr; Add Folder to Library&hellip;</b> and choose a folder. PhotoLife
+<p><b>Library &rarr; Add Folder to Library&hellip;</b> and choose a folder. PhotoLife
 walks it, records every image, and groups a RAW file and its same-name JPEG as one
 <i>capture</i>. It skips junk (<tt>Thumbs.db</tt>, sidecar files, folders like
 &ldquo;To Sort and Upload&rdquo;).</p>
 <p>It watches your folders afterwards and re-scans automatically when they change.
-<b>File &rarr; Rescan Library</b> forces a full re-scan; unchanged files are never
-re-read. <b>File &rarr; Remove Photos With Missing Files&hellip;</b> finds catalogued
+<b>Library &rarr; Rescan Library</b> forces a full re-scan; unchanged files are never
+re-read. <b>Library &rarr; Remove Photos With Missing Files&hellip;</b> finds catalogued
 photos whose file has since vanished (moved or deleted outside PhotoLife) and lets you
 drop them from the catalogue.</p>
 <p>Your folder names matter: a <i>Family / Genus / Species</i> tree with scientific
@@ -78,18 +79,18 @@ names in the file names matches best, but PhotoLife copes with synonyms, misspel
 <tt>sp.</tt>, hybrids, aggregates, and common-name folders for fauna.</p>
 
 <h2 id="trees">2. Build a reference tree</h2>
-<p><b>File &rarr; New Reference Tree&hellip;</b> Give it a name, a root taxon
+<p><b>Reference Tree &rarr; New Reference Tree&hellip;</b> Give it a name, a root taxon
 (<i>Orchidaceae</i>), an optional rank, and a region (<i>Victoria, AU</i> &mdash;
 leave blank for worldwide). PhotoLife looks up the place and taxon on iNaturalist and
 asks you to confirm the exact match for each before building &mdash; useful when a
 name is ambiguous. Once confirmed, it pulls the region&rsquo;s species list and fills
 in the intermediate ranks so the tree is connected from kingdom down to species.</p>
 <p>You can keep several trees and switch between them with the drop-down at the top
-of the <b>Reference Trees</b> panel on the left. <b>File &rarr; Refresh Reference
-Tree</b> re-pulls the current one from iNaturalist; <b>File &rarr; Delete Reference
-Tree&hellip;</b> removes one you no longer need (your photos and their matches are
-untouched).</p>
-<p><b>File &rarr; Fetch Subspecies/Varieties&hellip;</b> checks the current tree&rsquo;s
+of the <b>Reference Trees</b> panel on the left. <b>Reference Tree &rarr; Refresh
+Reference Tree</b> re-pulls the current one from iNaturalist; <b>Reference Tree
+&rarr; Delete Reference Tree&hellip;</b> removes one you no longer need (your photos
+and their matches are untouched).</p>
+<p><b>Reference Tree &rarr; Fetch Subspecies/Varieties&hellip;</b> checks the current tree&rsquo;s
 species (or, from the tree&rsquo;s right-click menu, just one branch) for iNaturalist
 subspecies, varieties and hybrids iNat&rsquo;s regular species list doesn&rsquo;t
 report on its own &mdash; it makes a few requests per species, so it can be slow for a
@@ -103,14 +104,14 @@ lets you hide ranks you don't care to see in the tree (e.g. collapse straight to
 species, skipping family/genus rows).</p>
 
 <h2 id="checklist">3. Import a regional checklist</h2>
-<p><b>File &rarr; Import Checklist&hellip;</b> and pick a CSV of
+<p><b>Reference Tree &rarr; Import Checklist&hellip;</b> and pick a CSV of
 <tt>&lt;name&gt;,&lt;conservation status&gt;</tt> rows (such as a state vascular-plant
 list). PhotoLife adds any species in the current tree&rsquo;s genera &mdash;
 including rarities with no iNaturalist observations &mdash; and records their threat
 status, which then shows in the coverage panel and the tree tooltips.</p>
 
 <h2 id="match">4. Match your photos</h2>
-<p><b>File &rarr; Match Library.</b> For each capture PhotoLife parses the folder
+<p><b>Matching &rarr; Match Library.</b> For each capture PhotoLife parses the folder
 path and the file name, reconciles them against the cached taxonomy (including
 synonyms), scores the result, and either applies it automatically or puts it in the
 review queue. Re-running Match never disturbs a decision you made yourself.</p>
@@ -168,7 +169,7 @@ photographed species, a <b>&middot;</b> for missing ones, and a &ldquo;have /
 total&rdquo; count on genera and families.</p>
 <p>The panel under the tree summarises the whole project: species photographed,
 threatened-species coverage broken out by status, and the most recent capture. The
-<b>Missing Taxa</b> tab is a plain list of the gaps, with its own filter box
+<b>Unphotographed Taxa</b> tab is a plain list of the gaps, with its own filter box
 &mdash; activate an entry to jump to it in the tree.</p>
 <p>The <b>Only taxa I&rsquo;ve photographed</b> checkbox above the tree collapses it
 to just the branches you have a photo somewhere in &mdash; a quick &ldquo;what have I
@@ -178,7 +179,7 @@ got&rdquo; view. Untick it to see the whole reference tree again.</p>
 <p>The <b>Reference Photos</b> tab shows one iNaturalist photo per species in the
 current tree, for comparison while you're out identifying things. PhotoLife fetches
 missing ones automatically the first time you open the tab for a tree with gaps, or
-on demand via <b>File &rarr; Fetch Reference Photos</b>.</p>
+on demand via <b>Reference Tree &rarr; Fetch Reference Photos</b>.</p>
 <p>Right-click any of your own photos (in any grid) to star it as the <b>Best Shot</b>
 of its species &mdash; only available once the photo is identified. Starred photos get
 a gold star badge on their thumbnail and show up together in the <b>My Best Shots</b>
@@ -201,7 +202,7 @@ If the photo has GPS data, a <b>View on Map</b> button opens its location in you
 browser.</p>
 
 <h2 id="names">Learned names</h2>
-<p><b>File &rarr; Learned Names&hellip;</b> lists the corrections PhotoLife has picked
+<p><b>Matching &rarr; Learned Names&hellip;</b> lists the corrections PhotoLife has picked
 up from your reviewing. Forgetting one puts the affected photos back in the queue on
 the next Match Library run.</p>
 
@@ -216,7 +217,7 @@ PhotoLife without affecting a single photo.</p>
 JPEG sibling it reads the embedded preview &mdash; if this build was compiled with
 LibRaw. Otherwise a RAW-only capture shows a plain placeholder tile; the photo is
 still fully catalogued and matched.</p>
-<p>If some of your RAW photos show up in the wrong place on the map, run <b>File
+<p>If some of your RAW photos show up in the wrong place on the map, run <b>Library
 &rarr; Fix RAW Photo Locations&hellip;</b> once &mdash; it corrects a since-fixed bug
 where a RAW file's GPS hemisphere (north/south, east/west) could be read incorrectly.
 It only re-reads location data; nothing else about your catalogue changes.</p>

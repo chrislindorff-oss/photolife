@@ -23,6 +23,7 @@
 #include "checklist/ChecklistImporter.h"
 #include "checklist/ChecklistParser.h"
 #include "db/Database.h"
+#include "lightroom/LightroomImporter.h"
 #include "match/MatchService.h"
 #include "scan/ScanService.h"
 #include "scan/ScanTypes.h"
@@ -30,6 +31,7 @@
 #include "taxonomy/ProjectBuilder.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "ui/CatalogueConnectDialog.h"
+#include "ui/Theme.h"
 #include "pl/Version.h"
 
 namespace {
@@ -204,6 +206,53 @@ int runHeadlessChecklist(pl::Application &app, const QString &path, const QStrin
     return exitCode;
 }
 
+// Headless "import a Lightroom catalog's keywords and exit" mode. --into only
+// gates this the same way the interactive action does (the catalog import
+// itself isn't project-scoped -- see LightroomImporter) so a script gets the
+// same "no project, no import" guard as the GUI.
+int runHeadlessLightroomImport(pl::Application &app, const QString &lrcatPath,
+                               const QString &projectName)
+{
+    if (!projectName.isEmpty()) {
+        auto db = QSqlDatabase::database(app.database().connectionName(), false);
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("SELECT id FROM project WHERE name = ?"));
+        q.addBindValue(projectName);
+        if (!q.exec() || !q.next()) {
+            qWarning().noquote() << "no project named" << projectName;
+            return 1;
+        }
+    }
+
+    auto &importer = app.lightroomImporter();
+    QEventLoop loop;
+    int exitCode = 0;
+    QObject::connect(&importer, &pl::lightroom::LightroomImporter::progress,
+                     [](int done, int total) {
+                         std::fprintf(stderr, "\rimporting %d / %d   ", done, total);
+                     });
+    QObject::connect(&importer, &pl::lightroom::LightroomImporter::finished,
+                     [&](pl::lightroom::LightroomImportEngine::Stats s) {
+                         std::fprintf(stderr, "\n");
+                         if (!s.ok()) {
+                             qWarning().noquote() << "import failed:" << s.error;
+                             exitCode = 1;
+                         } else {
+                             qInfo().noquote()
+                                 << QStringLiteral("%1 photos matched | %2 unmatched | "
+                                                   "%3 keywords resolved | %4 hints written")
+                                        .arg(s.photosMatched)
+                                        .arg(s.photosUnmatched)
+                                        .arg(s.keywordsResolved)
+                                        .arg(s.hintsWritten);
+                         }
+                         loop.quit();
+                     });
+    QTimer::singleShot(0, [&] { importer.start(lrcatPath); });
+    loop.exec();
+    return exitCode;
+}
+
 // What resolveStartupCatalogue() decided: either quit outright (the user
 // declined to fall back after a failed shared-catalogue connect), or open
 // `descriptorOverride` instead of the caller's descriptor if it's set, or
@@ -307,6 +356,12 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName(QString::fromLatin1(pl::kAppName));
     QCoreApplication::setOrganizationName(QString::fromLatin1(pl::kOrgName));
 
+    // Cheap, local Settings peek (same pattern as the catalogueDescriptor()
+    // peek below) to pick the persisted light/dark preference before any
+    // window is built.
+    pl::applyTheme(qtApp, pl::Settings().darkModeEnabled() ? pl::ThemeVariant::Dark
+                                                            : pl::ThemeVariant::Light);
+
     QCommandLineParser parser;
     parser.setApplicationDescription(
         QStringLiteral("PhotoLife — catalogue nature photos against a taxonomic tree."));
@@ -345,7 +400,8 @@ int main(int argc, char *argv[])
         QStringLiteral("Import a checklist CSV <file> into --into and exit."),
         QStringLiteral("file"));
     const QCommandLineOption intoOption(
-        QStringLiteral("into"), QStringLiteral("Target project name for --import-checklist."),
+        QStringLiteral("into"),
+        QStringLiteral("Target project name for --import-checklist / --import-lightroom."),
         QStringLiteral("project"));
     const QCommandLineOption sourceOption(
         QStringLiteral("source"), QStringLiteral("Status source label for --import-checklist."),
@@ -353,6 +409,12 @@ int main(int argc, char *argv[])
     parser.addOption(checklistOption);
     parser.addOption(intoOption);
     parser.addOption(sourceOption);
+
+    const QCommandLineOption lightroomOption(
+        QStringLiteral("import-lightroom"),
+        QStringLiteral("Import keyword hints from a Lightroom catalog <file> and exit."),
+        QStringLiteral("file"));
+    parser.addOption(lightroomOption);
 
     const QCommandLineOption screenshotOption(
         QStringLiteral("screenshot"),
@@ -371,7 +433,7 @@ int main(int argc, char *argv[])
     // report their own progress on stderr/the log file as they run.
     const bool interactiveGui = !parser.isSet(scanOption) && !parser.isSet(buildOption)
                               && !parser.isSet(matchOption) && !parser.isSet(checklistOption)
-                              && !parser.isSet(screenshotOption);
+                              && !parser.isSet(lightroomOption) && !parser.isSet(screenshotOption);
 
     // Opening a shared Postgres catalogue can take several seconds (a
     // network round-trip, or waking a suspended database), with nothing on
@@ -428,13 +490,14 @@ int main(int argc, char *argv[])
         const QString out = parser.value(screenshotOption);
         const int tab = parser.value(tabOption).toInt();
         QTimer::singleShot(1000, [&] {
-            // --tab numbering matches the seven logical screens (kept stable across the
+            // --tab numbering matches the eight logical screens (kept stable across the
             // Reference Tree / All Library Photos / Review Unmatched view-mode split, and
-            // across the Map tab's insertion into the Reference Tree tab row):
+            // across the Reference Tree mode's own tab order/insertions):
             //   0 Photos of Tree Selection, 1 All Library Photos, 2 Review Unmatched,
-            //   3 Missing Taxa, 4 Reference Photos, 5 My Best Shots, 6 Map.
+            //   3 Unphotographed Taxa, 4 Reference Photos, 5 My Best Shots, 6 Map,
+            //   7 Download from iNaturalist.
             // Values are indices within the Reference Tree mode's QTabWidget.
-            static const int kTreeTabIndex[] = {0, -1, -1, 2, 3, 4, 1};
+            static const int kTreeTabIndex[] = {0, -1, -1, 3, 4, 2, 1, 5};
             for (QWidget *w : QApplication::topLevelWidgets()) {
                 auto *treeAction = w->findChild<QAction *>(QStringLiteral("viewTreeAction"));
                 auto *libraryAction = w->findChild<QAction *>(QStringLiteral("viewLibraryAction"));
@@ -449,7 +512,7 @@ int main(int argc, char *argv[])
                 } else {
                     if (treeAction)
                         treeAction->setChecked(true);
-                    if (tabs && tab >= 0 && tab < 7 && kTreeTabIndex[tab] >= 0)
+                    if (tabs && tab >= 0 && tab < 8 && kTreeTabIndex[tab] >= 0)
                         tabs->setCurrentIndex(kTreeTabIndex[tab]);
                 }
                 if (tab == 0) {
@@ -483,6 +546,10 @@ int main(int argc, char *argv[])
     if (parser.isSet(checklistOption))
         return runHeadlessChecklist(app, parser.value(checklistOption), parser.value(intoOption),
                                     parser.value(sourceOption));
+
+    if (parser.isSet(lightroomOption))
+        return runHeadlessLightroomImport(app, parser.value(lightroomOption),
+                                          parser.value(intoOption));
 
     app.showMainWindow();
     return QApplication::exec();

@@ -90,6 +90,13 @@ protected:
 
 private:
     void buildMenus();
+    void buildFileMenu(QMenu *fileMenu);
+    void buildLibraryMenu(QMenu *libraryMenu);
+    void buildReferenceTreeMenu(QMenu *treeMenu);
+    void buildViewMenu();
+    void buildMatchingMenu(QMenu *matchingMenu);
+    void buildHelpMenu(QMenu *helpMenu);
+    void buildToolBar();
     void buildCentralWidget();
     void restoreLayout();
     void showAbout();
@@ -133,6 +140,7 @@ private:
     void showTreeContextMenu(const QPoint &pos);
     void pruneTaxonFromTree(qint64 inatId, const QString &name);
     void importChecklist();
+    void importLightroom();
 
     // Probes a Postgres catalogue on a background thread (Database::
     // probeReachable(), the same mechanism the startup connect dialog
@@ -162,6 +170,7 @@ private:
     void onTreeSearchNext();
     QList<qint64> collectExpandedTaxa(const QModelIndex &parent = {}) const;
     void mutateTreePreservingState(const std::function<void()> &mutate);
+    void applyThreatenedFilter(bool anyThreatened, const QString &status);
     void rebuildRankFilterMenu();
     void updateMissingList();
     void showMissingListContextMenu(const QPoint &pos);
@@ -192,6 +201,7 @@ private:
     QAction *m_viewTreeAction = nullptr;
     QAction *m_viewLibraryAction = nullptr;
     QAction *m_viewReviewAction = nullptr;
+    QAction *m_darkModeAction = nullptr;
     QLabel *m_pgStatusLabel = nullptr;
     PostgresConnectionMonitor *m_pgMonitor = nullptr;
 
@@ -270,6 +280,7 @@ private:
     QAction *m_deleteTreeAction = nullptr;
     QAction *m_fetchInfraAction = nullptr;
     QAction *m_importChecklistAction = nullptr;
+    QAction *m_importLightroomAction = nullptr;
     // Set while addTaxonToReferenceTree()'s fetchTaxon() call is in flight --
     // that call is async and non-modal (unlike the TaxonConfirmDialog that
     // precedes it), so this closes the window where Delete/Refresh/Prune

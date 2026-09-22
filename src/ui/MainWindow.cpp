@@ -18,6 +18,7 @@
 #include "inat/InatImportService.h"
 #include "inat/InatObservationFetcher.h"
 #include "inat/InatPhotoDownloader.h"
+#include "lightroom/LightroomImporter.h"
 #include "match/MatchReviewer.h"
 #include "match/MatchService.h"
 #include "net/INatClient.h"
@@ -49,6 +50,7 @@
 #include "ui/ReviewPane.h"
 #include "ui/TaxonConfirmDialog.h"
 #include "ui/TaxonPickerDialog.h"
+#include "ui/Theme.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -179,18 +181,27 @@ public:
         // rect collapses to a small stray sliver landing wherever Qt's
         // layout math happens to put it — visible as a small coloured
         // artifact wherever it overlaps our own caption text. We draw the
-        // background and every bit of content ourselves instead; the thick
-        // border below already makes selection unambiguous.
-        painter->fillRect(option.rect, option.palette.color(QPalette::Base));
-
+        // background and every bit of content ourselves instead; the
+        // rounded-and-filled selection highlight below already makes
+        // selection unambiguous.
+        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
         const bool selected = option.state & QStyle::State_Selected;
+
+        painter->fillRect(option.rect, option.palette.color(QPalette::Base));
+        if (selected) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(theme.selectedRow);
+            painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
+            painter->restore();
+        }
+
         painter->save();
-        painter->setRenderHint(QPainter::Antialiasing, false);
-        painter->setPen(QPen(selected ? option.palette.color(QPalette::Highlight)
-                                      : QColor(0, 0, 0),
-                            selected ? 3 : 1));
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(selected ? theme.primaryAccent : theme.border, selected ? 2 : 1));
         painter->setBrush(Qt::NoBrush);
-        painter->drawRect(option.rect.adjusted(1, 1, -2, -2));
+        painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
         painter->restore();
 
         // Fit the thumbnail into the decoration box ourselves (KeepAspectRatio,
@@ -214,13 +225,13 @@ public:
         const QString status = index.data(model::CaptureListModel::MatchStatusRole).toString();
         QColor colour;
         if (status == QLatin1String("auto"))
-            colour = QColor(0x2E, 0x7D, 0x32);
+            colour = theme.statusAuto;
         else if (status == QLatin1String("confirmed"))
-            colour = QColor(0x15, 0x65, 0xC0);
+            colour = theme.statusConfirmed;
         else if (status == QLatin1String("pending"))
-            colour = QColor(0xE6, 0x9A, 0x00);
+            colour = theme.statusPending;
         else
-            colour = QColor(0xC6, 0x28, 0x28);
+            colour = theme.statusUnmatched;
 
         const int d = 10;
         const QRect r = option.rect.adjusted(6, 6, 0, 0);
@@ -237,7 +248,7 @@ public:
             painter->save();
             painter->setRenderHint(QPainter::Antialiasing);
             painter->setPen(QPen(QColor(0, 0, 0, 90), 0.8));
-            painter->setBrush(QColor(0xFF, 0xC1, 0x07));
+            painter->setBrush(theme.bestShotGold);
             painter->drawPolygon(makeStar(QRectF(r.left() + d + 4, r.top() - 1, 13, 13)));
             painter->restore();
         }
@@ -277,9 +288,9 @@ public:
             for (int i = 0; i < badges.size(); ++i) {
                 const QRect pillRect(x, y, widths.at(i), pillH);
                 painter->setPen(Qt::NoPen);
-                painter->setBrush(QColor(0, 0, 0, 200));
+                painter->setBrush(theme.badgeBackground);
                 painter->drawRoundedRect(pillRect, pillH / 2.0, pillH / 2.0);
-                painter->setPen(Qt::white);
+                painter->setPen(theme.badgeText);
                 painter->drawText(pillRect, Qt::AlignCenter, badges.at(i));
                 x += widths.at(i) + gap;
             }
@@ -352,16 +363,24 @@ public:
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
                const QModelIndex &index) const override
     {
-        painter->fillRect(option.rect, option.palette.color(QPalette::Base));
-
+        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
         const bool selected = option.state & QStyle::State_Selected;
+
+        painter->fillRect(option.rect, option.palette.color(QPalette::Base));
+        if (selected) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(theme.selectedRow);
+            painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
+            painter->restore();
+        }
+
         painter->save();
-        painter->setRenderHint(QPainter::Antialiasing, false);
-        painter->setPen(QPen(selected ? option.palette.color(QPalette::Highlight)
-                                      : QColor(0, 0, 0),
-                            selected ? 3 : 1));
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(selected ? theme.primaryAccent : theme.border, selected ? 2 : 1));
         painter->setBrush(Qt::NoBrush);
-        painter->drawRect(option.rect.adjusted(1, 1, -2, -2));
+        painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
         painter->restore();
 
         const QIcon icon = index.data(Qt::DecorationRole).value<QIcon>();
@@ -638,6 +657,30 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 refreshCoverage();
             });
 
+    auto &lightroomImporter = m_app.lightroomImporter();
+    connect(&lightroomImporter, &lightroom::LightroomImporter::progress, this,
+            [this](int done, int total) {
+                statusBar()->showMessage(
+                    tr("Importing Lightroom keywords %1 / %2").arg(done).arg(total));
+                updateTaskProgress(tr("Importing Lightroom Catalog…"), done, total);
+            });
+    connect(&lightroomImporter, &lightroom::LightroomImporter::finished, this,
+            [this](lightroom::LightroomImportEngine::Stats stats) {
+                m_importLightroomAction->setEnabled(true);
+                endTaskProgress();
+                if (!stats.ok()) {
+                    statusBar()->showMessage(tr("Lightroom import failed: %1").arg(stats.error),
+                                             10000);
+                    return;
+                }
+                statusBar()->showMessage(
+                    tr("Lightroom catalog imported — %1 photo(s) matched, %2 keyword(s) resolved")
+                        .arg(stats.photosMatched)
+                        .arg(stats.keywordsResolved),
+                    8000);
+                startMatch();
+            });
+
     auto &scanner = m_app.scanService();
     connect(&scanner, &scan::ScanService::started, this, [this] { setScanUiRunning(true); });
     connect(&scanner, &scan::ScanService::progress, this, &MainWindow::onScanProgress);
@@ -661,7 +704,66 @@ void MainWindow::buildMenus()
 {
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
     QMenu *libraryMenu = menuBar()->addMenu(tr("&Library"));
+    QMenu *treeMenu = menuBar()->addMenu(tr("&Reference Tree"));
+    QMenu *matchingMenu = menuBar()->addMenu(tr("&Matching"));
+    m_viewMenu = menuBar()->addMenu(tr("&View"));
+    QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
 
+    buildFileMenu(fileMenu);
+    buildLibraryMenu(libraryMenu);
+    buildReferenceTreeMenu(treeMenu);
+    buildViewMenu();                  // must precede buildMatchingMenu(): creates m_viewReviewAction
+    buildMatchingMenu(matchingMenu);  // reuses m_matchAction + m_viewReviewAction
+    buildHelpMenu(helpMenu);
+    buildToolBar();                   // last: reuses actions from every menu above + m_filterCombo
+
+    // A local SQLite file doesn't have a meaningful "connected" state, so
+    // this only appears for a shared Postgres catalogue -- and it checks
+    // Database::backendFor() (what's actually open), not Settings, since
+    // that's what the indicator needs to be honest about.
+    if (Database::backendFor(m_app.database().connectionName())
+        == CatalogueDescriptor::Backend::Postgres) {
+        m_pgStatusLabel = new QLabel(this);
+        m_pgStatusLabel->setContentsMargins(0, 0, 8, 0);
+        menuBar()->setCornerWidget(m_pgStatusLabel, Qt::TopRightCorner);
+
+        const CatalogueDescriptor descriptor = m_app.settings().catalogueDescriptor();
+        const QString target = QStringLiteral("%1@%2:%3/%4")
+                                    .arg(descriptor.pgUser, descriptor.pgHost)
+                                    .arg(descriptor.pgPort)
+                                    .arg(descriptor.pgDbName);
+
+        m_pgMonitor = new PostgresConnectionMonitor(m_app.database().connectionName(), this);
+        connect(m_pgMonitor, &PostgresConnectionMonitor::connectedChanged, this,
+                [this, target](bool connected) {
+                    m_pgStatusLabel->setText(
+                        connected ? tr("● Postgres Connected")
+                                 : tr("● Postgres Disconnected"));
+                    m_pgStatusLabel->setStyleSheet(
+                        QStringLiteral("color: %1;")
+                            .arg(connected
+                                     ? pl::themeColors(pl::currentThemeVariant()).positive.name()
+                                     : pl::themeColors(pl::currentThemeVariant()).danger.name()));
+                    m_pgStatusLabel->setToolTip(
+                        connected ? tr("Connected to %1").arg(target)
+                                 : tr("Lost connection to %1").arg(target));
+                });
+        m_pgMonitor->start();
+    }
+}
+
+void MainWindow::buildFileMenu(QMenu *fileMenu)
+{
+    fileMenu->addAction(tr("&Catalogue Settings…"), this, &MainWindow::showCatalogueSettings);
+
+    fileMenu->addSeparator();
+    QAction *quit = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
+    quit->setShortcut(QKeySequence::Quit);
+    quit->setMenuRole(QAction::QuitRole);
+}
+
+void MainWindow::buildLibraryMenu(QMenu *libraryMenu)
+{
     m_addFolderAction = libraryMenu->addAction(tr("&Add Folder to Library…"),
                                                this, &MainWindow::addWatchedFolder);
     m_addFolderAction->setShortcut(QKeySequence::Open);
@@ -669,6 +771,10 @@ void MainWindow::buildMenus()
     m_manageFoldersAction = libraryMenu->addAction(tr("&Manage Library Folders…"),
                                                    this, &MainWindow::manageLibraryFolders);
 
+    m_importLightroomAction = libraryMenu->addAction(tr("Import &Lightroom Catalog…"),
+                                                     this, &MainWindow::importLightroom);
+
+    libraryMenu->addSeparator();
     m_scanAction = libraryMenu->addAction(tr("&Rescan Library"), this, &MainWindow::startScan);
     m_scanAction->setShortcut(QKeySequence::Refresh);
 
@@ -676,46 +782,43 @@ void MainWindow::buildMenus()
                                             &m_app.scanService(), &scan::ScanService::cancel);
     m_cancelAction->setEnabled(false);
 
+    libraryMenu->addSeparator();
+    libraryMenu->addAction(tr("Fix RAW Photo &Locations…"), this, &MainWindow::fixRawGeolocation);
+    m_fetchLocalitiesAction = libraryMenu->addAction(tr("Fetch Photo &Localities"),
+                                                     this, &MainWindow::fetchPhotoLocalities);
     libraryMenu->addAction(tr("Remove Photos With &Missing Files…"),
                            this, &MainWindow::removeMissingCaptures);
+}
 
-    fileMenu->addAction(tr("&Catalogue Settings…"), this, &MainWindow::showCatalogueSettings);
-
-    fileMenu->addAction(tr("Fix RAW Photo &Locations…"), this, &MainWindow::fixRawGeolocation);
-    m_fetchLocalitiesAction = fileMenu->addAction(tr("Fetch Photo &Localities"),
-                                                  this, &MainWindow::fetchPhotoLocalities);
-
-    fileMenu->addSeparator();
-    m_newTreeAction = fileMenu->addAction(tr("&New Reference Tree…"),
+void MainWindow::buildReferenceTreeMenu(QMenu *treeMenu)
+{
+    // m_projectCombo (in the Reference Trees dock) stays the persistent
+    // selector for which tree/project is active; every action here operates
+    // on whatever tree currentProjectId() currently returns.
+    m_newTreeAction = treeMenu->addAction(tr("&New Reference Tree…"),
                                           this, &MainWindow::newReferenceTree);
-    m_refreshTreeAction = fileMenu->addAction(tr("Re&fresh Reference Tree"),
-                                              this, &MainWindow::refreshReferenceTree);
-    m_addTaxonAction = fileMenu->addAction(tr("&Add Taxon to Reference Tree…"),
-                                           this, &MainWindow::addTaxonToReferenceTree);
-    m_deleteTreeAction = fileMenu->addAction(tr("&Delete Reference Tree…"),
+    m_deleteTreeAction = treeMenu->addAction(tr("&Delete Reference Tree…"),
                                              this, &MainWindow::deleteReferenceTree);
-    m_fetchInfraAction = fileMenu->addAction(tr("Fetch &Subspecies/Varieties…"),
+
+    treeMenu->addSeparator();
+    m_refreshTreeAction = treeMenu->addAction(tr("Re&fresh Reference Tree"),
+                                              this, &MainWindow::refreshReferenceTree);
+    m_addTaxonAction = treeMenu->addAction(tr("&Add Taxon to Reference Tree…"),
+                                           this, &MainWindow::addTaxonToReferenceTree);
+    m_fetchInfraAction = treeMenu->addAction(tr("Fetch &Subspecies/Varieties…"),
                                              this, &MainWindow::fetchInfraspecificTaxa);
-    m_fetchRefPhotosAction = fileMenu->addAction(tr("Fetch Reference &Photos"),
-                                                 this, &MainWindow::fetchReferencePhotos);
-    m_importChecklistAction = fileMenu->addAction(tr("&Import Checklist…"),
+    m_importChecklistAction = treeMenu->addAction(tr("&Import Checklist…"),
                                                   this, &MainWindow::importChecklist);
-    m_matchAction = fileMenu->addAction(tr("&Match Library"), this, &MainWindow::startMatch);
-    fileMenu->addAction(tr("&Learned Names…"), this, [this] {
-        AliasEditorDialog dialog(m_app.database(), this);
-        connect(&dialog, &AliasEditorDialog::aliasesChanged, this, [this] {
-            statusBar()->showMessage(
-                tr("Forgotten names take effect on the next Match Library run."), 6000);
-        });
-        dialog.exec();
-    });
 
-    fileMenu->addSeparator();
-    QAction *quit = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
-    quit->setShortcut(QKeySequence::Quit);
-    quit->setMenuRole(QAction::QuitRole);
+    treeMenu->addSeparator();
+    m_fetchRefPhotosAction = treeMenu->addAction(tr("Fetch Reference &Photos"),
+                                                 this, &MainWindow::fetchReferencePhotos);
+}
 
-    m_viewMenu = menuBar()->addMenu(tr("&View"));
+void MainWindow::buildViewMenu()
+{
+    m_viewMenu->setToolTipsVisible(true);   // so the Display submenu's tooltip shows
+
     m_viewModeGroup = new QActionGroup(this);
     m_viewModeGroup->setExclusive(true);
 
@@ -734,7 +837,66 @@ void MainWindow::buildMenus()
     m_viewReviewAction->setObjectName(QStringLiteral("viewReviewAction"));
     m_viewModeGroup->addAction(m_viewReviewAction);
 
-    QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
+    m_viewMenu->addSeparator();
+    auto *displayMenu = m_viewMenu->addMenu(tr("&Display…"));
+    displayMenu->menuAction()->setToolTip(
+        tr("Choose what to show under each photo, in the Photos of Tree Selection "
+           "and All Library Photos grids"));
+
+    struct FieldOption { int bit; QString label; };
+    const QList<FieldOption> fieldOptions = {
+        {model::CaptureListModel::CaptionName, tr("Name")},
+        {model::CaptureListModel::CaptionTaxon, tr("Matched Taxon")},
+        {model::CaptureListModel::CaptionDate, tr("Date Taken")},
+        {model::CaptureListModel::CaptionFilename, tr("Filename")},
+        {model::CaptureListModel::CaptionLocality, tr("Locality")},
+        {model::CaptureListModel::CaptionFileType, tr("File Type")},
+    };
+    const int initialFields = m_app.settings().captureCaptionFields();
+    for (const FieldOption &opt : fieldOptions) {
+        auto *box = new QCheckBox(opt.label, displayMenu);
+        box->setChecked(initialFields & opt.bit);
+        connect(box, &QCheckBox::toggled, this, [this, bit = opt.bit](bool on) {
+            int fields = m_app.settings().captureCaptionFields();
+            fields = on ? (fields | bit) : (fields & ~bit);
+            applyCaptionFields(fields);
+        });
+        auto *action = new QWidgetAction(displayMenu);
+        action->setDefaultWidget(box);
+        displayMenu->addAction(action);
+    }
+
+    m_viewMenu->addSeparator();
+    m_darkModeAction = m_viewMenu->addAction(tr("&Dark Mode"));
+    m_darkModeAction->setCheckable(true);
+    m_darkModeAction->setObjectName(QStringLiteral("darkModeAction"));
+    m_darkModeAction->setChecked(m_app.settings().darkModeEnabled());
+    connect(m_darkModeAction, &QAction::toggled, this, [this](bool on) {
+        m_app.settings().setDarkModeEnabled(on);
+        pl::applyTheme(*qApp, on ? pl::ThemeVariant::Dark : pl::ThemeVariant::Light);
+    });
+}
+
+void MainWindow::buildMatchingMenu(QMenu *matchingMenu)
+{
+    m_matchAction = matchingMenu->addAction(tr("&Match Library"), this, &MainWindow::startMatch);
+
+    matchingMenu->addSeparator();
+    // Same QAction as View's radio group -- Qt keeps both menus' copies in
+    // sync (checked state, QActionGroup exclusivity) since they're one object.
+    matchingMenu->addAction(m_viewReviewAction);
+    matchingMenu->addAction(tr("&Learned Names…"), this, [this] {
+        AliasEditorDialog dialog(m_app.database(), this);
+        connect(&dialog, &AliasEditorDialog::aliasesChanged, this, [this] {
+            statusBar()->showMessage(
+                tr("Forgotten names take effect on the next Match Library run."), 6000);
+        });
+        dialog.exec();
+    });
+}
+
+void MainWindow::buildHelpMenu(QMenu *helpMenu)
+{
     QAction *helpContents = helpMenu->addAction(
         tr("%1 &Help").arg(QString::fromLatin1(kAppName)), this, &MainWindow::showHelp);
     helpContents->setShortcut(QKeySequence::HelpContents);
@@ -771,16 +933,18 @@ void MainWindow::buildMenus()
             [this](const QString &err) {
                 statusBar()->showMessage(tr("Update check failed: %1").arg(err), 8000);
             });
+}
 
+void MainWindow::buildToolBar()
+{
     QToolBar *toolbar = addToolBar(tr("Library"));
     toolbar->setObjectName(QStringLiteral("libraryToolBar"));
     toolbar->setMovable(false);
     toolbar->addAction(m_addFolderAction);
     toolbar->addAction(m_scanAction);
     toolbar->addAction(m_cancelAction);
+
     toolbar->addSeparator();
-    toolbar->addAction(m_newTreeAction);
-    toolbar->addAction(m_importChecklistAction);
     toolbar->addAction(m_matchAction);
 
     toolbar->addSeparator();
@@ -801,73 +965,6 @@ void MainWindow::buildMenus()
         updateEmptyState();
     });
     toolbar->addWidget(m_filterCombo);
-
-    toolbar->addSeparator();
-    auto *displayButton = new QToolButton(toolbar);
-    displayButton->setText(tr("Display…"));
-    displayButton->setToolTip(
-        tr("Choose what to show under each photo, in the Photos of Tree Selection "
-           "and All Library Photos grids"));
-    displayButton->setPopupMode(QToolButton::InstantPopup);
-    auto *displayMenu = new QMenu(displayButton);
-    displayButton->setMenu(displayMenu);
-    toolbar->addWidget(displayButton);
-
-    struct FieldOption { int bit; QString label; };
-    const QList<FieldOption> fieldOptions = {
-        {model::CaptureListModel::CaptionName, tr("Name")},
-        {model::CaptureListModel::CaptionTaxon, tr("Matched Taxon")},
-        {model::CaptureListModel::CaptionDate, tr("Date Taken")},
-        {model::CaptureListModel::CaptionFilename, tr("Filename")},
-        {model::CaptureListModel::CaptionLocality, tr("Locality")},
-        {model::CaptureListModel::CaptionFileType, tr("File Type")},
-    };
-    const int initialFields = m_app.settings().captureCaptionFields();
-    for (const FieldOption &opt : fieldOptions) {
-        auto *box = new QCheckBox(opt.label, displayMenu);
-        box->setChecked(initialFields & opt.bit);
-        connect(box, &QCheckBox::toggled, this, [this, bit = opt.bit](bool on) {
-            int fields = m_app.settings().captureCaptionFields();
-            fields = on ? (fields | bit) : (fields & ~bit);
-            applyCaptionFields(fields);
-        });
-        auto *action = new QWidgetAction(displayMenu);
-        action->setDefaultWidget(box);
-        displayMenu->addAction(action);
-    }
-
-    // A local SQLite file doesn't have a meaningful "connected" state, so
-    // this only appears for a shared Postgres catalogue -- and it checks
-    // Database::backendFor() (what's actually open), not Settings, since
-    // that's what the indicator needs to be honest about.
-    if (Database::backendFor(m_app.database().connectionName())
-        == CatalogueDescriptor::Backend::Postgres) {
-        m_pgStatusLabel = new QLabel(this);
-        m_pgStatusLabel->setContentsMargins(0, 0, 8, 0);
-        menuBar()->setCornerWidget(m_pgStatusLabel, Qt::TopRightCorner);
-
-        const CatalogueDescriptor descriptor = m_app.settings().catalogueDescriptor();
-        const QString target = QStringLiteral("%1@%2:%3/%4")
-                                    .arg(descriptor.pgUser, descriptor.pgHost)
-                                    .arg(descriptor.pgPort)
-                                    .arg(descriptor.pgDbName);
-
-        m_pgMonitor = new PostgresConnectionMonitor(m_app.database().connectionName(), this);
-        connect(m_pgMonitor, &PostgresConnectionMonitor::connectedChanged, this,
-                [this, target](bool connected) {
-                    m_pgStatusLabel->setText(
-                        connected ? tr("● Postgres Connected")
-                                 : tr("● Postgres Disconnected"));
-                    m_pgStatusLabel->setStyleSheet(
-                        QStringLiteral("color: %1;").arg(connected
-                                                             ? QStringLiteral("#2e7d32")
-                                                             : QStringLiteral("#c62828")));
-                    m_pgStatusLabel->setToolTip(
-                        connected ? tr("Connected to %1").arg(target)
-                                 : tr("Lost connection to %1").arg(target));
-                });
-        m_pgMonitor->start();
-    }
 }
 
 void MainWindow::buildReferenceTreeDock()
@@ -940,6 +1037,12 @@ void MainWindow::buildReferenceTreeDock()
             this, &MainWindow::showTreeContextMenu);
 
     m_coveragePanel = new CoveragePanel(panel);
+    connect(m_coveragePanel, &CoveragePanel::tierClicked, this,
+            [this](const QString &status) { applyThreatenedFilter(false, status); });
+    connect(m_coveragePanel, &CoveragePanel::anyThreatenedClicked, this,
+            [this] { applyThreatenedFilter(true, QString()); });
+    connect(m_coveragePanel, &CoveragePanel::clearFilterRequested, this,
+            [this] { applyThreatenedFilter(false, QString()); });
 
     auto *split = new QSplitter(Qt::Vertical, panel);
     split->addWidget(m_treeView);
@@ -1054,6 +1157,39 @@ void MainWindow::mutateTreePreservingState(const std::function<void()> &mutate)
     m_restoringTreeState = false;
 }
 
+void MainWindow::applyThreatenedFilter(bool anyThreatened, const QString &status)
+{
+    QString normalisedStatus = status;
+    const bool wasActive = m_treeModel->threatenedOnly() || !m_treeModel->statusFilter().isEmpty();
+
+    // Toggle off: re-clicking the currently active tier/summary clears it.
+    if (m_treeModel->threatenedOnly() == anyThreatened
+        && m_treeModel->statusFilter() == normalisedStatus && wasActive) {
+        anyThreatened = false;
+        normalisedStatus.clear();
+    }
+    if (m_treeModel->threatenedOnly() == anyThreatened
+        && m_treeModel->statusFilter() == normalisedStatus)
+        return;
+
+    // mutateTreePreservingState() normally re-selects m_lastSelectedTaxon when
+    // nothing is currently selected; that must not happen here, since "no
+    // node selected" is exactly the trigger for the aggregate-scope path in
+    // onTreeSelectionChanged().
+    m_lastSelectedTaxon = 0;
+    mutateTreePreservingState([this, anyThreatened, normalisedStatus] {
+        m_treeModel->setThreatenedOnly(anyThreatened);
+        m_treeModel->setStatusFilter(normalisedStatus);
+    });
+
+    const bool nowActive = anyThreatened || !normalisedStatus.isEmpty();
+    if (nowActive && !wasActive)
+        m_treeView->expandAll();   // the pruned tree is small; unlike
+                                    // photographedOnly, a full expand is cheap
+    m_coveragePanel->setActiveStatusFilter(anyThreatened, normalisedStatus);
+    onTreeSelectionChanged();
+}
+
 void MainWindow::rebuildRankFilterMenu()
 {
     const QStringList ranks = m_treeModel->availableRanks();
@@ -1093,18 +1229,56 @@ void MainWindow::onTreeSelectionChanged()
     if (m_selectedTaxon > 0)
         m_lastSelectedTaxon = m_selectedTaxon;
     const int projectScope = currentProjectId();
+
+    // With no node selected, an active threatened-status filter narrows the
+    // photo tabs to the (possibly scattered) set of matching taxa instead of
+    // "the whole tree" -- selecting a specific node always takes priority.
+    const bool anyThreatened = m_treeModel->threatenedOnly();
+    const QString statusFilter = m_treeModel->statusFilter();
+    const bool useStatusScope = m_selectedTaxon <= 0 && (anyThreatened || !statusFilter.isEmpty());
+    const QList<qint64> statusTaxa = useStatusScope
+        ? (anyThreatened ? m_treeModel->anyThreatenedTaxa()
+                         : m_treeModel->taxaWithStatus(statusFilter))
+        : QList<qint64>();
+
     // Both "Photos of Tree Selection" and "My Best Shots" are confined to the
     // active reference tree; a taxon scope narrows them further to one branch.
-    m_taxonModel->setScope(projectScope, m_selectedTaxon);
-    if (m_refPhotoModel)
-        m_refPhotoModel->setScope(m_selectedTaxon);
-    if (m_bestShotModel)
-        m_bestShotModel->setScope(projectScope, m_selectedTaxon);
+    if (useStatusScope) {
+        m_taxonModel->setTaxonSetScope(projectScope, statusTaxa);
+        if (m_refPhotoModel)
+            m_refPhotoModel->setTaxonSetScope(statusTaxa);
+        if (m_bestShotModel)
+            m_bestShotModel->setTaxonSetScope(projectScope, statusTaxa);
+    } else {
+        m_taxonModel->setScope(projectScope, m_selectedTaxon);
+        if (m_refPhotoModel)
+            m_refPhotoModel->setScope(m_selectedTaxon);
+        if (m_bestShotModel)
+            m_bestShotModel->setScope(projectScope, m_selectedTaxon);
+    }
     if (m_reviewPane) {
         m_reviewPane->setTreeTaxon(
-            m_selectedTaxon,
-            m_selectedTaxon > 0 ? idx.data(model::TaxonomyTreeModel::NameRole).toString()
-                                : QString());
+            useStatusScope ? 0 : m_selectedTaxon,
+            (!useStatusScope && m_selectedTaxon > 0)
+                ? idx.data(model::TaxonomyTreeModel::NameRole).toString()
+                : QString());
+    }
+
+    if (useStatusScope) {
+        m_taxonInfo->setText(
+            anyThreatened
+                ? tr("<i>Showing every photo of a threatened species in this tree.</i>")
+                : tr("<i>Showing every photo of a %1 species in this tree.</i>")
+                      .arg(statusFilter.toHtmlEscaped()));
+        m_taxonRepImage->clear();
+        if (m_bestShotHeader)
+            m_bestShotHeader->setText(
+                anyThreatened
+                    ? tr("Your best shots of threatened species in \"%1\".")
+                          .arg(m_projectCombo->currentText())
+                    : tr("Your best shots of %1 species in \"%2\".")
+                          .arg(statusFilter, m_projectCombo->currentText()));
+        return;
     }
 
     if (m_selectedTaxon <= 0) {
@@ -1129,7 +1303,8 @@ void MainWindow::onTreeSelectionChanged()
     QString html = QStringLiteral("<h3 style='margin:0'>%1</h3>").arg(cov.name.toHtmlEscaped());
     if (!cov.commonName.isEmpty() && cov.commonName != cov.name)
         html += QStringLiteral("<div>%1</div>").arg(cov.commonName.toHtmlEscaped());
-    html += QStringLiteral("<div style='color:gray'>%1</div>").arg(cov.rank);
+    html += QStringLiteral("<div style='color:%1'>%2</div>")
+                .arg(pl::themeColors(pl::currentThemeVariant()).mutedText.name(), cov.rank);
     if (!cov.status.isEmpty())
         html += QStringLiteral("<div><b>%1</b></div>").arg(cov.status.toHtmlEscaped());
 
@@ -1140,7 +1315,8 @@ void MainWindow::onTreeSelectionChanged()
                 .arg(cov.captureCount == 1 ? tr("1 capture")
                                            : tr("%1 captures").arg(cov.captureCount));
     if (!cov.newestCapture.isEmpty())
-        html += QStringLiteral("<p style='color:gray'>Most recent: %1</p>").arg(cov.newestCapture);
+        html += QStringLiteral("<p style='color:%1'>Most recent: %2</p>")
+                    .arg(pl::themeColors(pl::currentThemeVariant()).mutedText.name(), cov.newestCapture);
     m_taxonInfo->setText(html);
 
     const auto rep = coverage::representativeFor(m_app.database().connectionName(),
@@ -1221,6 +1397,7 @@ void MainWindow::updateMissingList()
               });
 
     const QString filter = m_missingSearch ? m_missingSearch->text().trimmed() : QString();
+    const QColor warning = pl::themeColors(pl::currentThemeVariant()).warning;
     for (const auto &tc : topLevelList) {
         QList<coverage::TaxonCoverage> children = childrenByParent.value(tc.inatId);
         std::sort(children.begin(), children.end(),
@@ -1241,14 +1418,14 @@ void MainWindow::updateMissingList()
         parentItem->setText(0, missingTaxonLabel(tc));
         parentItem->setData(0, Qt::UserRole, tc.inatId);
         if (!tc.status.isEmpty())
-            parentItem->setForeground(0, QColor(0xB0, 0x50, 0x00));
+            parentItem->setForeground(0, warning);
 
         for (const auto &child : visibleChildren) {
             auto *childItem = new QTreeWidgetItem(parentItem);
             childItem->setText(0, missingTaxonLabel(child));
             childItem->setData(0, Qt::UserRole, child.inatId);
             if (!child.status.isEmpty())
-                childItem->setForeground(0, QColor(0xB0, 0x50, 0x00));
+                childItem->setForeground(0, warning);
         }
         parentItem->setExpanded(true);
     }
@@ -1256,8 +1433,8 @@ void MainWindow::updateMissingList()
     const int missingTab = m_tabs->indexOf(m_missingList->parentWidget());
     if (missingTab >= 0)
         m_tabs->setTabText(missingTab, missing.isEmpty()
-                                          ? tr("Missing Taxa")
-                                          : tr("Missing Taxa (%1)").arg(missing.size()));
+                                          ? tr("Unphotographed Taxa")
+                                          : tr("Unphotographed Taxa (%1)").arg(missing.size()));
 }
 
 void MainWindow::reassignTaxonPhotos()
@@ -1865,6 +2042,31 @@ void MainWindow::importChecklist()
     m_checklistImporter->start(request);
 }
 
+void MainWindow::importLightroom()
+{
+    if (m_app.lightroomImporter().isRunning())
+        return;
+    if (currentProjectId() <= 0) {
+        QMessageBox::information(this, tr("Import Lightroom Catalog"),
+                                tr("Select or create a reference tree first."));
+        return;
+    }
+    if (!ensureCatalogueReachable())
+        return;
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Import Lightroom Catalog"), QDir::homePath(),
+        tr("Lightroom catalogs (*.lrcat);;All files (*)"));
+    if (path.isEmpty())
+        return;
+
+    m_importLightroomAction->setEnabled(false);
+    statusBar()->showMessage(tr("Importing Lightroom catalog…"));
+    beginTaskProgress(tr("Importing Lightroom Catalog"),
+                      [this] { m_app.lightroomImporter().cancel(); });
+    m_app.lightroomImporter().start(path);
+}
+
 void MainWindow::reloadProjectList()
 {
     const int previous = m_projectCombo->currentData().isValid()
@@ -2421,12 +2623,14 @@ void MainWindow::buildCentralWidget()
     });
 
     m_tabs = new QTabWidget(this);
+    // "Photos of Tree Selection" must stay tab 0: several call sites jump to
+    // it via m_tabs->widget(0) rather than by name/index lookup.
     m_tabs->addTab(buildBrowsePage(), tr("Photos of Tree Selection"));
     m_tabs->addTab(buildMapPage(), tr("Map"));
-    m_tabs->addTab(buildMissingPage(), tr("Missing Taxa"));
+    m_tabs->addTab(buildBestShotsPage(), tr("My Best Shots"));
+    m_tabs->addTab(buildMissingPage(), tr("Unphotographed Taxa"));
     m_tabs->addTab(buildReferencePhotosPage(), tr("Reference Photos"));
     m_tabs->addTab(buildInatDownloadPage(), tr("Download from iNaturalist"));
-    m_tabs->addTab(buildBestShotsPage(), tr("My Best Shots"));
 
     m_centralStack = new QStackedWidget(this);
     m_centralStack->addWidget(m_tabs);        // Reference Tree mode
@@ -3257,7 +3461,8 @@ void MainWindow::showCatalogueSettings()
     // so take effect via a full relaunch instead of asking the user to do it
     // manually -- a fresh process just re-reads the now-updated settings.
     if (m_app.scanService().isRunning() || m_app.matchService().isRunning()
-        || m_builder->isRunning() || m_infraFiller->isRunning()) {
+        || m_app.lightroomImporter().isRunning() || m_builder->isRunning()
+        || m_infraFiller->isRunning()) {
         const auto reply = QMessageBox::question(
             this, tr("Catalogue Settings"),
             tr("PhotoLife needs to restart to use the new catalogue, but a "
@@ -3267,6 +3472,7 @@ void MainWindow::showCatalogueSettings()
             return;
         m_app.scanService().cancel();
         m_app.matchService().cancel();
+        m_app.lightroomImporter().cancel();
         m_builder->cancel();
         m_infraFiller->cancel();
     }
