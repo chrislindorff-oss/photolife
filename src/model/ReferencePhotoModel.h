@@ -56,6 +56,11 @@ public:
     // remote Postgres round trip.
     void setScope(qint64 taxonInatId);
 
+    // An explicit set of taxon ids (no subtree walk) -- for "every reference
+    // photo of taxa carrying conservation status X". Mutually exclusive with
+    // setScope(): applying one clears the other's narrowing.
+    void setTaxonSetScope(const QList<qint64> &taxonInatIds);
+
     void reload();
 
     int speciesCount() const { return int(m_rows.size()); }
@@ -80,6 +85,7 @@ public:
     {
         int projectId = -1;
         qint64 scope = 0;
+        QList<qint64> scopeSet;   // empty = disabled; see setTaxonSetScope()
     };
 
 signals:
@@ -104,6 +110,7 @@ private:
     QIcon m_placeholder;
     int m_projectId = -1;
     qint64 m_scope = 0;
+    QList<qint64> m_scopeSet;
     QThread *m_workerThread = nullptr;
     Worker *m_worker = nullptr;
     quint64 m_generation = 0;   // bumped per request; discards superseded replies

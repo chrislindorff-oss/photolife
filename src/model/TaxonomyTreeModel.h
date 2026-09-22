@@ -48,6 +48,25 @@ public:
     void setPhotographedOnly(bool on);
     bool photographedOnly() const { return m_photographedOnly; }
 
+    // When on, hides every taxon with no non-empty conservation status
+    // anywhere in its subtree (any tier).
+    void setThreatenedOnly(bool on);
+    bool threatenedOnly() const { return m_threatenedOnly; }
+
+    // "" = off. Otherwise hides every taxon with no species carrying exactly
+    // this status string anywhere in its subtree.
+    void setStatusFilter(const QString &status);
+    QString statusFilter() const { return m_statusFilter; }
+
+    // iNat ids of species (rank == "species" exactly, matching how
+    // ProjectCoverage::byStatus/threatenedTotal are tallied) currently
+    // carrying this exact status, ignoring active filters -- scans the whole
+    // project like findTaxa() does.
+    QList<qint64> taxaWithStatus(const QString &status) const;
+
+    // Same, but any non-empty status (species-only, matching threatenedTotal).
+    QList<qint64> anyThreatenedTaxa() const;
+
     // The distinct ranks present in the current project's tree, coarsest first
     // (kingdom, phylum, ... species, subspecies, ...).
     QStringList availableRanks() const;
@@ -94,6 +113,8 @@ private:
     QHash<qint64, Node *> m_byId;           // live nodes by iNat id, rebuilt each rebuild()
     pl::coverage::ProjectCoverage m_coverage;
     bool m_photographedOnly = false;
+    bool m_threatenedOnly = false;
+    QString m_statusFilter;
     QSet<QString> m_hiddenRanks;
 };
 

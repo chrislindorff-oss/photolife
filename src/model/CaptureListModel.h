@@ -103,6 +103,12 @@ public:
     // separate setters would otherwise mean two redundant reloads per click.
     void setScope(int projectId, qint64 taxonInatId);
 
+    // Combined project scope + an explicit set of taxon ids (no subtree walk)
+    // -- for "every photo of taxa carrying conservation status X". Mutually
+    // exclusive with setScope()/setTaxonScope(): applying one clears the
+    // other's narrowing so they can't silently combine.
+    void setTaxonSetScope(int projectId, const QList<qint64> &taxonInatIds);
+
     // When true, the grid is restricted to captures the user has starred as a
     // best shot (the best_shot table). Combines with the status and taxon
     // filters.
@@ -161,6 +167,7 @@ public:
         qint64 taxonScope = 0;
         int projectScope = 0;
         bool bestShotOnly = false;
+        QList<qint64> taxonSet;   // empty = disabled; see setTaxonSetScope()
     };
 
 signals:
@@ -190,6 +197,7 @@ private:
     qint64 m_taxonScope = 0;
     int m_projectScope = 0;
     bool m_bestShotOnly = false;
+    QList<qint64> m_taxonSet;
     int m_captionFields = CaptionName;
 };
 

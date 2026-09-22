@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QSet>
 #include <QString>
 
 namespace pl::coverage {
@@ -24,6 +25,8 @@ struct TaxonCoverage
 
     bool hasOwnPhotos = false;    // this exact taxon has >= 1 matched capture
     bool subtreeHasPhotos = false;
+    bool subtreeThreatened = false;   // any species in the subtree carries a status
+    QSet<QString> subtreeStatuses;    // exact status strings among species in the subtree
 
     double photographedFraction() const
     {

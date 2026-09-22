@@ -26,6 +26,7 @@ private slots:
     void setProjectLoadsSynchronously();
     void setScopeReloadsAsynchronously();
     void rapidSetScopeCallsOnlyApplyTheLatest();
+    void taxonSetScopeSelectsExactSpeciesAndClearsOnPlainScope();
 
 private:
     std::unique_ptr<QTemporaryDir> m_dbDir;
@@ -128,6 +129,26 @@ void TestReferencePhotoModel::rapidSetScopeCallsOnlyApplyTheLatest()
     QTest::qWait(200);   // let any (incorrectly superseding) stale reply land
     QCOMPARE(model.speciesCount(), 1);
     QCOMPARE(model.index(0).data(ReferencePhotoModel::InatIdRole).toLongLong(), qint64(901));
+}
+
+void TestReferencePhotoModel::taxonSetScopeSelectsExactSpeciesAndClearsOnPlainScope()
+{
+    ReferencePhotoModel model(*m_db, *m_photos, this);
+    model.setProject(m_project);
+    QCOMPARE(model.speciesCount(), 2);
+
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    model.setTaxonSetScope({qint64(901)});   // one of the two species, by id
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.speciesCount(), 1);
+    QCOMPARE(model.index(0).data(ReferencePhotoModel::InatIdRole).toLongLong(), qint64(901));
+
+    // A plain scope call (0 == whole project) must drop the stale set filter,
+    // not silently keep narrowing to {901}.
+    spy.clear();
+    model.setScope(0);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.speciesCount(), 2);
 }
 
 QTEST_MAIN(TestReferencePhotoModel)

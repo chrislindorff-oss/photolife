@@ -42,6 +42,7 @@ private slots:
     void filterToggleKeepsExpansionAndSelection();
     void findTaxaMatchesNameAndCommonName();
     void hiddenRanksReparentChildrenToNearestVisibleAncestor();
+    void statusFilterHidesNonMatchingSubtreesAndFindsSpeciesOnly();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -297,6 +298,54 @@ void TestTaxonomyTreeModel::hiddenRanksReparentChildrenToNearestVisibleAncestor(
     model.setHiddenRanks({});   // invalidates `family`; re-fetch before touching the model again
     QVERIFY(model.indexForTaxon(800).isValid());   // genus level restored
     QCOMPARE(model.rowCount(model.index(0, 0)), 2);
+}
+
+void TestTaxonomyTreeModel::statusFilterHidesNonMatchingSubtreesAndFindsSpeciesOnly()
+{
+    // An infraspecific taxon under Diuris pardina (900) carrying its own
+    // status, to prove taxaWithStatus()/anyThreatenedTaxa() stay species-only.
+    m_store->upsertTaxon(taxon(950, 900, QStringLiteral("variety"), 5,
+                               QStringLiteral("Diuris pardina var. x")));
+    m_store->addProjectTaxon(m_projectId, 950, false, false);
+
+    coverage::ProjectCoverage cov;
+    cov.byTaxon[900].status = QStringLiteral("Endangered");
+    cov.byTaxon[900].subtreeThreatened = true;
+    cov.byTaxon[900].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[800].subtreeThreatened = true;
+    cov.byTaxon[800].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[47217].subtreeThreatened = true;
+    cov.byTaxon[47217].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[950].status = QStringLiteral("Vulnerable");   // infraspecific, not rolled up
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+
+    QCOMPARE(model.taxaWithStatus(QStringLiteral("Endangered")), QList<qint64>{qint64(900)});
+    QCOMPARE(model.taxaWithStatus(QStringLiteral("Vulnerable")), QList<qint64>{});   // species-only
+    QCOMPARE(model.anyThreatenedTaxa(), QList<qint64>{qint64(900)});
+
+    model.setStatusFilter(QStringLiteral("Endangered"));
+    QCOMPARE(model.rowCount(), 1);          // family survives
+    const QModelIndex family = model.index(0, 0);
+    QCOMPARE(model.rowCount(family), 1);    // only the Diuris genus survives
+    QCOMPARE(model.data(model.index(0, 0, family), Qt::DisplayRole).toString(),
+             QStringLiteral("Diuris"));
+    QVERIFY(model.indexForTaxon(900).isValid());
+    QVERIFY(!model.indexForTaxon(801).isValid());   // Pterostylis hidden
+
+    model.setStatusFilter(QString());
+    QVERIFY(model.indexForTaxon(801).isValid());    // restored
+
+    model.setThreatenedOnly(true);
+    QVERIFY(model.indexForTaxon(900).isValid());
+    QVERIFY(!model.indexForTaxon(801).isValid());
+
+    // photographedOnly ANDs with threatenedOnly: a status match with no
+    // photos is still hidden once photographedOnly is also on.
+    model.setPhotographedOnly(true);
+    QVERIFY(!model.indexForTaxon(900).isValid());
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

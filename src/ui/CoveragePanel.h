@@ -2,6 +2,8 @@
 
 #include "coverage/CoverageCalculator.h"
 
+#include <QHash>
+#include <QString>
 #include <QWidget>
 #include <QtGlobal>
 
@@ -31,13 +33,33 @@ public:
 
     void clear();
 
+    // Highlights whichever status is the active tree filter (both
+    // false/empty = no filter) and shows/hides the "Clear filter" link.
+    void setActiveStatusFilter(bool anyThreatened, const QString &tier);
+
+signals:
+    // Emitted when the user clicks a specific tier's label (e.g. "Endangered").
+    void tierClicked(const QString &status);
+    // Emitted when the user clicks the overall "N of M threatened" summary.
+    void anyThreatenedClicked();
+    // Emitted when the user clicks the "Clear filter" link.
+    void clearFilterRequested();
+
 private:
+    void applyHighlight();
+
     QLabel *m_headline;
     QProgressBar *m_bar;
     QLabel *m_threatened;
     QLabel *m_newest;
     QLabel *m_cacheUsage;
+    QLabel *m_clearFilterLink;
     QFormLayout *m_tiers;
+    QHash<QString, QLabel *> m_tierLabels;
+    bool m_activeAny = false;
+    QString m_activeTier;
+    int m_threatenedWithPhotos = 0;
+    int m_threatenedTotal = 0;
 };
 
 } // namespace pl

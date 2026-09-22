@@ -236,7 +236,9 @@ void CaptureListModel::setStatusFilter(const QString &status)
 
 void CaptureListModel::setTaxonScope(qint64 taxonInatId)
 {
-    if (m_taxonScope == taxonInatId)
+    const bool hadSet = !m_taxonSet.isEmpty();
+    m_taxonSet.clear();
+    if (m_taxonScope == taxonInatId && !hadSet)
         return;
     m_taxonScope = taxonInatId;
     reloadAsync();
@@ -253,11 +255,24 @@ void CaptureListModel::setProjectScope(int projectId)
 
 void CaptureListModel::setScope(int projectId, qint64 taxonInatId)
 {
+    const bool hadSet = !m_taxonSet.isEmpty();
+    m_taxonSet.clear();
     const int normalised = projectId > 0 ? projectId : 0;
-    if (m_projectScope == normalised && m_taxonScope == taxonInatId)
+    if (m_projectScope == normalised && m_taxonScope == taxonInatId && !hadSet)
         return;
     m_projectScope = normalised;
     m_taxonScope = taxonInatId;
+    reloadAsync();
+}
+
+void CaptureListModel::setTaxonSetScope(int projectId, const QList<qint64> &taxonInatIds)
+{
+    const int normalised = projectId > 0 ? projectId : 0;
+    if (m_projectScope == normalised && m_taxonScope == 0 && m_taxonSet == taxonInatIds)
+        return;
+    m_projectScope = normalised;
+    m_taxonScope = 0;
+    m_taxonSet = taxonInatIds;
     reloadAsync();
 }
 
@@ -313,7 +328,8 @@ void CaptureListModel::reload()
     m_rowsByHash.clear();
 
     if (m_db.isOpen()) {
-        const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly};
+        const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly,
+                                 m_taxonSet};
         m_rows = fetchRows(QSqlDatabase::database(m_db.connectionName(), false), params);
         for (int i = 0; i < m_rows.size(); ++i) {
             if (!m_rows[i].previewHash.isEmpty())
@@ -341,7 +357,7 @@ void CaptureListModel::reloadAsync()
     ensureWorker();
     const quint64 generation = ++m_generation;
     emit requestFetch(generation, QueryParams{m_statusFilter, m_taxonScope, m_projectScope,
-                                              m_bestShotOnly});
+                                              m_bestShotOnly, m_taxonSet});
 }
 
 void CaptureListModel::onRowsReady(quint64 generation, QList<Row> rows)
@@ -380,7 +396,22 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
 
         const qint64 taxonScope = params.taxonScope;
         const int projectScope = params.projectScope;
-        if (projectScope > 0 && taxonScope > 0) {
+        if (!params.taxonSet.isEmpty()) {
+            QStringList placeholders(params.taxonSet.size(), QStringLiteral("?"));
+            if (projectScope > 0) {
+                // Still confine to this reference tree, same reasoning as the
+                // plain-taxonScope+projectScope branch below.
+                clauses << QStringLiteral(
+                    "matched_id IN ("
+                    "  SELECT pt.taxon_id FROM project_taxon pt JOIN taxon pt_t ON pt_t.id = pt.taxon_id "
+                    "  WHERE pt.project_id = ? AND pt_t.inat_id IN (%1))")
+                              .arg(placeholders.join(QLatin1Char(',')));
+            } else {
+                clauses << QStringLiteral(
+                    "matched_id IN (SELECT id FROM taxon WHERE inat_id IN (%1))")
+                              .arg(placeholders.join(QLatin1Char(',')));
+            }
+        } else if (projectScope > 0 && taxonScope > 0) {
             // Descendants of the selected taxon, then narrowed to taxa that are
             // actually in this reference tree — otherwise selecting an ancestor
             // node a tree only shows for structure (up to the synthetic "Life"
@@ -448,10 +479,17 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             "     AND g.lon_round = ROUND(CAST(c.longitude AS NUMERIC), 3) "
             ")") + where + QStringLiteral(
             " ORDER BY (captured_on IS NULL), captured_on DESC, id DESC"));
-        if (projectScope > 0)
-            q.addBindValue(projectScope);
-        if (taxonScope > 0)
-            q.addBindValue(qlonglong(taxonScope));
+        if (!params.taxonSet.isEmpty()) {
+            if (projectScope > 0)
+                q.addBindValue(projectScope);
+            for (qint64 id : params.taxonSet)
+                q.addBindValue(qlonglong(id));
+        } else {
+            if (projectScope > 0)
+                q.addBindValue(projectScope);
+            if (taxonScope > 0)
+                q.addBindValue(qlonglong(taxonScope));
+        }
         q.exec();
 
         while (q.next()) {

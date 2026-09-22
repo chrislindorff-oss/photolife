@@ -31,6 +31,9 @@ private slots:
     void projectScopeAloneConfinesToTheActiveTree();
     void setScopeCoalescesIntoOneReload();
     void rapidSetScopeCallsOnlyApplyTheLatest();
+    void taxonSetScopeMatchesExactIdsNotASubtreeWalk();
+    void taxonSetScopeCombinesWithProjectScope();
+    void taxonSetScopeAndTaxonScopeAreMutuallyExclusive();
     void captionLocalityShownOnlyWhenEnabledAndCached();
     void applyGpsPatchesRowInPlaceWithoutReset();
 
@@ -211,6 +214,57 @@ void TestCaptureListModel::rapidSetScopeCallsOnlyApplyTheLatest()
     // confirm the result still reflects only the latest request.
     QTest::qWait(200);
     QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
+}
+
+void TestCaptureListModel::taxonSetScopeMatchesExactIdsNotASubtreeWalk()
+{
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+
+    // A set spanning two unrelated branches -- proves it's a literal id match,
+    // not a subtree walk that happens to reach both leaves.
+    model.setTaxonSetScope(0, {qint64(901), qint64(101)});
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model),
+             (QStringList{QStringLiteral("Caladenia carnea"), QStringLiteral("Corvus mellori")}));
+
+    // The genus (900) is an ancestor of the matched species (901) but no
+    // capture is matched directly to it -- setTaxonScope(900) reaches 901 via
+    // its recursive subtree walk (see taxonScopeAloneSpansEveryTreeSharingTheAncestor),
+    // but setTaxonSetScope(900) must not, since it's a literal id set.
+    spy.clear();
+    model.setTaxonSetScope(0, {qint64(900)});
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.rowCount(), 0);
+}
+
+void TestCaptureListModel::taxonSetScopeCombinesWithProjectScope()
+{
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+
+    // 101 (orchid) isn't part of the bird project's tree, so the project
+    // narrowing must exclude it even though it's in the requested id set --
+    // this exercises the bind order of the combined project+set clause.
+    model.setTaxonSetScope(m_birdProject, {qint64(901), qint64(101)});
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
+}
+
+void TestCaptureListModel::taxonSetScopeAndTaxonScopeAreMutuallyExclusive()
+{
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+
+    model.setTaxonSetScope(0, {qint64(101)});
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Caladenia carnea")}));
+
+    // Falling back to a plain subtree scope must drop the stale set filter.
+    spy.clear();
+    model.setScope(0, 0);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.rowCount(), 2);   // whole library again, not still confined to {101}
 }
 
 void TestCaptureListModel::captionLocalityShownOnlyWhenEnabledAndCached()

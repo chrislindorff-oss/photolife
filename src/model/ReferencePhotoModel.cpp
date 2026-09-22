@@ -169,22 +169,35 @@ void ReferencePhotoModel::setProject(int projectId)
         return;
     m_projectId = projectId;
     m_scope = 0;   // a fresh tree; the tree view will re-assert any selection
+    m_scopeSet.clear();
     reload();
 }
 
 void ReferencePhotoModel::setScope(qint64 taxonInatId)
 {
-    if (m_scope == taxonInatId)
+    const bool hadSet = !m_scopeSet.isEmpty();
+    m_scopeSet.clear();
+    if (m_scope == taxonInatId && !hadSet)
         return;
     m_scope = taxonInatId;
+    reloadAsync();
+}
+
+void ReferencePhotoModel::setTaxonSetScope(const QList<qint64> &taxonInatIds)
+{
+    if (m_scope == 0 && m_scopeSet == taxonInatIds)
+        return;
+    m_scope = 0;
+    m_scopeSet = taxonInatIds;
     reloadAsync();
 }
 
 void ReferencePhotoModel::reload()
 {
     beginResetModel();
-    m_rows = m_db.isOpen() ? fetchRows(m_db.connectionName(), QueryParams{m_projectId, m_scope})
-                           : QList<Row>();
+    m_rows = m_db.isOpen()
+                 ? fetchRows(m_db.connectionName(), QueryParams{m_projectId, m_scope, m_scopeSet})
+                 : QList<Row>();
     m_rowsByUrl.clear();
     for (int i = 0; i < m_rows.size(); ++i) {
         if (!m_rows[i].photoUrl.isEmpty())
@@ -209,7 +222,7 @@ void ReferencePhotoModel::reloadAsync()
 {
     ensureWorker();
     const quint64 generation = ++m_generation;
-    emit requestFetch(generation, QueryParams{m_projectId, m_scope});
+    emit requestFetch(generation, QueryParams{m_projectId, m_scope, m_scopeSet});
 }
 
 void ReferencePhotoModel::onRowsReady(quint64 generation, QList<Row> rows)
@@ -235,7 +248,10 @@ QList<ReferencePhotoModel::Row> ReferencePhotoModel::fetchRows(const QString &co
         return rows;
 
     taxonomy::TaxonomyStore store(connectionName);
-    for (const auto &lp : store.projectLeafPhotos(params.projectId, params.scope)) {
+    const auto leaves = !params.scopeSet.isEmpty()
+                             ? store.projectLeafPhotos(params.projectId, params.scopeSet)
+                             : store.projectLeafPhotos(params.projectId, params.scope);
+    for (const auto &lp : leaves) {
         Row row;
         row.inatId = lp.inatId;
         row.name = lp.name;

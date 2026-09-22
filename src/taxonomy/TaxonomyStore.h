@@ -250,6 +250,10 @@ public:
     // `scopeInatId` > 0, only those at or below that taxon in the tree.
     QList<LeafPhoto> projectLeafPhotos(int projectId, qint64 scopeInatId = 0) const;
 
+    // Same, but restricted to exactly this set of taxon ids (no subtree walk)
+    // -- for "every photo of taxa carrying conservation status X".
+    QList<LeafPhoto> projectLeafPhotos(int projectId, const QList<qint64> &taxonInatIds) const;
+
     // iNat ids of the project's leaf-rank taxa that have no reference photo URL
     // cached yet (ReferencePhotoFetcher's work list).
     QList<qint64> projectLeafTaxaMissingPhoto(int projectId) const;

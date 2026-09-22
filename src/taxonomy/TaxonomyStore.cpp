@@ -954,6 +954,44 @@ QList<TaxonomyStore::LeafPhoto> TaxonomyStore::projectLeafPhotos(int projectId,
     return out;
 }
 
+QList<TaxonomyStore::LeafPhoto> TaxonomyStore::projectLeafPhotos(
+    int projectId, const QList<qint64> &taxonInatIds) const
+{
+    QList<LeafPhoto> out;
+    if (taxonInatIds.isEmpty())
+        return out;
+
+    QStringList placeholders(taxonInatIds.size(), QStringLiteral("?"));
+    const QString sql = QStringLiteral(
+        "SELECT t.inat_id, t.name, t.common_name, t.rank, t.photo_url, t.photo_attribution "
+        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "WHERE pt.project_id = ? AND t.inat_id IN (%1) "
+        "ORDER BY t.name").arg(placeholders.join(QLatin1Char(',')));
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(sql);
+    q.addBindValue(projectId);
+    for (qint64 id : taxonInatIds)
+        q.addBindValue(qlonglong(id));
+    if (!q.exec())
+        return out;
+
+    while (q.next()) {
+        const QString rank = q.value(3).toString();
+        if (!isLeafRank(rank))
+            continue;
+        LeafPhoto p;
+        p.inatId = q.value(0).toLongLong();
+        p.name = q.value(1).toString();
+        p.commonName = q.value(2).toString();
+        p.rank = rank;
+        p.photoUrl = q.value(4).toString();
+        p.attribution = q.value(5).toString();
+        out.append(p);
+    }
+    return out;
+}
+
 QList<qint64> TaxonomyStore::projectLeafTaxaMissingPhoto(int projectId) const
 {
     QList<qint64> ids;

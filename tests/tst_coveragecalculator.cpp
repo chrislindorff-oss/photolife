@@ -20,6 +20,7 @@ private slots:
 
     void rollsSpeciesCountsUpTheTree();
     void countsThreatenedSeparately();
+    void rollsUpSubtreeStatusForFiltering();
     void infraspeciesPhotosCountForTheirSpecies();
     void onlyAutoAndConfirmedMatchesCount();
     void picksHighestConfidenceRepresentative();
@@ -154,6 +155,39 @@ void TestCoverageCalculator::countsThreatenedSeparately()
     QCOMPARE(cov.byStatus.value(QStringLiteral("Endangered")).withPhotos, 1);
     QCOMPARE(cov.byStatus.value(QStringLiteral("Vulnerable")).total, 1);
     QCOMPARE(cov.byStatus.value(QStringLiteral("Vulnerable")).withPhotos, 0);
+}
+
+void TestCoverageCalculator::rollsUpSubtreeStatusForFiltering()
+{
+    addTaxon(1, 0, QStringLiteral("family"), QStringLiteral("Orchidaceae"));
+    addTaxon(10, 1, QStringLiteral("genus"), QStringLiteral("Caladenia"));
+    addTaxon(11, 10, QStringLiteral("species"), QStringLiteral("Caladenia carnea"));
+    addTaxon(12, 10, QStringLiteral("species"), QStringLiteral("Caladenia rosella"),
+             QStringLiteral("Endangered"));
+    addTaxon(20, 1, QStringLiteral("genus"), QStringLiteral("Thelymitra"));
+    addTaxon(21, 20, QStringLiteral("species"), QStringLiteral("Thelymitra ixioides"));
+    // An infraspecific taxon can carry its own status without being tallied
+    // into byStatus/threatenedTotal (that rollup is species-only).
+    addTaxon(22, 21, QStringLiteral("variety"), QStringLiteral("Thelymitra ixioides var. x"),
+             QStringLiteral("Vulnerable"));
+
+    const ProjectCoverage cov = computeCoverage(m_db->connectionName(), m_projectId);
+
+    // The genus and family ancestors of the Endangered species see it in
+    // their subtree; the sibling genus with no threatened species does not.
+    QVERIFY(cov.byTaxon.value(10).subtreeThreatened);
+    QVERIFY(cov.byTaxon.value(1).subtreeThreatened);
+    QVERIFY(cov.byTaxon.value(10).subtreeStatuses.contains(QStringLiteral("Endangered")));
+    QVERIFY(cov.byTaxon.value(1).subtreeStatuses.contains(QStringLiteral("Endangered")));
+
+    // The variety's own status is recorded...
+    QCOMPARE(cov.byTaxon.value(22).status, QStringLiteral("Vulnerable"));
+    // ...but since it isn't a species, it doesn't count toward the species
+    // tally, and its ancestors' subtree rollup stays clear of it.
+    QCOMPARE(cov.threatenedTotal, 1);
+    QVERIFY(!cov.byStatus.contains(QStringLiteral("Vulnerable")));
+    QVERIFY(!cov.byTaxon.value(20).subtreeThreatened);
+    QVERIFY(!cov.byTaxon.value(21).subtreeThreatened);
 }
 
 void TestCoverageCalculator::infraspeciesPhotosCountForTheirSpecies()

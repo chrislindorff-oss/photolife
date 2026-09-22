@@ -2,6 +2,7 @@
 
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
+#include "ui/Theme.h"
 
 #include <QColor>
 #include <QFont>
@@ -32,7 +33,7 @@ void TaxonomyTreeModel::setProject(int projectId)
 void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
 {
     m_coverage = coverage;
-    if (m_photographedOnly) {
+    if (m_photographedOnly || m_threatenedOnly || !m_statusFilter.isEmpty()) {
         // The visible set depends on coverage, so the tree structure changes.
         rebuild();
         return;
@@ -58,6 +59,22 @@ void TaxonomyTreeModel::setPhotographedOnly(bool on)
     if (m_photographedOnly == on)
         return;
     m_photographedOnly = on;
+    rebuild();
+}
+
+void TaxonomyTreeModel::setThreatenedOnly(bool on)
+{
+    if (m_threatenedOnly == on)
+        return;
+    m_threatenedOnly = on;
+    rebuild();
+}
+
+void TaxonomyTreeModel::setStatusFilter(const QString &status)
+{
+    if (m_statusFilter == status)
+        return;
+    m_statusFilter = status;
     rebuild();
 }
 
@@ -88,13 +105,17 @@ void TaxonomyTreeModel::rebuild()
     m_root = std::make_unique<Node>();
     m_byId.clear();   // every Node is reallocated below
 
-    // In "photographed only" mode a taxon is kept when its subtree has a photo.
-    // subtreeHasPhotos rolls up, so a kept node's ancestors are always kept too
-    // and no child is ever orphaned.
+    // Each active filter checks a rolled-up flag on the taxon's coverage, so a
+    // kept node's ancestors are always kept too and no child is ever orphaned.
     auto keep = [this](qint64 inatId) {
-        if (!m_photographedOnly)
-            return true;
-        return m_coverage.byTaxon.value(inatId).subtreeHasPhotos;
+        const auto &cov = m_coverage.byTaxon.value(inatId);
+        if (m_photographedOnly && !cov.subtreeHasPhotos)
+            return false;
+        if (m_threatenedOnly && !cov.subtreeThreatened)
+            return false;
+        if (!m_statusFilter.isEmpty() && !cov.subtreeStatuses.contains(m_statusFilter))
+            return false;
+        return true;
     };
 
     // m_flat is ordered parents-before-children (by rank_level), so a single
@@ -180,6 +201,32 @@ QList<qint64> TaxonomyTreeModel::findTaxa(const QString &text, int limit) const
         out.push_back(h.inatId);
         if (out.size() >= limit)
             break;
+    }
+    return out;
+}
+
+QList<qint64> TaxonomyTreeModel::taxaWithStatus(const QString &status) const
+{
+    QList<qint64> out;
+    if (status.isEmpty())
+        return out;
+    for (const taxonomy::TreeNode &tn : m_flat) {
+        if (tn.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) != 0)
+            continue;
+        if (m_coverage.byTaxon.value(tn.inatId).status == status)
+            out << tn.inatId;
+    }
+    return out;
+}
+
+QList<qint64> TaxonomyTreeModel::anyThreatenedTaxa() const
+{
+    QList<qint64> out;
+    for (const taxonomy::TreeNode &tn : m_flat) {
+        if (tn.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) != 0)
+            continue;
+        if (!m_coverage.byTaxon.value(tn.inatId).status.isEmpty())
+            out << tn.inatId;
     }
     return out;
 }
@@ -273,7 +320,8 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         const auto cov = m_coverage.byTaxon.constFind(t.inatId);
         if (cov == m_coverage.byTaxon.constEnd())
             return {};
-        return cov->subtreeHasPhotos ? QColor(0x2E, 0x7D, 0x32) : QColor(0xB0, 0xB0, 0xB0);
+        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
+        return cov->subtreeHasPhotos ? theme.positive : theme.mutedText;
     }
     case Qt::ToolTipRole: {
         QStringList bits;
