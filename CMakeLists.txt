@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(PhotoLife
-    VERSION 0.1.0
+    VERSION 0.1.10
     DESCRIPTION "Catalogue nature photos against a taxonomic tree"
     HOMEPAGE_URL "https://github.com/chrisl/photolife"
     LANGUAGES CXX)
