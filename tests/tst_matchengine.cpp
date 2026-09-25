@@ -39,6 +39,11 @@ private slots:
     void stagingFolderIsSkipped();
     void unmatchedWhenTaxonomyMissing();
     void reRunReplacesEngineRowsButKeepsUserRows();
+    void commonNameIsNotPenalisedByItsOwnFirstWord();
+    void groupMatchWritesOnlyResultsInsideTheGroup();
+    void groupMatchPrefersTheGroupForAmbiguousNames();
+    void groupMatchLeavesUserDecisionsAlone();
+    void matchCapturesTouchesOnlyThoseCaptures();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -47,6 +52,8 @@ private:
 
     void seedTaxonomy();
     QSqlQuery matchRow(const QString &baseNameLike);
+    qint64 localId(qint64 inatId);
+    QSet<qint64> caladeniaGroup();
 };
 
 void TestMatchEngine::init()
@@ -65,6 +72,8 @@ void TestMatchEngine::init()
     touch(m_root + QStringLiteral("/Duplicates/mystery plant - Somewhere 5-1-2020.jpg"));
     touch(m_root + QStringLiteral("/3. MONOCOTYLEDONS/Orchidaceae/Thelymitra/Thelymitra ixioides/"
                                   "Thelymitra ixioides - Grampians 6-1-2020.jpg"));
+    touch(m_root + QStringLiteral("/5. FUNGI/Bracket Fungi - Linton 7-1-2020.jpg"));
+    touch(m_root + QStringLiteral("/Misc/Spider Orchid - Anglesea 8-1-2020.jpg"));
 
     m_db = std::make_unique<Database>();
     QVERIFY(m_db->open(QStringLiteral(":memory:")));
@@ -86,7 +95,7 @@ void TestMatchEngine::seedTaxonomy()
     taxonomy::TaxonomyStore store(m_db->connectionName());
 
     auto add = [&](qint64 id, qint64 parent, const QString &rank, const QString &name,
-                   const QStringList &syn = {}) {
+                   const QStringList &syn = {}, const QStringList &vernacular = {}) {
         taxonomy::Taxon t;
         t.inatId = id;
         if (parent > 0)
@@ -94,15 +103,20 @@ void TestMatchEngine::seedTaxonomy()
         t.rank = rank;
         t.name = name;
         t.synonyms = syn;
+        t.vernacular = vernacular;
         store.upsertTaxon(t);
     };
 
     add(1, 0, QStringLiteral("family"), QStringLiteral("Orchidaceae"));
     add(100, 1, QStringLiteral("genus"), QStringLiteral("Caladenia"));
+    // "Spider Orchid" is shared by two taxa -- ambiguous library-wide.
     add(101, 100, QStringLiteral("species"), QStringLiteral("Caladenia carnea"),
-        {QStringLiteral("Petalochilus carneus")});
+        {QStringLiteral("Petalochilus carneus")}, {QStringLiteral("Spider Orchid")});
     add(110, 1, QStringLiteral("genus"), QStringLiteral("Thelymitra"));
-    add(111, 110, QStringLiteral("species"), QStringLiteral("Thelymitra ixioides"));
+    add(111, 110, QStringLiteral("species"), QStringLiteral("Thelymitra ixioides"), {},
+        {QStringLiteral("Spider Orchid")});
+    add(500, 0, QStringLiteral("family"), QStringLiteral("Polyporaceae"), {},
+        {QStringLiteral("Bracket Fungi")});
     add(300, 0, QStringLiteral("genus"), QStringLiteral("Asparagus"));
     add(301, 300, QStringLiteral("species"), QStringLiteral("Asparagus scandens"));
 }
@@ -125,7 +139,7 @@ void TestMatchEngine::autoMatchesCleanBinomial()
     MatchEngine engine(m_db->connectionName());
     const auto stats = engine.matchAll();
     QVERIFY2(stats.ok(), qPrintable(stats.error));
-    QCOMPARE(stats.captures, 6);
+    QCOMPARE(stats.captures, 8);
     QVERIFY(stats.autoApplied >= 3);
 
     auto q = matchRow(QStringLiteral("Thelymitra ixioides%"));
@@ -229,6 +243,115 @@ void TestMatchEngine::reRunReplacesEngineRowsButKeepsUserRows()
                           "AND status = 'confirmed'"));
     q.next();
     QCOMPARE(q.value(0).toInt(), 1);   // user's decision survived the re-run
+}
+
+qint64 TestMatchEngine::localId(qint64 inatId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.prepare(QStringLiteral("SELECT id FROM taxon WHERE inat_id = ?"));
+    q.addBindValue(inatId);
+    q.exec();
+    q.next();
+    return q.value(0).toLongLong();
+}
+
+// The Caladenia genus and its species -- what right-clicking "Caladenia" in a
+// tree would match against.
+QSet<qint64> TestMatchEngine::caladeniaGroup()
+{
+    return {localId(100), localId(101)};
+}
+
+void TestMatchEngine::commonNameIsNotPenalisedByItsOwnFirstWord()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    // "Bracket" would otherwise count as a genus hint disagreeing with
+    // Polyporaceae (-0.15). Common names still go to review, but at the full
+    // vernacular score (0.82 x 0.98).
+    auto q = matchRow(QStringLiteral("Bracket Fungi%"));
+    QCOMPARE(q.value(0).toLongLong(), localId(500));
+    QCOMPARE(q.value(4).toString(), QStringLiteral("pending"));
+    QVERIFY2(q.value(3).toDouble() > 0.79, qPrintable(q.value(3).toString()));
+}
+
+void TestMatchEngine::groupMatchWritesOnlyResultsInsideTheGroup()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    auto before = matchRow(QStringLiteral("Asaparagus scandens%"));   // pending, outside the group
+    const QString asparagusStatus = before.value(4).toString();
+    const double asparagusConfidence = before.value(3).toDouble();
+    QCOMPARE(asparagusStatus, QStringLiteral("pending"));
+
+    const auto stats = engine.matchGroup(caladeniaGroup());
+    QVERIFY2(stats.ok(), qPrintable(stats.error));
+    QVERIFY(stats.outsideGroup >= 1);
+
+    auto after = matchRow(QStringLiteral("Asaparagus scandens%"));
+    QCOMPARE(after.value(4).toString(), asparagusStatus);
+    QCOMPARE(after.value(3).toDouble(), asparagusConfidence);
+
+    // Species-level auto matches aren't re-checked at all.
+    QCOMPARE(stats.captures < 8, true);
+}
+
+void TestMatchEngine::groupMatchPrefersTheGroupForAmbiguousNames()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    const auto stats = engine.matchGroup(caladeniaGroup());
+    QVERIFY2(stats.ok(), qPrintable(stats.error));
+
+    // Library-wide, "Spider Orchid" could be either species; within the
+    // Caladenia group it can only be Caladenia carnea. Common names still go
+    // to review.
+    auto q = matchRow(QStringLiteral("Spider Orchid%"));
+    QCOMPARE(q.value(0).toLongLong(), localId(101));
+    QCOMPARE(q.value(4).toString(), QStringLiteral("pending"));
+}
+
+void TestMatchEngine::groupMatchLeavesUserDecisionsAlone()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    // The user files the Spider Orchid photo under Thelymitra -- outside the group.
+    QSqlQuery upd(QSqlDatabase::database(m_db->connectionName(), false));
+    upd.prepare(QStringLiteral(
+        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed', taxon_id = ? "
+        "WHERE capture_id = (SELECT c.id FROM capture c WHERE c.base_name LIKE 'Spider Orchid%')"));
+    upd.addBindValue(localId(111));
+    QVERIFY(upd.exec());
+
+    engine.matchGroup(caladeniaGroup());
+
+    auto q = matchRow(QStringLiteral("Spider Orchid%"));
+    QCOMPARE(q.value(0).toLongLong(), localId(111));
+    QCOMPARE(q.value(4).toString(), QStringLiteral("confirmed"));
+}
+
+void TestMatchEngine::matchCapturesTouchesOnlyThoseCaptures()
+{
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.exec(QStringLiteral("SELECT id FROM capture WHERE base_name LIKE 'Thelymitra ixioides%'"));
+    QVERIFY(q.next());
+    const qint64 thelymitra = q.value(0).toLongLong();
+
+    MatchEngine engine(m_db->connectionName());
+    const auto stats = engine.matchCaptures({thelymitra});
+    QVERIFY2(stats.ok(), qPrintable(stats.error));
+    QCOMPARE(stats.captures, 1);
+    QCOMPARE(stats.autoApplied, 1);
+
+    q.exec(QStringLiteral("SELECT COUNT(*) FROM capture_match"));
+    q.next();
+    QCOMPARE(q.value(0).toInt(), 1);   // no other capture was matched
+    QCOMPARE(matchRow(QStringLiteral("Thelymitra ixioides%")).value(4).toString(),
+             QStringLiteral("auto"));
 }
 
 QTEST_GUILESS_MAIN(TestMatchEngine)

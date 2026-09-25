@@ -1,5 +1,6 @@
 #pragma once
 
+#include "catalogue/UntreedMatchStore.h"
 #include "coverage/CoverageCalculator.h"
 
 #include <QHash>
@@ -58,6 +59,9 @@ class MatchEngine;
 namespace checklist {
 class ChecklistImporter;
 }
+namespace collection {
+struct ExportSummary;
+}
 namespace geo {
 class LocalityFetcher;
 }
@@ -107,6 +111,12 @@ private:
     void addWatchedFolder();
     void manageLibraryFolders();
     void startScan();
+    // Like startScan(), but never dropped: if a scan is already running (e.g.
+    // one the folder watcher started mid-download), another full scan is
+    // queued to run as soon as it finishes, so files written after that scan
+    // began are still picked up. `afterScan` runs once that scan completes.
+    void requestScan(std::function<void()> afterScan = {});
+    void runQueuedScan();
     void setScanUiRunning(bool running);
     void onScanProgress(const scan::ScanProgress &progress);
     void onScanFinished(const scan::ScanSummary &summary);
@@ -117,15 +127,29 @@ private:
     QWidget *buildMapPage();
     QWidget *buildBestShotsPage();
     QWidget *buildMissingPage();
+    QWidget *buildUntreedPage();
     QWidget *buildReferencePhotosPage();
     void updateReferencePhotoStatus();
     void maybeFetchReferencePhotos();
     void fetchReferencePhotos();
+    void exportReferenceTreePhotos();
+    // After an update-mode export: lists files in the collection that this
+    // run didn't produce (see ExportOptions::reportUnexpectedFiles).
+    void showUnexpectedExportFiles(const collection::ExportSummary &summary);
     QWidget *buildInatDownloadPage();
     void searchInatObservations();
     void downloadSelectedInatPhotos();
     void onInatSearchFinished(bool ok, const QString &error, QList<inat::Candidate> candidates);
     void onInatImportFinished(bool ok, const QString &error, QList<inat::SavedFile> saved);
+    // Annotates m_inatCandidates against the trees and library, refills the
+    // grid and summarises the result in the page's status line.
+    void checkInatCandidatesAgainstLibrary();
+    // The locked-down download pipeline (download -> add to library -> match
+    // just those photos), shown in one modal progress window. Cancel stops
+    // the current step and skips the rest; photos already downloaded are
+    // still added to the library so nothing on disk is left untracked.
+    void cancelInatPipeline();
+    void finishInatPipeline(const QString &message);
     void updateReviewTabText();
     void updateBestShotsTabText();
     void switchToTreeTab(QWidget *page);
@@ -134,6 +158,9 @@ private:
     void newReferenceTree();
     void refreshReferenceTree();
     void addTaxonToReferenceTree();
+    // Fetches `inatId` (with its ancestors) from iNaturalist and links it into
+    // `projectId`'s tree -- shared by Add Taxon and the "Not in Any Tree" tab.
+    void addTaxonToTree(int projectId, qint64 inatId, const QString &name);
     void deleteReferenceTree();
     void fetchInfraspecificTaxa();
     void startInfraspecificFetch(qint64 scopeInatId, const QString &scopeName);
@@ -174,6 +201,15 @@ private:
     void rebuildRankFilterMenu();
     void updateMissingList();
     void showMissingListContextMenu(const QPoint &pos);
+    // "Not in Any Tree" tab: reloadUntreedTaxa() re-runs the catalogue query
+    // (after anything that can change matches or tree membership);
+    // updateUntreedList() just repopulates the list from the cached result
+    // (search / rank filter changes).
+    void reloadUntreedTaxa();
+    void updateUntreedList();
+    void updateUntreedGridScope();
+    void showUntreedListContextMenu(const QPoint &pos);
+    void addUntreedTaxonToTree(QTreeWidgetItem *item, int projectId);
     void viewReferencePhoto(qint64 inatId);
     void openViewer(QAbstractItemModel *model, const QModelIndex &index);
     QListView *makeCaptureGrid(QAbstractItemModel *model);
@@ -184,7 +220,12 @@ private:
     void fetchPhotoLocalities();
     int currentProjectId() const;
     void startMatch();
-    void reassignTaxonPhotos();
+    // Match Library Against This Group: re-checks unresolved photos (see
+    // MatchEngine::matchGroup) against the tree's taxa at/below `inatId`.
+    void startGroupMatch(qint64 inatId, const QString &name);
+    // Reassigns the photos selected in `grid` (or, with nothing selected and
+    // after confirming, every photo `model` shows) to a taxon the user picks.
+    void reassignPhotos(QListView *grid, model::CaptureListModel *model);
     void applyCaptionFields(int fields);
 
     Application &m_app;
@@ -216,6 +257,17 @@ private:
     QLabel *m_bestShotHeader = nullptr;
     QTreeWidget *m_missingList = nullptr;
     QLineEdit *m_missingSearch = nullptr;
+
+    QList<catalogue::UntreedTaxon> m_untreedTaxa;   // last reloadUntreedTaxa() result
+    QTreeWidget *m_untreedList = nullptr;
+    QLineEdit *m_untreedSearch = nullptr;
+    // Index = UntreedMode (see MainWindow.cpp): not in any tree / not in the
+    // selected tree / identified only to genus or higher.
+    QComboBox *m_untreedMode = nullptr;
+    QLabel *m_untreedHeader = nullptr;
+    QPushButton *m_untreedAddButton = nullptr;
+    model::CaptureListModel *m_untreedModel = nullptr;
+    QListView *m_untreedGrid = nullptr;
     ReferencePhotoDialog *m_referencePhotoDialog = nullptr;
 
     model::ReferencePhotoModel *m_refPhotoModel = nullptr;
@@ -224,6 +276,7 @@ private:
     QWidget *m_refPhotoPage = nullptr;
     taxonomy::ReferencePhotoFetcher *m_refPhotoFetcher = nullptr;
     QAction *m_fetchRefPhotosAction = nullptr;
+    QAction *m_exportTreePhotosAction = nullptr;
     ReviewPane *m_reviewPane = nullptr;
     ImageViewer *m_viewer = nullptr;
     HelpWindow *m_helpWindow = nullptr;
@@ -267,11 +320,19 @@ private:
     QLineEdit *m_inatFilterEdit = nullptr;
     QComboBox *m_inatSortCombo = nullptr;
     QCheckBox *m_inatHideFaded = nullptr;
+    QComboBox *m_inatScopeCombo = nullptr;     // selected tree's taxa / all my observations
+    QComboBox *m_inatPresenceCombo = nullptr;  // Show: all / new to library / not in any tree
+    QPushButton *m_inatCheckButton = nullptr;  // re-check results against trees and library
+    QList<inat::Candidate> m_inatCandidates;   // last search's results, for re-checking
+    bool m_inatPipelineActive = false;
+    bool m_inatPipelineCancelled = false;
     QLabel *m_inatStatus = nullptr;
     QPushButton *m_inatSearchButton = nullptr;
     QPushButton *m_inatCancelSearchButton = nullptr;
     QPushButton *m_inatDownloadButton = nullptr;
     QString m_inatPendingDestFolder;   // set while an import's post-scan steps are still pending
+    bool m_rescanQueued = false;       // see requestScan()
+    QList<std::function<void()>> m_afterQueuedScan;
 
     CoveragePanel *m_coveragePanel = nullptr;
     QAction *m_newTreeAction = nullptr;
@@ -292,6 +353,8 @@ private:
     QProgressDialog *m_taskProgress = nullptr;
 
     QAction *m_matchAction = nullptr;
+    QString m_groupMatchName;   // set while a group match runs; empty for a full Match Library
+    bool m_matchingDownload = false;   // set while matching just an iNaturalist download's photos
     QComboBox *m_filterCombo = nullptr;
 };
 

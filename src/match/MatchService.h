@@ -12,8 +12,8 @@ class QThread;
 
 namespace pl::match {
 
-// Runs MatchEngine::matchAll on a background thread, reporting progress on the
-// thread it was created on. One run at a time.
+// Runs MatchEngine::matchAll (or, given a group, matchGroup) on a background
+// thread, reporting progress on the thread it was created on. One run at a time.
 class MatchService : public QObject
 {
     Q_OBJECT
@@ -25,7 +25,11 @@ public:
     bool isRunning() const { return m_running; }
 
 public slots:
-    void start();
+    // Empty `groupTaxonIds` = the whole library (matchAll); otherwise
+    // matchGroup() against those local taxon ids.
+    void start(const QSet<qint64> &groupTaxonIds = {});
+    // MatchEngine::matchCaptures() on just these captures.
+    void startForCaptures(const QList<qint64> &captureIds);
     void cancel();
 
 signals:
@@ -35,6 +39,7 @@ signals:
 
 private:
     class Worker;
+    void launch(QSet<qint64> groupTaxonIds, QList<qint64> captureIds);
     void onFinished(pl::match::MatchEngine::Stats stats);
 
     CatalogueDescriptor m_descriptor;

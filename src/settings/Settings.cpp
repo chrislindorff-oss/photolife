@@ -20,6 +20,8 @@ constexpr auto kCaptionFields = "ui/captureGrid/captionFields";
 constexpr auto kDarkMode = "ui/darkMode";
 constexpr auto kInatUsername = "inat/username";
 constexpr auto kInatApiToken = "inat/apiToken";
+constexpr auto kExportDestFolder = "export/destFolder";
+constexpr auto kExportCollectionFolder = "export/collectionFolder";
 
 // Qt's QFile/QDir never expand a shell-style leading "~" -- a path typed or
 // hand-edited that way would otherwise be taken completely literally (as a
@@ -170,6 +172,26 @@ QString Settings::inatApiToken() const
 void Settings::setInatApiToken(const QString &token)
 {
     m_settings.setValue(QLatin1String(kInatApiToken), token);
+}
+
+QString Settings::exportDestFolder() const
+{
+    return m_settings.value(QLatin1String(kExportDestFolder)).toString();
+}
+
+void Settings::setExportDestFolder(const QString &path)
+{
+    m_settings.setValue(QLatin1String(kExportDestFolder), path);
+}
+
+QString Settings::exportCollectionFolder() const
+{
+    return m_settings.value(QLatin1String(kExportCollectionFolder)).toString();
+}
+
+void Settings::setExportCollectionFolder(const QString &path)
+{
+    m_settings.setValue(QLatin1String(kExportCollectionFolder), path);
 }
 
 } // namespace pl

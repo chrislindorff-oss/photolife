@@ -1,6 +1,7 @@
 #include "ui/ReviewPane.h"
 
 #include "db/Database.h"
+#include "model/ReviewQueueFilterProxy.h"
 #include "model/ReviewQueueGroupModel.h"
 #include "model/ReviewQueueModel.h"
 #include "net/INatClient.h"
@@ -11,6 +12,7 @@
 #include "ui/ImageViewer.h"
 #include "ui/Theme.h"
 
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QEvent>
@@ -28,7 +30,6 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QShortcut>
-#include <QSortFilterProxyModel>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
@@ -39,6 +40,7 @@
 
 namespace pl {
 namespace {
+using model::ReviewQueueFilterProxy;
 using model::ReviewQueueGroupModel;
 using model::ReviewQueueModel;
 constexpr int kQueueThumb = 128;   // longest edge of each queue-list thumbnail
@@ -61,7 +63,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     , m_inat(inat)
     , m_photos(photos)
     , m_queue(new ReviewQueueModel(db, thumbs, this))
-    , m_queueProxy(new QSortFilterProxyModel(this))
+    , m_queueProxy(new ReviewQueueFilterProxy(this))
     , m_queueGroup(new ReviewQueueGroupModel(this))
     , m_reviewer(db.connectionName())
     , m_finder(db.connectionName())
@@ -82,6 +84,35 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
             selectCapture(visibleQueueIndex(0));
         showCurrent();
     });
+
+    auto makeBucketButton = [this](int bucket) {
+        auto *btn = new QToolButton(this);
+        btn->setCheckable(true);
+        connect(btn, &QToolButton::clicked, this, [this, bucket] { setBucket(bucket); });
+        return btn;
+    };
+    m_bucketAllButton = makeBucketButton(int(ReviewQueueFilterProxy::Bucket::All));
+    m_bucketNoCandidateButton =
+        makeBucketButton(int(ReviewQueueFilterProxy::Bucket::NoCandidate));
+    m_bucketNeedsReviewButton =
+        makeBucketButton(int(ReviewQueueFilterProxy::Bucket::NeedsReview));
+    m_bucketAllButton->setToolTip(tr("Show every unmatched photo"));
+    m_bucketNoCandidateButton->setToolTip(
+        tr("The engine found no candidate taxon anywhere in the cached library for these"));
+    m_bucketNeedsReviewButton->setToolTip(
+        tr("The engine found a candidate, but confidence was too low to auto-confirm"));
+    m_bucketAllButton->setChecked(true);
+    m_bucketGroup = new QButtonGroup(this);
+    m_bucketGroup->setExclusive(true);
+    m_bucketGroup->addButton(m_bucketAllButton);
+    m_bucketGroup->addButton(m_bucketNoCandidateButton);
+    m_bucketGroup->addButton(m_bucketNeedsReviewButton);
+    auto *bucketButtons = new QHBoxLayout;
+    bucketButtons->setContentsMargins(0, 0, 0, 0);
+    bucketButtons->addWidget(m_bucketAllButton);
+    bucketButtons->addWidget(m_bucketNoCandidateButton);
+    bucketButtons->addWidget(m_bucketNeedsReviewButton);
+    bucketButtons->addStretch(1);
 
     auto *collapseBtn = new QToolButton(this);
     collapseBtn->setText(tr("Collapse all"));
@@ -181,21 +212,21 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
                                   "selected in the Reference Trees dock. (Ctrl+T)"));
     connect(m_useTreeTaxon, &QPushButton::clicked, this, &ReviewPane::useTreeTaxon);
 
-    auto *confirmBtn = new QPushButton(tr("&Confirm"), this);
+    m_confirmButton = new QPushButton(tr("&Confirm"), this);
     auto *rejectBtn = new QPushButton(tr("&Reject"), this);
     auto *genusBtn = new QPushButton(tr("&Genus only"), this);
     auto *notTaxonBtn = new QPushButton(tr("&Not a taxon"), this);
     auto *skipBtn = new QPushButton(tr("&Skip"), this);
     m_undoButton = new QPushButton(tr("&Undo"), this);
-    confirmBtn->setDefault(true);
-    confirmBtn->setToolTip(tr("Confirm (Ctrl+Enter)"));
+    m_confirmButton->setDefault(true);
+    m_confirmButton->setToolTip(tr("Confirm (Ctrl+Enter)"));
     rejectBtn->setToolTip(tr("Reject (Ctrl+Backspace)"));
     genusBtn->setToolTip(tr("Genus only (Ctrl+G)"));
     notTaxonBtn->setToolTip(tr("Not a taxon (Ctrl+Shift+N)"));
     skipBtn->setToolTip(tr("Skip (Ctrl+Right)"));
     m_undoButton->setToolTip(tr("Undo the last decision (Ctrl+Z)"));
     m_undoButton->setEnabled(false);
-    connect(confirmBtn, &QPushButton::clicked, this, &ReviewPane::confirm);
+    connect(m_confirmButton, &QPushButton::clicked, this, &ReviewPane::confirm);
     connect(rejectBtn, &QPushButton::clicked, this, &ReviewPane::reject);
     connect(genusBtn, &QPushButton::clicked, this, &ReviewPane::genusOnly);
     connect(notTaxonBtn, &QPushButton::clicked, this, &ReviewPane::notATaxon);
@@ -203,7 +234,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     connect(m_undoButton, &QPushButton::clicked, this, &ReviewPane::undo);
 
     auto *actions = new QHBoxLayout;
-    actions->addWidget(confirmBtn);
+    actions->addWidget(m_confirmButton);
     actions->addWidget(rejectBtn);
     actions->addWidget(genusBtn);
     actions->addWidget(notTaxonBtn);
@@ -283,6 +314,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     auto *leftLayout = new QVBoxLayout(leftPane);
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->addWidget(m_photoFilter);
+    leftLayout->addLayout(bucketButtons);
     leftLayout->addLayout(groupButtons);
     leftLayout->addWidget(m_queueView, 1);
 
@@ -428,6 +460,8 @@ qint64 ReviewPane::chosenTaxonInatId() const
 
 void ReviewPane::showCurrent()
 {
+    updateBucketButtons();
+
     const QModelIndex idx = m_queueView->currentIndex();
     const bool have = idx.isValid() && !m_queueGroup->isGroup(idx);
 
@@ -442,6 +476,7 @@ void ReviewPane::showCurrent()
         renderCaptureInfo();
         m_guess->clear();
         m_candidates->clear();
+        m_confirmButton->setEnabled(false);
         m_capturePixmapSrc = QPixmap();
         m_thumb->setPixmap(QPixmap());
         m_bulkLabel->clear();
@@ -483,6 +518,7 @@ void ReviewPane::showCurrent()
 
     const auto guessInat = idx.data(ReviewQueueModel::GuessInatIdRole).toLongLong();
     populateCandidates(m_finder.forCapture(currentCaptureId()), guessInat);
+    m_confirmButton->setEnabled(m_candidates->count() > 0 || guessInat > 0);
 
     const bool recursive = m_recursiveCheck->isChecked();
     const int inFolder = recursive ? m_queue->pendingUnderFolder(folder)
@@ -720,6 +756,24 @@ void ReviewPane::undo()
     }
     showCurrent();
     emit queueChanged();
+}
+
+void ReviewPane::setBucket(int bucket)
+{
+    m_queueProxy->setBucket(ReviewQueueFilterProxy::Bucket(bucket));
+    const QModelIndex cur = m_queueView->currentIndex();
+    if ((!cur.isValid() || m_queueGroup->isGroup(cur)) && visibleQueueCount() > 0)
+        selectCapture(visibleQueueIndex(0));
+    showCurrent();
+}
+
+void ReviewPane::updateBucketButtons()
+{
+    const int total = m_queue->queueCount();
+    const int noCandidate = m_queue->noCandidateCount();
+    m_bucketAllButton->setText(tr("All (%1)").arg(total));
+    m_bucketNoCandidateButton->setText(tr("No candidate found (%1)").arg(noCandidate));
+    m_bucketNeedsReviewButton->setText(tr("Needs review (%1)").arg(total - noCandidate));
 }
 
 void ReviewPane::confirm()

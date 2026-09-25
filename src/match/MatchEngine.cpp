@@ -134,7 +134,8 @@ MatchEngine::MatchEngine(QString connectionName)
 {
 }
 
-MatchOutcome MatchEngine::evaluateCapture(qint64 captureId) const
+MatchOutcome MatchEngine::evaluateCapture(qint64 captureId,
+                                          const QSet<qint64> &preferTaxonIds) const
 {
     MatchOutcome out;
     out.captureId = captureId;
@@ -176,8 +177,10 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId) const
     ResolveHints hints;
     hints.genus = !folder.genusHint.isEmpty() ? folder.genusHint
                   : (!folderParsed.genus.isEmpty() ? folderParsed.genus : fileParsed.genus);
+    hints.genusFromFolder = !folder.genusHint.isEmpty() || !folderParsed.genus.isEmpty();
     hints.family = folder.familyHint;
     hints.folderPath = folder.path;
+    hints.preferTaxonIds = preferTaxonIds;
 
     const Qualifier qualifier =
         fileParsed.qualifier != Qualifier::None ? fileParsed.qualifier : folderParsed.qualifier;
@@ -278,27 +281,87 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId) const
 
 MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressFn &progress)
 {
-    Stats stats;
-
     classifyFolders(m_connectionName);
 
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
     if (!db.isOpen()) {
+        Stats stats;
         stats.error = QStringLiteral("catalogue connection is not open");
         return stats;
     }
 
     QList<qint64> captureIds;
-    {
-        QSqlQuery q(db);
-        q.setForwardOnly(true);
-        if (!q.exec(QStringLiteral("SELECT id FROM capture"))) {
-            stats.error = q.lastError().text();
-            return stats;
-        }
-        while (q.next())
-            captureIds.append(q.value(0).toLongLong());
+    QSqlQuery q(db);
+    q.setForwardOnly(true);
+    if (!q.exec(QStringLiteral("SELECT id FROM capture"))) {
+        Stats stats;
+        stats.error = q.lastError().text();
+        return stats;
     }
+    while (q.next())
+        captureIds.append(q.value(0).toLongLong());
+
+    return run(captureIds, {}, cancel, progress);
+}
+
+MatchEngine::Stats MatchEngine::matchGroup(const QSet<qint64> &groupTaxonIds,
+                                           const CancelFn &cancel, const ProgressFn &progress)
+{
+    if (groupTaxonIds.isEmpty())
+        return {};
+
+    classifyFolders(m_connectionName);
+
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    if (!db.isOpen()) {
+        Stats stats;
+        stats.error = QStringLiteral("catalogue connection is not open");
+        return stats;
+    }
+
+    // Unresolved captures only: never matched, pending, or auto at genus or
+    // above (rank_level 10 is species). run() skips user-decided ones itself.
+    QList<qint64> captureIds;
+    QSqlQuery q(db);
+    q.setForwardOnly(true);
+    if (!q.exec(QStringLiteral(
+            "SELECT c.id FROM capture c "
+            "WHERE NOT EXISTS (SELECT 1 FROM capture_match m WHERE m.capture_id = c.id) "
+            "   OR EXISTS (SELECT 1 FROM capture_match m LEFT JOIN taxon t ON t.id = m.taxon_id "
+            "              WHERE m.capture_id = c.id AND m.decided_by = 'engine' "
+            "                AND (m.status = 'pending' "
+            "                     OR (m.status = 'auto' AND t.rank_level > 10)))"))) {
+        Stats stats;
+        stats.error = q.lastError().text();
+        return stats;
+    }
+    while (q.next())
+        captureIds.append(q.value(0).toLongLong());
+
+    return run(captureIds, groupTaxonIds, cancel, progress);
+}
+
+MatchEngine::Stats MatchEngine::matchCaptures(const QList<qint64> &captureIds,
+                                              const CancelFn &cancel, const ProgressFn &progress)
+{
+    if (captureIds.isEmpty())
+        return {};
+
+    classifyFolders(m_connectionName);
+
+    if (!QSqlDatabase::database(m_connectionName, false).isOpen()) {
+        Stats stats;
+        stats.error = QStringLiteral("catalogue connection is not open");
+        return stats;
+    }
+    return run(captureIds, {}, cancel, progress);
+}
+
+MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<qint64> &group,
+                                    const CancelFn &cancel, const ProgressFn &progress)
+{
+    Stats stats;
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
     stats.captures = int(captureIds.size());
 
     if (!db.transaction()) {
@@ -332,7 +395,13 @@ MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressF
             continue;
         }
 
-        const MatchOutcome outcome = evaluateCapture(id);
+        const MatchOutcome outcome = evaluateCapture(id, group);
+
+        if (!group.isEmpty() && !group.contains(outcome.taxonId)) {
+            ++stats.outsideGroup;
+            ++done;
+            continue;
+        }
 
         QSqlQuery del(db);
         del.prepare(QStringLiteral(

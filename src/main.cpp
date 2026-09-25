@@ -490,14 +490,14 @@ int main(int argc, char *argv[])
         const QString out = parser.value(screenshotOption);
         const int tab = parser.value(tabOption).toInt();
         QTimer::singleShot(1000, [&] {
-            // --tab numbering matches the eight logical screens (kept stable across the
+            // --tab numbering matches the nine logical screens (kept stable across the
             // Reference Tree / All Library Photos / Review Unmatched view-mode split, and
             // across the Reference Tree mode's own tab order/insertions):
             //   0 Photos of Tree Selection, 1 All Library Photos, 2 Review Unmatched,
             //   3 Unphotographed Taxa, 4 Reference Photos, 5 My Best Shots, 6 Map,
-            //   7 Download from iNaturalist.
+            //   7 Download from iNaturalist, 8 Not in Any Tree.
             // Values are indices within the Reference Tree mode's QTabWidget.
-            static const int kTreeTabIndex[] = {0, -1, -1, 3, 4, 2, 1, 5};
+            static const int kTreeTabIndex[] = {0, -1, -1, 3, 5, 2, 1, 6, 4};
             for (QWidget *w : QApplication::topLevelWidgets()) {
                 auto *treeAction = w->findChild<QAction *>(QStringLiteral("viewTreeAction"));
                 auto *libraryAction = w->findChild<QAction *>(QStringLiteral("viewLibraryAction"));
@@ -512,7 +512,7 @@ int main(int argc, char *argv[])
                 } else {
                     if (treeAction)
                         treeAction->setChecked(true);
-                    if (tabs && tab >= 0 && tab < 8 && kTreeTabIndex[tab] >= 0)
+                    if (tabs && tab >= 0 && tab < 9 && kTreeTabIndex[tab] >= 0)
                         tabs->setCurrentIndex(kTreeTabIndex[tab]);
                 }
                 if (tab == 0) {

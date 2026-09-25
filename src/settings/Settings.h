@@ -70,6 +70,16 @@ public:
     QString inatApiToken() const;
     void setInatApiToken(const QString &token);
 
+    // Last folder chosen as the destination for "Export Photo Collection…".
+    // Empty until the user has run it once.
+    QString exportDestFolder() const;
+    void setExportDestFolder(const QString &path);
+
+    // Last collection folder chosen for "Update an existing collection" in
+    // the same dialog -- the collection itself, not its parent. Empty until used.
+    QString exportCollectionFolder() const;
+    void setExportCollectionFolder(const QString &path);
+
 private:
     mutable QSettings m_settings;
 };

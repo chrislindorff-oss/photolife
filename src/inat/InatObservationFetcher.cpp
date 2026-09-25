@@ -101,19 +101,64 @@ QSet<qint64> InatObservationFetcher::alreadyDownloadedPhotoIds(const taxonomy::O
     return ids;
 }
 
-void InatObservationFetcher::start(const QString &userLogin, const QList<qint64> &taxonIds,
-                                   qint64 placeId)
+void InatObservationFetcher::begin(const QString &userLogin, qint64 placeId)
 {
-    if (m_running)
-        return;
     m_running = true;
     m_cancelled = false;
     m_userLogin = userLogin;
     m_placeId = placeId;
     m_batchIndex = 0;
     m_candidates.clear();
-
     m_batches.clear();
+}
+
+void InatObservationFetcher::startAll(const QString &userLogin, qint64 placeId)
+{
+    if (m_running)
+        return;
+    begin(userLogin, placeId);
+    m_idAbove = 0;
+    m_allTotal = 0;
+    loadLocalRecords();
+    emit progress(0, 0, 0);
+    fetchAllPage();
+}
+
+void InatObservationFetcher::fetchAllPage()
+{
+    if (checkCancelled())
+        return;
+
+    m_inat.fetchAllObservations(
+        m_userLogin, m_placeId, m_idAbove, [this](net::Outcome<net::ObservationPage> out) {
+            if (checkCancelled())
+                return;
+            if (!out.ok()) {
+                fail(out.error);
+                return;
+            }
+            if (m_idAbove == 0)
+                m_allTotal = out.value.totalResults;
+            if (out.value.results.isEmpty()) {
+                succeed();
+                return;
+            }
+            for (const taxonomy::Observation &obs : out.value.results) {
+                m_candidates.append({obs, looksLikeDuplicate(obs), alreadyDownloadedPhotoIds(obs)});
+                m_idAbove = std::max(m_idAbove, obs.id);
+            }
+            emit progress(int(m_candidates.size()), m_allTotal, int(m_candidates.size()));
+            fetchAllPage();
+        });
+}
+
+void InatObservationFetcher::start(const QString &userLogin, const QList<qint64> &taxonIds,
+                                   qint64 placeId)
+{
+    if (m_running)
+        return;
+    begin(userLogin, placeId);
+
     for (int i = 0; i < taxonIds.size(); i += kBatchSize)
         m_batches.append(taxonIds.mid(i, kBatchSize));
 

@@ -21,6 +21,9 @@ class LibraryWatcher;
 namespace match {
 class MatchService;
 }
+namespace collection {
+class ExportService;
+}
 namespace lightroom {
 class LightroomImporter;
 }
@@ -71,6 +74,7 @@ public:
     scan::ScanService &scanService();
     scan::LibraryWatcher &libraryWatcher();
     match::MatchService &matchService();
+    collection::ExportService &exportService();
     lightroom::LightroomImporter &lightroomImporter();
     thumb::ThumbnailCache &thumbnails();
     taxonomy::TaxonomyStore &taxonomyStore();
@@ -88,6 +92,7 @@ private:
     std::unique_ptr<scan::ScanService> m_scanService;
     std::unique_ptr<scan::LibraryWatcher> m_libraryWatcher;
     std::unique_ptr<match::MatchService> m_matchService;
+    std::unique_ptr<collection::ExportService> m_exportService;
     std::unique_ptr<lightroom::LightroomImporter> m_lightroomImporter;
     std::unique_ptr<taxonomy::TaxonomyStore> m_taxonomyStore;
     std::unique_ptr<net::HttpClient> m_http;

@@ -35,6 +35,7 @@ public:
         NoteRole,
         QualifierRole,
         SearchTextRole,   // name + folder + guess, joined, for the filter box
+        HasCandidateRole, // true if the engine found any taxon candidate at all
     };
 
     ReviewQueueModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
@@ -47,6 +48,7 @@ public:
     void dropCapture(qint64 captureId);
 
     int queueCount() const { return int(m_rows.size()); }
+    int noCandidateCount() const;
     int pendingInFolder(int folderId) const;
     int pendingUnderFolder(const QString &folderPath) const;
 

@@ -30,6 +30,7 @@ private slots:
     void unsetExifWriterStillSavesTheFile();
     void fallsBackToObservationIdWhenNoNamingDataAvailable();
     void disambiguatesFilenameCollisionsWithinARun();
+    void cancelStopsAfterTheCurrentPhotoAndKeepsWhatCompleted();
 
 private:
     std::unique_ptr<QTemporaryDir> m_sourceDir;
@@ -212,6 +213,30 @@ void TestInatImportService::disambiguatesFilenameCollisionsWithinARun()
         QDir(destDir).filePath(QStringLiteral("Diuris sp900 - Melbourne, VIC - 10012025.jpg"))));
     QVERIFY(QFile::exists(
         QDir(destDir).filePath(QStringLiteral("Diuris sp900 - Melbourne, VIC - 10012025 - 2.jpg"))));
+}
+
+void TestInatImportService::cancelStopsAfterTheCurrentPhotoAndKeepsWhatCompleted()
+{
+    InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
+    InatImportService service(downloader, QStringLiteral("Test Author"));
+
+    // Cancel as soon as the first photo has landed.
+    connect(&service, &InatImportService::progress, &service, [&](int done, int) {
+        if (done == 1)
+            service.cancel();
+    });
+
+    QSignalSpy spy(&service, &InatImportService::finished);
+    service.start({makeItem(1, 2), makeItem(3, 4), makeItem(5, 6)}, m_destDir->path());
+    QVERIFY(spy.wait(5000));
+
+    QCOMPARE(spy.at(0).at(0).toBool(), false);
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("cancelled"));
+    const auto saved = spy.at(0).at(2).value<QList<SavedFile>>();
+    QCOMPARE(saved.size(), 1);
+    QCOMPARE(saved.first().photoId, qint64(2));
+    QVERIFY(QFile::exists(saved.first().path));
+    QVERIFY(!service.isRunning());
 }
 
 QTEST_MAIN(TestInatImportService)

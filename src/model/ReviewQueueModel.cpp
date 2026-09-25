@@ -80,6 +80,7 @@ QVariant ReviewQueueModel::data(const QModelIndex &index, int role) const
     case SearchTextRole:
         return QStringList{row.nameText, row.baseName, row.folderPath, row.guessName}
             .join(QLatin1Char(' '));
+    case HasCandidateRole:   return row.guessInatId > 0;
     default:                 return {};
     }
 }
@@ -146,6 +147,16 @@ void ReviewQueueModel::dropCapture(qint64 captureId)
         endRemoveRows();
         return;
     }
+}
+
+int ReviewQueueModel::noCandidateCount() const
+{
+    int n = 0;
+    for (const Row &row : m_rows) {
+        if (row.guessInatId <= 0)
+            ++n;
+    }
+    return n;
 }
 
 int ReviewQueueModel::pendingInFolder(int folderId) const

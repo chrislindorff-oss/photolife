@@ -79,7 +79,8 @@ public:
     // Re-reads every row from the catalogue.
     void reload();
 
-    // "" = all; "auto" | "pending" | "unmatched" | "confirmed" restrict the grid.
+    // "" = all; "auto" | "pending" | "unmatched" | "confirmed" | "confirmedOrAuto"
+    // restrict the grid.
     void setStatusFilter(const QString &status);
     QString statusFilter() const { return m_statusFilter; }
 

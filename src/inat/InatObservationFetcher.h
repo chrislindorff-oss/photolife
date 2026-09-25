@@ -32,6 +32,11 @@ struct Candidate
     // individual photos from an observation, so some of its photos may be
     // downloaded already while others aren't.
     QSet<qint64> alreadyDownloadedPhotoIds;
+
+    // Filled by LibraryPresence::annotate() (see LibraryPresence.h).
+    bool presenceChecked = false;
+    bool inAnyTree = false;
+    bool inLibrary = false;
 };
 
 // Searches one iNaturalist user's observations for every taxon in a
@@ -62,6 +67,11 @@ public:
     // -- normally the active reference tree's own locality, so results match
     // both its taxa and its geographic scope, not just the species list.
     void start(const QString &userLogin, const QList<qint64> &taxonIds, qint64 placeId = 0);
+
+    // Every one of the user's observations with photos (optionally within
+    // `placeId`), not limited to any reference tree's taxa. progress() then
+    // reports observations fetched so far against the API's total.
+    void startAll(const QString &userLogin, qint64 placeId = 0);
     void cancel() { m_cancelled = true; }
     bool isRunning() const { return m_running; }
 
@@ -86,6 +96,8 @@ private:
     void loadLocalRecords();
     void fetchNextBatch();
     void fetchPage();
+    void fetchAllPage();
+    void begin(const QString &userLogin, qint64 placeId);
     bool checkCancelled();
     void fail(const QString &error);
     void succeed();
@@ -103,6 +115,8 @@ private:
     int m_batchIndex = 0;
     int m_page = 1;
     int m_batchFetchedCount = 0;   // results seen so far for the current batch, across pages
+    qint64 m_idAbove = 0;          // startAll(): keyset cursor
+    int m_allTotal = 0;            // startAll(): the API's total, from the first page
 
     QList<LocalRecord> m_localRecords;
     QSet<qint64> m_downloadedPhotoIds;   // capture.inat_photo_id already in the library

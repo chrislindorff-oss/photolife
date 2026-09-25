@@ -25,6 +25,7 @@ private slots:
 
     void searchTextRoleCombinesNameFolderAndGuess();
     void proxyFilterNarrowsTheQueue();
+    void hasCandidateRoleDistinguishesNoMatchFromPendingMatch();
 
 private:
     QTemporaryDir m_tmp;
@@ -54,6 +55,10 @@ void TestReviewQueueModel::init()
                                   "scribble note - Anglesea 2-1-2020.jpg"));
     touch(m_root + QStringLiteral("/Orchidaceae/Diuris/Diuris pardina/"
                                   "Diuris pardina - Grampians 3-1-2020.jpg"));
+    // A folder/file name with no genus anywhere in the cached taxonomy -- the
+    // engine should find no candidate at all, not just a low-confidence one.
+    touch(m_root + QStringLiteral("/Mystery/no clue what this is/"
+                                  "totally unknown thing 4-1-2020.jpg"));
 
     m_db = std::make_unique<Database>();
     QVERIFY(m_db->open(QStringLiteral(":memory:")));
@@ -139,6 +144,19 @@ void TestReviewQueueModel::proxyFilterNarrowsTheQueue()
 
     proxy.setFilterFixedString(QString());
     QCOMPARE(proxy.rowCount(), all);
+}
+
+void TestReviewQueueModel::hasCandidateRoleDistinguishesNoMatchFromPendingMatch()
+{
+    const int matched = rowFor(QStringLiteral("Anglesea 1-1-2020"));
+    QVERIFY(matched >= 0);
+    QVERIFY(m_model->index(matched).data(ReviewQueueModel::HasCandidateRole).toBool());
+
+    const int unmatched = rowFor(QStringLiteral("totally unknown thing"));
+    QVERIFY(unmatched >= 0);
+    QVERIFY(!m_model->index(unmatched).data(ReviewQueueModel::HasCandidateRole).toBool());
+
+    QCOMPARE(m_model->noCandidateCount(), 1);
 }
 
 QTEST_MAIN(TestReviewQueueModel)

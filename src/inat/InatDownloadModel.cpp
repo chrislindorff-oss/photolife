@@ -92,6 +92,12 @@ QVariant InatDownloadModel::data(const QModelIndex &index, int role) const
             tip += QStringLiteral("\nAlready downloaded to your library");
         else if (row.likelyDuplicate)
             tip += QStringLiteral("\nPossibly already in your library");
+        if (row.presenceChecked) {
+            if (!row.inLibrary)
+                tip += tr("\nNEW: no photos of this taxon in your library yet");
+            if (!row.inAnyTree)
+                tip += tr("\nNO TREE: this taxon isn't in any of your reference trees");
+        }
         return tip;
     }
     case Qt::DecorationRole: {
@@ -130,6 +136,12 @@ QVariant InatDownloadModel::data(const QModelIndex &index, int role) const
         return row.taxonName;
     case PlaceGuessRole:
         return row.placeGuess;
+    case PresenceCheckedRole:
+        return row.presenceChecked;
+    case InLibraryRole:
+        return row.inLibrary;
+    case InAnyTreeRole:
+        return row.inAnyTree;
     default:
         return {};
     }
@@ -165,9 +177,15 @@ void InatDownloadModel::setCandidates(const QList<Candidate> &candidates)
             row.alreadyDownloaded = c.alreadyDownloadedPhotoIds.contains(photo.id);
             row.latitude = c.observation.latitude;
             row.longitude = c.observation.longitude;
-            row.taxonName = taxon.name;
-            row.taxonCommonName = taxon.commonName;
+            // The local cache first (the tree's own spelling); iNat's own
+            // names for taxa outside every cached tree.
+            row.taxonName = !taxon.name.isEmpty() ? taxon.name : c.observation.taxonName;
+            row.taxonCommonName =
+                !taxon.commonName.isEmpty() ? taxon.commonName : c.observation.taxonCommonName;
             row.placeGuess = c.observation.placeGuess;
+            row.presenceChecked = c.presenceChecked;
+            row.inLibrary = c.inLibrary;
+            row.inAnyTree = c.inAnyTree;
             if (!row.previewUrl.isEmpty())
                 m_rowsByUrl[row.previewUrl].append(int(m_rows.size()));
             m_rows.append(std::move(row));

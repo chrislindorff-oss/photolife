@@ -1,6 +1,7 @@
 #include "app/Application.h"
 
 #include "app/Logging.h"
+#include "collection/ExportService.h"
 #include "db/CatalogueDescriptor.h"
 #include "db/Database.h"
 #include "pl/Version.h"
@@ -79,6 +80,8 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
 
     m_matchService = std::make_unique<match::MatchService>(descriptor);
 
+    m_exportService = std::make_unique<collection::ExportService>(descriptor);
+
     m_lightroomImporter = std::make_unique<lightroom::LightroomImporter>(descriptor);
 
     m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
@@ -148,6 +151,11 @@ scan::LibraryWatcher &Application::libraryWatcher()
 match::MatchService &Application::matchService()
 {
     return *m_matchService;
+}
+
+collection::ExportService &Application::exportService()
+{
+    return *m_exportService;
 }
 
 lightroom::LightroomImporter &Application::lightroomImporter()

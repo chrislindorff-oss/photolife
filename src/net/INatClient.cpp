@@ -242,7 +242,33 @@ void INatClient::fetchObservations(const QString &userLogin, const QList<qint64>
     q.addQueryItem(QStringLiteral("page"), QString::number(page));
     q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("200"));
     url.setQuery(q);
+    getObservationPage(url, std::move(done));
+}
 
+void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 idAbove,
+                                      std::function<void(Outcome<ObservationPage>)> done)
+{
+    QUrl url(m_baseUrl + QStringLiteral("/observations"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("user_login"), userLogin);
+    if (placeId > 0)
+        q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
+    // Keyset paging (id_above, ascending ids) rather than page=N: the API
+    // refuses page-number paging past 10,000 results, which a whole
+    // observation history can exceed.
+    q.addQueryItem(QStringLiteral("order_by"), QStringLiteral("id"));
+    q.addQueryItem(QStringLiteral("order"), QStringLiteral("asc"));
+    if (idAbove > 0)
+        q.addQueryItem(QStringLiteral("id_above"), QString::number(idAbove));
+    q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("200"));
+    url.setQuery(q);
+    getObservationPage(url, std::move(done));
+}
+
+void INatClient::getObservationPage(const QUrl &url,
+                                    std::function<void(Outcome<ObservationPage>)> done)
+{
     m_http.get(
         url,
         [done = std::move(done)](HttpResponse resp) {

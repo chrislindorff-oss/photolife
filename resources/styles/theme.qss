@@ -71,6 +71,35 @@ QTreeView::branch {
     background: transparent;
 }
 
+/* Qt's style-sheet engine only ever paints a fixed dark triangle for the
+ * expand/collapse indicator once ::branch is styled at all, regardless of
+ * palette -- invisible in dark mode. Draw it ourselves via the CSS
+ * border-triangle trick, tinted with the theme's muted-text color so it
+ * stays visible in both themes. */
+QTreeView::branch:has-children:!has-siblings:closed,
+QTreeView::branch:closed:has-children:has-siblings {
+    border-image: none;
+    image: none;
+    width: 0px;
+    height: 0px;
+    margin: 6px 8px;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    border-left: 5px solid @mutedText@;
+}
+
+QTreeView::branch:open:has-children:has-siblings,
+QTreeView::branch:has-children:!has-siblings:open {
+    border-image: none;
+    image: none;
+    width: 0px;
+    height: 0px;
+    margin: 8px 6px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid @mutedText@;
+}
+
 QHeaderView::section {
     background: @panel@;
     color: @mutedText@;

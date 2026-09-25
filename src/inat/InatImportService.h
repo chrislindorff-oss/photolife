@@ -68,6 +68,16 @@ public:
     void start(const QList<ImportItem> &items, const QString &destFolder);
     bool isRunning() const { return m_running; }
 
+    // Stops after the photo currently downloading (an in-flight transfer
+    // isn't aborted part-way). finished() then reports ok = false with
+    // error "cancelled", and `saved` lists the photos that did complete.
+    void cancel() { m_cancelled = true; }
+
+    // The capture ids the scan created for `saved` (looked up by rendition
+    // path), for matching just the downloaded photos.
+    static QList<qint64> captureIdsFor(const QString &connectionName,
+                                       const QList<SavedFile> &saved);
+
     // UPDATEs each newly-scanned capture (matched by its rendition's exact
     // file path) with the iNat observation/photo id it came from. Returns the
     // number of capture rows stamped.
@@ -85,6 +95,7 @@ private:
     ExifWriterFn m_exifWriter;
 
     bool m_running = false;
+    bool m_cancelled = false;
     QString m_destFolder;
     QList<ImportItem> m_items;
     int m_index = 0;

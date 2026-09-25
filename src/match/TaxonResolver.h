@@ -3,6 +3,7 @@
 #include "match/NameParser.h"
 
 #include <QList>
+#include <QSet>
 #include <QString>
 
 namespace pl::match {
@@ -24,9 +25,20 @@ struct TaxonCandidate
 // Folder-derived context that sharpens (or is expected to disagree with) a match.
 struct ResolveHints
 {
-    QString genus;        // folder's genus
+    QString genus;        // folder's genus (or, failing that, the name's own first word)
+    // True when `genus` came from the folder. A genus taken from the name's own
+    // first word says nothing about a common-name hit ("Bracket" in "Bracket
+    // Fungi" isn't a genus), so it's only held against vernacular candidates
+    // when it came from the folder.
+    bool genusFromFolder = false;
     QString family;       // folder's family — an ancestry hint only (may be pre-APG)
     QString folderPath;   // for folder-scoped aliases
+
+    // Local taxon ids of a group being matched against (Match Library Against
+    // This Group). When any candidate falls inside it, candidates outside it
+    // are dropped -- a tiebreaker for names that are ambiguous library-wide
+    // but unique within the group. Empty = no preference.
+    QSet<qint64> preferTaxonIds;
 };
 
 // Resolves a parsed name against the cached taxonomy (taxon / taxon_name) and

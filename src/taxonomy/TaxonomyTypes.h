@@ -94,6 +94,12 @@ struct Observation
 {
     qint64 id = 0;
     qint64 taxonInatId = 0;
+    // The observation's own taxon as iNat reported it -- present even when
+    // that taxon isn't in the local taxonomy cache (searches not scoped to a
+    // reference tree). Empty for an unidentified observation.
+    QString taxonName;
+    QString taxonCommonName;
+    QString taxonRank;
     QString observedOn;               // "YYYY-MM-DD", may be empty
     std::optional<double> latitude;
     std::optional<double> longitude;

@@ -36,6 +36,7 @@ private slots:
     void taxonSetScopeAndTaxonScopeAreMutuallyExclusive();
     void captionLocalityShownOnlyWhenEnabledAndCached();
     void applyGpsPatchesRowInPlaceWithoutReset();
+    void confirmedOrAutoStatusFilterIncludesBothStatuses();
 
 private:
     std::unique_ptr<QTemporaryDir> m_dbDir;
@@ -46,6 +47,7 @@ private:
 
     void seed();
     int addCaptureMatchedTo(const QString &baseName, qint64 taxonInatId);
+    int addAutoMatchedCapture(const QString &baseName, qint64 taxonInatId);
     QStringList names(CaptureListModel &m) const;
 };
 
@@ -123,6 +125,33 @@ int TestCaptureListModel::addCaptureMatchedTo(const QString &baseName, qint64 ta
     m.prepare(QStringLiteral(
         "INSERT INTO capture_match (capture_id, taxon_id, method, confidence, status, decided_by) "
         "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), 'manual', 1.0, 'confirmed', 'user')"));
+    m.addBindValue(captureId);
+    m.addBindValue(taxonInatId);
+    m.exec();
+    return captureId;
+}
+
+int TestCaptureListModel::addAutoMatchedCapture(const QString &baseName, qint64 taxonInatId)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_db->connectionName(), false);
+    QSqlQuery cap(db);
+    cap.prepare(QStringLiteral("INSERT INTO capture (folder_id, base_name) VALUES (1, ?)"));
+    cap.addBindValue(baseName);
+    cap.exec();
+    const int captureId = cap.lastInsertId().toInt();
+
+    QSqlQuery ren(db);
+    ren.prepare(QStringLiteral(
+        "INSERT INTO rendition (capture_id, path, kind, ext) VALUES (?, ?, 'jpeg', 'jpg')"));
+    ren.addBindValue(captureId);
+    ren.addBindValue(QStringLiteral("/lib/%1.jpg").arg(baseName));
+    ren.exec();
+
+    QSqlQuery m(db);
+    m.prepare(QStringLiteral(
+        "INSERT INTO capture_match (capture_id, taxon_id, method, confidence, status, decided_by) "
+        "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), 'folder+file', 0.95, 'auto', "
+        "'engine')"));
     m.addBindValue(captureId);
     m.addBindValue(taxonInatId);
     m.exec();
@@ -345,6 +374,26 @@ void TestCaptureListModel::applyGpsPatchesRowInPlaceWithoutReset()
     dataChangedSpy.clear();
     model.applyGps(999999, 1.0, 2.0);
     QCOMPARE(dataChangedSpy.count(), 0);
+}
+
+void TestCaptureListModel::confirmedOrAutoStatusFilterIncludesBothStatuses()
+{
+    addAutoMatchedCapture(QStringLiteral("crow-auto"), 901);   // another bird-tree capture
+
+    CaptureListModel model(*m_db, *m_thumbs, this);
+
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    model.setProjectScope(m_birdProject);
+    QVERIFY(spy.wait(2000));
+
+    // setStatusFilter() reloads synchronously (unlike setProjectScope()'s
+    // background reloadAsync()), so its modelReset has already fired by the
+    // time the call returns -- no spy.wait() needed or correct here.
+    model.setStatusFilter(QStringLiteral("confirmed"));
+    QCOMPARE(model.rowCount(), 1);   // just the original, manually confirmed "crow"
+
+    model.setStatusFilter(QStringLiteral("confirmedOrAuto"));
+    QCOMPARE(model.rowCount(), 2);   // "crow" (confirmed) and "crow-auto" (auto) both included
 }
 
 QTEST_MAIN(TestCaptureListModel)

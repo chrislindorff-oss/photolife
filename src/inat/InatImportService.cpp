@@ -1,6 +1,7 @@
 #include "inat/InatImportService.h"
 
 #include "inat/InatPhotoDownloader.h"
+#include "util/PathSanitize.h"
 
 #include <QDate>
 #include <QDir>
@@ -12,19 +13,7 @@
 namespace pl::inat {
 namespace {
 
-// Strips characters illegal in filenames on the platforms this app targets
-// (Windows is the most restrictive -- <>:"/\|?* plus control characters),
-// replacing each with a space, then collapses the whitespace left behind so
-// a multi-word species or place name stays readable.
-QString sanitizeFilenameComponent(const QString &text)
-{
-    static const QString kIllegal = QStringLiteral("<>:\"/\\|?*");
-    QString out;
-    out.reserve(text.size());
-    for (const QChar &ch : text)
-        out += (ch.unicode() < 0x20 || kIllegal.contains(ch)) ? QChar(u' ') : ch;
-    return out.simplified();
-}
+using pl::util::sanitizeFilenameComponent;
 
 // "SpeciesName - Place - DDMMYYYY", each part sanitized and omitted when the
 // item has no data for it (place_guess and the observed-on date are both
@@ -59,6 +48,7 @@ void InatImportService::start(const QList<ImportItem> &items, const QString &des
     if (m_running)
         return;
     m_running = true;
+    m_cancelled = false;
     m_destFolder = destFolder;
     m_items = items;
     m_index = 0;
@@ -71,6 +61,11 @@ void InatImportService::start(const QList<ImportItem> &items, const QString &des
 
 void InatImportService::importNext()
 {
+    if (m_cancelled) {
+        m_running = false;
+        emit finished(false, QStringLiteral("cancelled"), m_saved);
+        return;
+    }
     if (m_index >= m_items.size()) {
         m_running = false;
         emit finished(true, QString(), m_saved);
@@ -134,6 +129,23 @@ int InatImportService::stampProvenance(const QString &connectionName,
             ++updated;
     }
     return updated;
+}
+
+QList<qint64> InatImportService::captureIdsFor(const QString &connectionName,
+                                              const QList<SavedFile> &saved)
+{
+    QList<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(connectionName, false));
+    q.prepare(QStringLiteral("SELECT capture_id FROM rendition WHERE path = ? LIMIT 1"));
+    for (const SavedFile &s : saved) {
+        q.bindValue(0, s.path);
+        if (q.exec() && q.next()) {
+            const qint64 id = q.value(0).toLongLong();
+            if (!ids.contains(id))
+                ids.append(id);
+        }
+    }
+    return ids;
 }
 
 } // namespace pl::inat

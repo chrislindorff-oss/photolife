@@ -81,6 +81,13 @@ public:
     // taxon is not currently in the tree (e.g. filtered out). Column 0.
     QModelIndex indexForTaxon(qint64 inatId) const;
 
+    // iNat ids of every taxon currently materialized in the tree -- i.e. what
+    // survived the active filters (photographedOnly/threatenedOnly/statusFilter)
+    // and rank-hiding, exactly what's visible on screen right now. For a caller
+    // that wants to mirror "what's on screen" elsewhere (the photo export
+    // dialog's "match what's currently shown" option).
+    QList<qint64> visibleTaxonIds() const { return m_byId.keys(); }
+
     // iNat ids of taxa whose scientific or common name matches `text` (folded,
     // case-insensitive), best matches first: a prefix on the scientific name,
     // then a prefix on the common name, then any substring. Searches the whole

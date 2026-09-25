@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QAbstractItemModelTester>
+#include <QSet>
 #include <QTreeView>
 
 #include "db/Database.h"
@@ -43,6 +44,7 @@ private slots:
     void findTaxaMatchesNameAndCommonName();
     void hiddenRanksReparentChildrenToNearestVisibleAncestor();
     void statusFilterHidesNonMatchingSubtreesAndFindsSpeciesOnly();
+    void visibleTaxonIdsReflectsActiveFilters();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -346,6 +348,34 @@ void TestTaxonomyTreeModel::statusFilterHidesNonMatchingSubtreesAndFindsSpeciesO
     // photos is still hidden once photographedOnly is also on.
     model.setPhotographedOnly(true);
     QVERIFY(!model.indexForTaxon(900).isValid());
+}
+
+void TestTaxonomyTreeModel::visibleTaxonIdsReflectsActiveFilters()
+{
+    // Diuris pardina (900) is photographed; Pterostylis nutans (901) is not.
+    coverage::ProjectCoverage cov;
+    for (qint64 id : {qint64(47217), qint64(800), qint64(900)})
+        cov.byTaxon[id].subtreeHasPhotos = true;
+    for (qint64 id : {qint64(801), qint64(901)})
+        cov.byTaxon[id].subtreeHasPhotos = false;
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+
+    auto ids = [&model] {
+        const QList<qint64> list = model.visibleTaxonIds();
+        return QSet<qint64>(list.begin(), list.end());
+    };
+
+    QCOMPARE(ids(), (QSet<qint64>{47217, 800, 801, 900, 901}));   // no filters: everything
+
+    model.setPhotographedOnly(true);
+    QCOMPARE(ids(), (QSet<qint64>{47217, 800, 900}));   // Pterostylis's unphotographed subtree gone
+    model.setPhotographedOnly(false);
+
+    model.setHiddenRanks({QStringLiteral("genus")});
+    QCOMPARE(ids(), (QSet<qint64>{47217, 900, 901}));   // both genera collapsed out of the tree
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

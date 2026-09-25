@@ -4,8 +4,12 @@ qt_add_library(photolife_core STATIC
     app/Logging.h           app/Logging.cpp
     app/StorageStats.h      app/StorageStats.cpp
     catalogue/BestShotStore.h catalogue/BestShotStore.cpp
+    catalogue/UntreedMatchStore.h catalogue/UntreedMatchStore.cpp
     checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
+    collection/CollectionManifest.h collection/CollectionManifest.cpp
+    collection/ExportEngine.h collection/ExportEngine.cpp
+    collection/ExportService.h collection/ExportService.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
@@ -18,6 +22,7 @@ qt_add_library(photolife_core STATIC
     inat/InatDownloadModel.h inat/InatDownloadModel.cpp
     inat/InatImportService.h inat/InatImportService.cpp
     inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
+    inat/LibraryPresence.h inat/LibraryPresence.cpp
     inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
     lightroom/LightroomCatalogReader.h lightroom/LightroomCatalogReader.cpp
     lightroom/LightroomImportEngine.h lightroom/LightroomImportEngine.cpp
@@ -32,6 +37,7 @@ qt_add_library(photolife_core STATIC
     match/TextSimilarity.h  match/TextSimilarity.cpp
     model/CaptureListModel.h model/CaptureListModel.cpp
     model/ReferencePhotoModel.h model/ReferencePhotoModel.cpp
+    model/ReviewQueueFilterProxy.h model/ReviewQueueFilterProxy.cpp
     model/ReviewQueueGroupModel.h model/ReviewQueueGroupModel.cpp
     model/ReviewQueueModel.h model/ReviewQueueModel.cpp
     model/TaxonomyTreeModel.h model/TaxonomyTreeModel.cpp
@@ -64,7 +70,9 @@ qt_add_library(photolife_core STATIC
     ui/AliasEditorDialog.h  ui/AliasEditorDialog.cpp
     ui/CatalogueConnectDialog.h ui/CatalogueConnectDialog.cpp
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
+    ui/CaptureDelegate.h    ui/CaptureDelegate.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
+    ui/ExportDialog.h       ui/ExportDialog.cpp
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/InatCoordinateConfirmDialog.h ui/InatCoordinateConfirmDialog.cpp
@@ -78,6 +86,7 @@ qt_add_library(photolife_core STATIC
     ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp
     ui/TaxonPickerDialog.h  ui/TaxonPickerDialog.cpp
     ui/Theme.h              ui/Theme.cpp
+    util/PathSanitize.h     util/PathSanitize.cpp
 )
 
 configure_file(Version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/pl/Version.h" @ONLY)

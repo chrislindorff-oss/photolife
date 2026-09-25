@@ -43,6 +43,9 @@ public:
         LongitudeRole,   // valid only when HasGpsRole is true
         NameRole,        // resolved taxon scientific name, may be empty if not cached locally
         PlaceGuessRole,  // iNat's own free-text place description, may be empty
+        PresenceCheckedRole,   // true once LibraryPresence has annotated the candidates
+        InLibraryRole,         // taxon already has photos in the library (see LibraryPresence)
+        InAnyTreeRole,         // taxon is a member of at least one reference tree
     };
 
     InatDownloadModel(pl::net::PhotoCache &photos, pl::taxonomy::TaxonomyStore &store,
@@ -74,6 +77,9 @@ private:
         QString taxonName;
         QString taxonCommonName;
         QString placeGuess;
+        bool presenceChecked = false;
+        bool inLibrary = false;
+        bool inAnyTree = false;
     };
 
     void onPhotoReady(const QString &url);

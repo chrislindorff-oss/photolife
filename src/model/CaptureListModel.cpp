@@ -388,6 +388,8 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             clauses << QStringLiteral("match_status = 'auto'");
         else if (params.statusFilter == QLatin1String("confirmed"))
             clauses << QStringLiteral("match_status = 'confirmed'");
+        else if (params.statusFilter == QLatin1String("confirmedOrAuto"))
+            clauses << QStringLiteral("match_status IN ('confirmed', 'auto')");
         else if (params.statusFilter == QLatin1String("pending"))
             clauses << QStringLiteral("match_status = 'pending' AND matched_id IS NOT NULL");
         else if (params.statusFilter == QLatin1String("unmatched"))

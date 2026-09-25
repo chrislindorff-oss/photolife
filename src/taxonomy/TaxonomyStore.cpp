@@ -885,6 +885,25 @@ QList<qint64> TaxonomyStore::projectTaxonInatIds(int projectId) const
     return ids;
 }
 
+QList<qint64> TaxonomyStore::projectSubtreeTaxonIds(int projectId, qint64 rootInatId) const
+{
+    QList<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT pt.taxon_id FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "WHERE pt.project_id = ? AND t.inat_id IN ("
+        "  WITH RECURSIVE sub(x) AS (SELECT ? "
+        "    UNION ALL SELECT c.inat_id FROM taxon c JOIN sub ON c.parent_inat_id = sub.x) "
+        "  SELECT x FROM sub)"));
+    q.addBindValue(projectId);
+    q.addBindValue(qlonglong(rootInatId));
+    if (q.exec()) {
+        while (q.next())
+            ids.append(q.value(0).toLongLong());
+    }
+    return ids;
+}
+
 QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
 {
     QList<TreeNode> nodes;

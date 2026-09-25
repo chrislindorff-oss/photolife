@@ -9,6 +9,7 @@
 #include <QString>
 #include <QWidget>
 
+class QButtonGroup;
 class QCheckBox;
 class QLabel;
 class QLineEdit;
@@ -16,9 +17,9 @@ class QListWidget;
 class QListWidgetItem;
 class QPushButton;
 class QResizeEvent;
-class QSortFilterProxyModel;
 class QStackedWidget;
 class QTimer;
+class QToolButton;
 class QTreeView;
 
 namespace pl {
@@ -34,6 +35,7 @@ class PhotoCache;
 namespace pl::model {
 class ReviewQueueModel;
 class ReviewQueueGroupModel;
+class ReviewQueueFilterProxy;
 }
 
 namespace pl {
@@ -99,6 +101,8 @@ private:
     void useTreeTaxon();
     void updateTreeTaxonButton();
     void undo();
+    void setBucket(int bucket);
+    void updateBucketButtons();
 
     int visibleQueueCount() const;        // capture-leaf count (respects the filter)
     QModelIndex visibleQueueIndex(int row) const;
@@ -108,12 +112,16 @@ private:
     pl::net::INatClient &m_inat;
     pl::net::PhotoCache &m_photos;
     pl::model::ReviewQueueModel *m_queue;
-    QSortFilterProxyModel *m_queueProxy;
+    pl::model::ReviewQueueFilterProxy *m_queueProxy;
     pl::model::ReviewQueueGroupModel *m_queueGroup;
     pl::match::MatchReviewer m_reviewer;
     pl::match::CandidateFinder m_finder;
 
     QLineEdit *m_photoFilter;
+    QButtonGroup *m_bucketGroup;
+    QToolButton *m_bucketAllButton;
+    QToolButton *m_bucketNoCandidateButton;
+    QToolButton *m_bucketNeedsReviewButton;
     QTreeView *m_queueView;
     QSet<QString> m_collapsedGroups;   // group names the user has collapsed, kept across reloads
     QStackedWidget *m_rightStack;      // 0 = empty message, 1 = detail form
@@ -135,6 +143,7 @@ private:
     QString m_captureFolder;
     QLabel *m_guess;
     QListWidget *m_candidates;
+    QPushButton *m_confirmButton;
     QLineEdit *m_search;
     QLabel *m_bulkLabel;
     QPushButton *m_bulkButton;

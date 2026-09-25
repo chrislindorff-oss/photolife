@@ -139,8 +139,12 @@ pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
     o.placeGuess = obj.value(QStringLiteral("place_guess")).toString();
 
     const QJsonObject taxon = obj.value(QStringLiteral("taxon")).toObject();
-    if (!taxon.isEmpty())
+    if (!taxon.isEmpty()) {
         o.taxonInatId = optId(taxon.value(QStringLiteral("id"))).value_or(0);
+        o.taxonName = taxon.value(QStringLiteral("name")).toString();
+        o.taxonCommonName = taxon.value(QStringLiteral("preferred_common_name")).toString();
+        o.taxonRank = taxon.value(QStringLiteral("rank")).toString();
+    }
 
     // Same [lng, lat] GeoJSON point convention already used for a place's
     // bounding box above. Absent (geoprivacy-obscured with no public

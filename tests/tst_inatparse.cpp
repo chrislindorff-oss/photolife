@@ -139,7 +139,8 @@ void TestINatParse::observationCoreFieldsAndExplicitPhotoSizes()
 {
     const auto o = parseObservation(obj(R"({
         "id": 987654, "observed_on": "2025-11-02",
-        "taxon": {"id": 60815},
+        "taxon": {"id": 60815, "name": "Anas superciliosa", "rank": "species",
+                  "preferred_common_name": "Pacific Black Duck"},
         "geojson": {"type": "Point", "coordinates": [144.9631, -37.8136]},
         "photos": [
             {"id": 1, "square_url": "https://x/1/square.jpg",
@@ -149,6 +150,9 @@ void TestINatParse::observationCoreFieldsAndExplicitPhotoSizes()
     QCOMPARE(o.id, qint64(987654));
     QCOMPARE(o.observedOn, QStringLiteral("2025-11-02"));
     QCOMPARE(o.taxonInatId, qint64(60815));
+    QCOMPARE(o.taxonName, QStringLiteral("Anas superciliosa"));
+    QCOMPARE(o.taxonCommonName, QStringLiteral("Pacific Black Duck"));
+    QCOMPARE(o.taxonRank, QStringLiteral("species"));
     QVERIFY(o.longitude.has_value());
     QCOMPARE(o.longitude.value(), 144.9631);
     QCOMPARE(o.latitude.value(), -37.8136);

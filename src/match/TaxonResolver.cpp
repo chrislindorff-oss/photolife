@@ -194,7 +194,23 @@ void TaxonResolver::applyHints(QList<TaxonCandidate> &candidates, const ResolveH
         return;
     const QString hintGenus = hints.genus.toLower();
 
+    // A "genus" that isn't one in the taxonomy cache says nothing either way:
+    // folder classification guesses genus for any single capitalised word, so
+    // group folders like "Cuckoos" or "Fairywrens" would otherwise count
+    // against every photo filed in them.
+    {
+        QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+        q.prepare(QStringLiteral(
+            "SELECT 1 FROM taxon_name tn JOIN taxon t ON t.id = tn.taxon_id "
+            "WHERE tn.name_folded = ? AND t.rank = 'genus' LIMIT 1"));
+        q.addBindValue(TaxonomyStore::foldName(hints.genus));
+        if (!q.exec() || !q.next())
+            return;
+    }
+
     for (TaxonCandidate &c : candidates) {
+        if (c.matchedVia == QLatin1String("vernacular") && !hints.genusFromFolder)
+            continue;
         const QString candGenus = genusOf(c.name).toLower();
         if (candGenus == hintGenus) {
             c.score = std::min(1.0, c.score + 0.03);
@@ -228,6 +244,15 @@ QList<TaxonCandidate> TaxonResolver::resolve(const ParsedName &parsed,
     }
 
     QList<TaxonCandidate> result = best.values();
+    if (!hints.preferTaxonIds.isEmpty()) {
+        const bool anyPreferred = std::any_of(result.cbegin(), result.cend(), [&](const auto &c) {
+            return hints.preferTaxonIds.contains(c.taxonId);
+        });
+        if (anyPreferred)
+            result.removeIf([&](const TaxonCandidate &c) {
+                return !hints.preferTaxonIds.contains(c.taxonId);
+            });
+    }
     std::sort(result.begin(), result.end(),
               [](const TaxonCandidate &a, const TaxonCandidate &b) { return a.score > b.score; });
     if (result.size() > 8)

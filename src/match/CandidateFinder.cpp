@@ -79,6 +79,7 @@ QList<TaxonCandidate> CandidateFinder::forCapture(qint64 captureId) const
     ResolveHints hints;
     hints.genus = !folder.genusHint.isEmpty() ? folder.genusHint
                   : (!folderParsed.genus.isEmpty() ? folderParsed.genus : fileParsed.genus);
+    hints.genusFromFolder = !folder.genusHint.isEmpty() || !folderParsed.genus.isEmpty();
     hints.family = folder.familyHint;
     hints.folderPath = folder.path;
 

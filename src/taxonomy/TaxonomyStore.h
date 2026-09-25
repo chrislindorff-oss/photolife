@@ -258,6 +258,10 @@ public:
     // cached yet (ReferencePhotoFetcher's work list).
     QList<qint64> projectLeafTaxaMissingPhoto(int projectId) const;
 
+    // Local taxon ids (taxon.id, not iNat ids) of the project's members at or
+    // below `rootInatId` -- the group MatchEngine::matchGroup() matches against.
+    QList<qint64> projectSubtreeTaxonIds(int projectId, qint64 rootInatId) const;
+
 private:
     QString m_connectionName;
 };

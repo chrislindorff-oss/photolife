@@ -9,6 +9,8 @@
 
 #include <functional>
 
+class QUrl;
+
 namespace pl::net {
 
 class HttpClient;
@@ -114,7 +116,15 @@ public:
                            qint64 placeId, const QDate &dateFrom, const QDate &dateTo, int page,
                            std::function<void(Outcome<ObservationPage>)> done);
 
+    // Every one of the user's observations with photos, not limited to any
+    // taxa, in ascending id order: pass 0 for the first page, then the last
+    // result's id to continue. An empty page means there are no more.
+    void fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 idAbove,
+                              std::function<void(Outcome<ObservationPage>)> done);
+
 private:
+    void getObservationPage(const QUrl &url, std::function<void(Outcome<ObservationPage>)> done);
+
     HttpClient &m_http;
     QString m_baseUrl = QStringLiteral("https://api.inaturalist.org/v1");
     QString m_accessToken;

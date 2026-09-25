@@ -3,6 +3,7 @@
 #include "app/Application.h"
 #include "app/StorageStats.h"
 #include "catalogue/BestShotStore.h"
+#include "catalogue/UntreedMatchStore.h"
 #include "db/Database.h"
 #include "db/PostgresConnectionMonitor.h"
 #include "model/CaptureListModel.h"
@@ -11,12 +12,14 @@
 #include "pl/Version.h"
 #include "checklist/ChecklistImporter.h"
 #include "checklist/ChecklistParser.h"
+#include "collection/ExportService.h"
 #include "coverage/CoverageCalculator.h"
 #include "geo/LocalityFetcher.h"
 #include "inat/ExifWriter.h"
 #include "inat/InatDownloadModel.h"
 #include "inat/InatImportService.h"
 #include "inat/InatObservationFetcher.h"
+#include "inat/LibraryPresence.h"
 #include "inat/InatPhotoDownloader.h"
 #include "lightroom/LightroomImporter.h"
 #include "match/MatchReviewer.h"
@@ -38,7 +41,9 @@
 #include "ui/AliasEditorDialog.h"
 #include "ui/CatalogueConnectDialog.h"
 #include "ui/CatalogueSettingsDialog.h"
+#include "ui/CaptureDelegate.h"
 #include "ui/CoveragePanel.h"
+#include "ui/ExportDialog.h"
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
 #include "ui/InatCoordinateConfirmDialog.h"
@@ -90,6 +95,7 @@
 #include <QPainter>
 #include <QProcess>
 #include <QProgressDialog>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStatusBar>
@@ -107,227 +113,12 @@
 
 #include <cmath>
 #include <functional>
+#include <utility>
 
 #include "db/Database.h"
 
 namespace pl {
 namespace {
-
-// A five-pointed star polygon inscribed in `box`, point-up.
-QPolygonF makeStar(const QRectF &box)
-{
-    constexpr double kPi = 3.14159265358979323846;
-    const QPointF c = box.center();
-    const qreal outer = qMin(box.width(), box.height()) / 2.0;
-    const qreal inner = outer * 0.42;
-    QPolygonF star;
-    for (int i = 0; i < 10; ++i) {
-        const qreal r = (i % 2 == 0) ? outer : inner;
-        const qreal a = -kPi / 2.0 + i * kPi / 5.0;
-        star << QPointF(c.x() + r * std::cos(a), c.y() + r * std::sin(a));
-    }
-    return star;
-}
-
-// Draws the base thumbnail plus a small status pip in the corner.
-class CaptureDelegate : public QStyledItemDelegate
-{
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-
-protected:
-    // Suppress the base class's own icon and (word-wrapping) text drawing —
-    // both are drawn manually in paint() below. The icon is drawn ourselves
-    // so we know its *exact* rect (Qt's own centering within decorationSize
-    // isn't something we can reliably reproduce from the outside), and the
-    // caption is drawn one elided line per field, so a long field value can
-    // never wrap onto a second line and overflow the grid cell's fixed
-    // height.
-    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
-    {
-        QStyledItemDelegate::initStyleOption(option, index);
-        option->text.clear();
-        option->icon = QIcon();
-    }
-
-public:
-    // With both icon and text cleared above, the base class's own sizeHint()
-    // (which measures those two) collapses to nearly nothing — silently
-    // decoupling the item's actual paint rect from the gridSize MainWindow
-    // configures, which is what left the border/caption misaligned with the
-    // laid-out cell. Reporting the exact same size here (mirroring
-    // MainWindow::applyCaptionFields()'s formula) keeps them locked together
-    // regardless of which one the view actually uses for layout.
-    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
-    {
-        int fields = 0;
-        if (const auto *m = qobject_cast<const model::CaptureListModel *>(index.model()))
-            fields = m->captionFields();
-        int lines = 0;
-        for (int b = fields & ~model::CaptureListModel::CaptionFileType; b; b &= (b - 1))
-            ++lines;
-        lines = std::max(lines, 1);
-        return QSize(option.decorationSize.width() + 20,
-                    option.decorationSize.height() + 20 + lines * 16);
-    }
-
-
-    void paint(QPainter *painter, const QStyleOptionViewItem &option,
-               const QModelIndex &index) const override
-    {
-        // Deliberately not calling the base class's paint() at all: even with
-        // icon/text cleared, it still computes its own internal "text rect"
-        // purely to paint a selection-highlight fill behind it, and that
-        // rect collapses to a small stray sliver landing wherever Qt's
-        // layout math happens to put it — visible as a small coloured
-        // artifact wherever it overlaps our own caption text. We draw the
-        // background and every bit of content ourselves instead; the
-        // rounded-and-filled selection highlight below already makes
-        // selection unambiguous.
-        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
-        const bool selected = option.state & QStyle::State_Selected;
-
-        painter->fillRect(option.rect, option.palette.color(QPalette::Base));
-        if (selected) {
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing);
-            painter->setPen(Qt::NoPen);
-            painter->setBrush(theme.selectedRow);
-            painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
-            painter->restore();
-        }
-
-        painter->save();
-        painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(QPen(selected ? theme.primaryAccent : theme.border, selected ? 2 : 1));
-        painter->setBrush(Qt::NoBrush);
-        painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
-        painter->restore();
-
-        // Fit the thumbnail into the decoration box ourselves (KeepAspectRatio,
-        // centered) so we know its exact rect — needed to anchor the pills and
-        // caption to the photo's real edge rather than the (usually taller or
-        // wider) bounding box reserved for it.
-        const QIcon icon = index.data(Qt::DecorationRole).value<QIcon>();
-        const QRect decoBox(option.rect.left() + (option.rect.width() - option.decorationSize.width()) / 2,
-                            option.rect.top(), option.decorationSize.width(),
-                            option.decorationSize.height());
-        QRect imageRect = decoBox;
-        if (!icon.isNull()) {
-            const QSize native = icon.availableSizes().value(0, option.decorationSize);
-            const QSize fitted = native.scaled(option.decorationSize, Qt::KeepAspectRatio);
-            imageRect = QRect(QPoint(0, 0), fitted);
-            imageRect.moveCenter(decoBox.center());
-            painter->drawPixmap(imageRect, icon.pixmap(native));
-        }
-        const int imageBottom = imageRect.bottom();
-
-        const QString status = index.data(model::CaptureListModel::MatchStatusRole).toString();
-        QColor colour;
-        if (status == QLatin1String("auto"))
-            colour = theme.statusAuto;
-        else if (status == QLatin1String("confirmed"))
-            colour = theme.statusConfirmed;
-        else if (status == QLatin1String("pending"))
-            colour = theme.statusPending;
-        else
-            colour = theme.statusUnmatched;
-
-        const int d = 10;
-        const QRect r = option.rect.adjusted(6, 6, 0, 0);
-        painter->save();
-        painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(colour);
-        painter->drawEllipse(QRect(r.left(), r.top(), d, d));
-        painter->restore();
-
-        // A gold star just right of the status dot marks a capture the user has
-        // starred as a best shot of its species.
-        if (index.data(model::CaptureListModel::IsBestShotRole).toBool()) {
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing);
-            painter->setPen(QPen(QColor(0, 0, 0, 90), 0.8));
-            painter->setBrush(theme.bestShotGold);
-            painter->drawPolygon(makeStar(QRectF(r.left() + d + 4, r.top() - 1, 13, 13)));
-            painter->restore();
-        }
-
-        // File type and GPS are both drawn as a row of pills across the
-        // bottom-center of the thumbnail, in the same style, side by side.
-        QStringList badges;
-        if (index.data(model::CaptureListModel::ShowFileTypeBadgeRole).toBool()) {
-            const QString ext = index.data(model::CaptureListModel::ExtRole).toString().toUpper();
-            if (!ext.isEmpty())
-                badges << ext;
-        }
-        if (index.data(model::CaptureListModel::HasGpsRole).toBool())
-            badges << QStringLiteral("GEO");
-
-        if (!badges.isEmpty()) {
-            QFont font = painter->font();
-            font.setPointSize(7);
-            font.setBold(true);
-            QFontMetrics fm(font);
-
-            const int padH = 6, pillH = 16, gap = 4;
-            QList<int> widths;
-            int totalW = -gap;
-            for (const QString &b : std::as_const(badges)) {
-                const int w = fm.horizontalAdvance(b) + padH * 2;
-                widths << w;
-                totalW += w + gap;
-            }
-
-            int x = option.rect.left() + (option.rect.width() - totalW) / 2;
-            const int y = imageBottom - pillH - 3;
-
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing);
-            painter->setFont(font);
-            for (int i = 0; i < badges.size(); ++i) {
-                const QRect pillRect(x, y, widths.at(i), pillH);
-                painter->setPen(Qt::NoPen);
-                painter->setBrush(theme.badgeBackground);
-                painter->drawRoundedRect(pillRect, pillH / 2.0, pillH / 2.0);
-                painter->setPen(theme.badgeText);
-                painter->drawText(pillRect, Qt::AlignCenter, badges.at(i));
-                x += widths.at(i) + gap;
-            }
-            painter->restore();
-        }
-
-        const QString caption = index.data(Qt::DisplayRole).toString();
-        if (!caption.isEmpty()) {
-            QFont font = painter->font();
-            if (font.pointSize() > 0)
-                font.setPointSize(qMax(1, font.pointSize() - 1));
-            else
-                font.setPixelSize(qMax(1, font.pixelSize() - 1));
-            QFontMetrics fm(font);
-            const int lineH = 16;
-            const int top = imageBottom + 4;
-            const QRect textArea(option.rect.left() + 4, top, option.rect.width() - 8,
-                                 option.rect.bottom() - top);
-
-            // Always the plain text colour: the caption sits below the icon,
-            // outside any selection-highlight fill, so HighlightedText here
-            // would render (near-)invisible against the ordinary background.
-            // The border above already makes selection obvious.
-            painter->save();
-            painter->setFont(font);
-            painter->setPen(option.palette.color(QPalette::Text));
-            int y = textArea.top();
-            for (const QString &line : caption.split(QLatin1Char('\n'))) {
-                const QString elided = fm.elidedText(line, Qt::ElideRight, textArea.width());
-                painter->drawText(QRect(textArea.left(), y, textArea.width(), lineH),
-                                  Qt::AlignHCenter | Qt::AlignVCenter, elided);
-                y += lineH;
-            }
-            painter->restore();
-        }
-    }
-};
 
 // Draws the same border/caption look as CaptureDelegate, for the iNaturalist
 // download grid's InatDownloadModel rows. A separate class rather than reuse:
@@ -338,6 +129,40 @@ public:
 // "faded" look for likely-duplicate candidates is already baked into the
 // decoration pixmap itself (InatDownloadModel::dimmed()), so no extra
 // painting is needed for that here.
+// The modal progress window beginTaskProgress() shows. Unlike a plain
+// QProgressDialog, it can't be dismissed while its task runs: Escape would
+// otherwise just hide it (QDialog::reject) -- unlocking the rest of the app
+// with the task still going -- so Escape and the title-bar close button act
+// as Cancel instead (when the task can be cancelled) and the window stays up
+// until endTaskProgress() takes it down.
+class TaskProgressDialog : public QProgressDialog
+{
+public:
+    TaskProgressDialog(const QString &label, bool cancellable, QWidget *parent)
+        : QProgressDialog(label, cancellable ? QObject::tr("Cancel") : QString(), 0, 0, parent),
+          m_cancellable(cancellable)
+    {
+        setWindowFlag(Qt::WindowCloseButtonHint, false);
+    }
+
+    void reject() override
+    {
+        if (m_cancellable)
+            emit canceled();
+    }
+
+protected:
+    void closeEvent(QCloseEvent *event) override
+    {
+        event->ignore();
+        if (m_cancellable)
+            emit canceled();
+    }
+
+private:
+    bool m_cancellable;
+};
+
 class InatCandidateDelegate : public QStyledItemDelegate
 {
 public:
@@ -397,6 +222,38 @@ public:
         }
         const int imageBottom = imageRect.bottom();
 
+        // NEW (no photos of this taxon in the library) / NO TREE (taxon in no
+        // reference tree): pills across the top-left of the thumbnail.
+        if (index.data(inat::InatDownloadModel::PresenceCheckedRole).toBool()) {
+            QList<std::pair<QString, QColor>> badges;
+            if (!index.data(inat::InatDownloadModel::InLibraryRole).toBool())
+                badges.append({QStringLiteral("NEW"), theme.primaryAccent});
+            if (!index.data(inat::InatDownloadModel::InAnyTreeRole).toBool())
+                badges.append({QStringLiteral("NO TREE"), theme.warning});
+            if (!badges.isEmpty()) {
+                QFont font = painter->font();
+                font.setPointSize(7);
+                font.setBold(true);
+                const QFontMetrics fm(font);
+                const int padH = 6, pillH = 16, gap = 4;
+                int x = imageRect.left() + 4;
+                const int y = imageRect.top() + 4;
+                painter->save();
+                painter->setRenderHint(QPainter::Antialiasing);
+                painter->setFont(font);
+                for (const auto &[text, color] : badges) {
+                    const QRect pill(x, y, fm.horizontalAdvance(text) + padH * 2, pillH);
+                    painter->setPen(Qt::NoPen);
+                    painter->setBrush(color);
+                    painter->drawRoundedRect(pill, pillH / 2.0, pillH / 2.0);
+                    painter->setPen(Qt::white);
+                    painter->drawText(pill, Qt::AlignCenter, text);
+                    x += pill.width() + gap;
+                }
+                painter->restore();
+            }
+        }
+
         const QString caption = index.data(Qt::DisplayRole).toString();
         if (!caption.isEmpty()) {
             QFont font = painter->font();
@@ -443,14 +300,30 @@ public:
         invalidateFilter();
     }
 
+    // Rows of the page's Show combo.
+    enum Presence { AllPresence, NewToLibrary, NotInAnyTree, NewOrNotInTree };
+    void setPresenceFilter(int presence)
+    {
+        if (m_presence == presence)
+            return;
+        m_presence = presence;
+        invalidateFilter();
+    }
+
 protected:
     bool filterAcceptsRow(int row, const QModelIndex &parent) const override
     {
         if (!QSortFilterProxyModel::filterAcceptsRow(row, parent))
             return false;
-        if (m_hideFaded) {
-            const QModelIndex idx = sourceModel()->index(row, 0, parent);
-            if (idx.data(inat::InatDownloadModel::LikelyDuplicateRole).toBool())
+        const QModelIndex idx = sourceModel()->index(row, 0, parent);
+        if (m_hideFaded && idx.data(inat::InatDownloadModel::LikelyDuplicateRole).toBool())
+            return false;
+        if (m_presence != AllPresence
+            && idx.data(inat::InatDownloadModel::PresenceCheckedRole).toBool()) {
+            const bool isNew = !idx.data(inat::InatDownloadModel::InLibraryRole).toBool();
+            const bool noTree = !idx.data(inat::InatDownloadModel::InAnyTreeRole).toBool();
+            if ((m_presence == NewToLibrary && !isNew) || (m_presence == NotInAnyTree && !noTree)
+                || (m_presence == NewOrNotInTree && !isNew && !noTree))
                 return false;
         }
         return true;
@@ -458,6 +331,7 @@ protected:
 
 private:
     bool m_hideFaded = false;
+    int m_presence = AllPresence;
 };
 
 MainWindow::MainWindow(Application &app, QWidget *parent)
@@ -514,9 +388,18 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
             });
     auto &matcher = m_app.matchService();
     connect(&matcher, &match::MatchService::started, this,
-            [this] { m_matchAction->setEnabled(false); statusBar()->showMessage(tr("Matching…")); });
+            [this] {
+                m_matchAction->setEnabled(false);
+                statusBar()->showMessage(
+                    m_matchingDownload           ? tr("Matching the downloaded iNaturalist photos…")
+                    : m_groupMatchName.isEmpty() ? tr("Matching…")
+                                                 : tr("Matching against \"%1\"…").arg(m_groupMatchName));
+            });
     connect(&matcher, &match::MatchService::progress, this, [this](int done, int total) {
         statusBar()->showMessage(tr("Matching %1 / %2").arg(done).arg(total));
+        if (m_matchingDownload && m_inatPipelineActive && !m_inatPipelineCancelled)
+            updateTaskProgress(tr("Matching the downloaded photos — %1 of %2…").arg(done).arg(total),
+                               done, total);
     });
     connect(&matcher, &match::MatchService::finished, this,
             [this](match::MatchEngine::Stats s) {
@@ -528,8 +411,37 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 m_reviewPane->reload();
                 updateReviewTabText();
                 updateBestShotsTabText();
+                const QString group = std::exchange(m_groupMatchName, QString());
+                const bool download = std::exchange(m_matchingDownload, false);
+                if (download) {
+                    // The downloaded taxa are no longer NEW -- refresh the badges.
+                    if (!m_inatCandidates.isEmpty())
+                        checkInatCandidatesAgainstLibrary();
+                    finishInatPipeline(
+                        !s.ok()       ? tr("Matching the downloaded photos failed: %1").arg(s.error)
+                        : s.cancelled ? tr("Matching cancelled — the downloaded photos are in the "
+                                           "library; run Match Library to finish matching them.")
+                                      : tr("Added and matched %1 photo(s) from iNaturalist — %2 "
+                                           "automatic, %3 to review.")
+                                            .arg(s.captures)
+                                            .arg(s.autoApplied)
+                                            .arg(s.pending));
+                    return;
+                }
                 if (!s.ok()) {
                     statusBar()->showMessage(tr("Match failed: %1").arg(s.error), 10000);
+                    return;
+                }
+                if (!group.isEmpty()) {
+                    statusBar()->showMessage(
+                        tr("Matched against \"%1\" — checked %2 unresolved photo(s): "
+                           "%3 automatic, %4 to review, %5 not in this group")
+                            .arg(group)
+                            .arg(s.captures)
+                            .arg(s.autoApplied)
+                            .arg(s.pending)
+                            .arg(s.outsideGroup),
+                        10000);
                     return;
                 }
                 statusBar()->showMessage(
@@ -610,6 +522,35 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                     m_refPhotoModel->reload();
             });
 
+    connect(&m_app.exportService(), &collection::ExportService::progress, this,
+            [this](int done, int total) {
+                statusBar()->showMessage(tr("Exporting photo %1 / %2").arg(done).arg(total));
+                updateTaskProgress(tr("Exporting photos…"), done, total);
+            });
+    connect(&m_app.exportService(), &collection::ExportService::finished, this,
+            [this](collection::ExportSummary s) {
+                m_exportTreePhotosAction->setEnabled(true);
+                endTaskProgress();
+                if (s.cancelled) {
+                    statusBar()->showMessage(tr("Export cancelled."), 6000);
+                    return;
+                }
+                if (!s.ok()) {
+                    statusBar()->showMessage(tr("Export failed: %1").arg(s.error), 10000);
+                    return;
+                }
+                statusBar()->showMessage(
+                    tr("Exported %1 new photo(s) into %2 new folder(s) (%3 already there, %4 "
+                       "renamed to avoid a clash).")
+                        .arg(s.photosCopied)
+                        .arg(s.foldersCreated)
+                        .arg(s.photosSkippedExisting)
+                        .arg(s.photosRenamedForCollision),
+                    10000);
+                if (!s.unexpectedFiles.isEmpty())
+                    showUnexpectedExportFiles(s);
+            });
+
     connect(m_localityFetcher, &geo::LocalityFetcher::progress, this,
             [this](int done, int total) {
                 statusBar()->showMessage(
@@ -687,10 +628,11 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     connect(&scanner, &scan::ScanService::finished, this, &MainWindow::onScanFinished);
 
     connect(&m_app.libraryWatcher(), &scan::LibraryWatcher::changeDetected, this, [this] {
-        if (!m_app.scanService().isRunning()) {
+        // A change mid-scan may land after the running scan passed that
+        // folder, so queue a follow-up rather than ignoring it.
+        if (!m_app.scanService().isRunning())
             statusBar()->showMessage(tr("Library folders changed — rescanning…"), 4000);
-            startScan();
-        }
+        requestScan();
     });
 
     m_model->reload();
@@ -813,6 +755,10 @@ void MainWindow::buildReferenceTreeMenu(QMenu *treeMenu)
     treeMenu->addSeparator();
     m_fetchRefPhotosAction = treeMenu->addAction(tr("Fetch Reference &Photos"),
                                                  this, &MainWindow::fetchReferencePhotos);
+
+    treeMenu->addSeparator();
+    m_exportTreePhotosAction = treeMenu->addAction(tr("&Export Photo Collection…"),
+                                                   this, &MainWindow::exportReferenceTreePhotos);
 }
 
 void MainWindow::buildViewMenu()
@@ -1083,6 +1029,7 @@ void MainWindow::refreshCoverage()
     if (m_mapView)
         m_mapView->setActiveLocality(pid > 0 ? m_app.taxonomyStore().projectLocalityBox(pid)
                                               : std::nullopt);
+    reloadUntreedTaxa();
     if (pid <= 0 || !m_app.database().isOpen()) {
         m_coveragePanel->clear();
         mutateTreePreservingState([this] { m_treeModel->setCoverage({}); });
@@ -1437,15 +1384,15 @@ void MainWindow::updateMissingList()
                                           : tr("Unphotographed Taxa (%1)").arg(missing.size()));
 }
 
-void MainWindow::reassignTaxonPhotos()
+void MainWindow::reassignPhotos(QListView *grid, model::CaptureListModel *model)
 {
     QList<int> captureIds;
-    const QModelIndexList selected = m_taxonGrid->selectionModel()->selectedIndexes();
+    const QModelIndexList selected = grid->selectionModel()->selectedIndexes();
     if (!selected.isEmpty()) {
         for (const QModelIndex &idx : selected)
             captureIds << idx.data(model::CaptureListModel::IdRole).toInt();
     } else {
-        const int rows = m_taxonModel->rowCount();
+        const int rows = model->rowCount();
         if (rows == 0) {
             statusBar()->showMessage(tr("No photos to reassign."), 5000);
             return;
@@ -1458,7 +1405,7 @@ void MainWindow::reassignTaxonPhotos()
             != QMessageBox::Yes)
             return;
         for (int r = 0; r < rows; ++r)
-            captureIds << m_taxonModel->index(r, 0).data(model::CaptureListModel::IdRole).toInt();
+            captureIds << model->index(r, 0).data(model::CaptureListModel::IdRole).toInt();
     }
 
     TaxonPickerDialog picker(m_app.database().connectionName(), this);
@@ -1479,6 +1426,8 @@ void MainWindow::reassignTaxonPhotos()
     m_taxonModel->reload();
     m_model->reload();
     m_bestShotModel->reload();
+    if (model != m_taxonModel && model != m_model && model != m_bestShotModel)
+        model->reload();
     m_reviewPane->reload();
     updateEmptyState();
     refreshCoverage();
@@ -1497,6 +1446,8 @@ void MainWindow::applyCaptionFields(int fields)
         m_taxonModel->setCaptionFields(fields);
     if (m_bestShotModel)
         m_bestShotModel->setCaptionFields(fields);
+    if (m_untreedModel)
+        m_untreedModel->setCaptionFields(fields);
 
     // Grow the grid cells to fit however many caption lines are now showing.
     // File Type doesn't count — it's drawn as an on-image badge, not a line.
@@ -1511,6 +1462,8 @@ void MainWindow::applyCaptionFields(int fields)
         m_taxonGrid->setGridSize(gridSize);
     if (m_bestShotGrid)
         m_bestShotGrid->setGridSize(gridSize);
+    if (m_untreedGrid)
+        m_untreedGrid->setGridSize(gridSize);
 }
 
 void MainWindow::updateReviewTabText()
@@ -1654,7 +1607,7 @@ bool MainWindow::ensureCatalogueReachable()
 void MainWindow::beginTaskProgress(const QString &title, std::function<void()> onCancel)
 {
     delete m_taskProgress;
-    m_taskProgress = new QProgressDialog(title, onCancel ? tr("Cancel") : QString(), 0, 0, this);
+    m_taskProgress = new TaskProgressDialog(title, bool(onCancel), this);
     m_taskProgress->setWindowModality(Qt::ApplicationModal);
     m_taskProgress->setMinimumDuration(0);
     m_taskProgress->setAutoClose(false);
@@ -1683,7 +1636,7 @@ void MainWindow::endTaskProgress()
 {
     if (!m_taskProgress)
         return;
-    m_taskProgress->close();
+    m_taskProgress->hide();   // not close(): TaskProgressDialog refuses to close by hand
     m_taskProgress->deleteLater();
     m_taskProgress = nullptr;
 }
@@ -1747,16 +1700,25 @@ void MainWindow::addTaxonToReferenceTree()
     if (!chosen)
         return;
 
+    addTaxonToTree(pid, chosen->inatId, chosen->name);
+}
+
+void MainWindow::addTaxonToTree(int pid, qint64 inatId, const QString &name)
+{
+    if (m_builder->isRunning() || m_addingTaxon) {
+        statusBar()->showMessage(
+            tr("Wait for the current reference tree task to finish first."), 6000);
+        return;
+    }
+
     m_addingTaxon = true;
     m_addTaxonAction->setEnabled(false);
     m_newTreeAction->setEnabled(false);
     m_refreshTreeAction->setEnabled(false);
     m_deleteTreeAction->setEnabled(false);
-    statusBar()->showMessage(tr("Fetching \"%1\" from iNaturalist…").arg(chosen->name));
-    beginTaskProgress(tr("Fetching \"%1\" from iNaturalist…").arg(chosen->name));
+    statusBar()->showMessage(tr("Fetching \"%1\" from iNaturalist…").arg(name));
+    beginTaskProgress(tr("Fetching \"%1\" from iNaturalist…").arg(name));
 
-    const qint64 inatId = chosen->inatId;
-    const QString name = chosen->name;
     m_app.inat().fetchTaxon(inatId, [this, pid, name](pl::net::Outcome<pl::net::TaxonDetail> out) {
         m_addingTaxon = false;
         m_addTaxonAction->setEnabled(true);
@@ -1769,24 +1731,32 @@ void MainWindow::addTaxonToReferenceTree()
             statusBar()->showMessage(tr("Could not fetch \"%1\": %2").arg(name, out.error), 8000);
             return;
         }
-        // The tree may have been switched, deleted or rebuilt while the
-        // (async, non-modal) fetch above was in flight.
-        if (currentProjectId() != pid) {
+        // The tree may have been deleted while the (async, non-modal) fetch
+        // above was in flight. (Switching to another tree is fine: the taxon
+        // still goes into the one it was meant for.)
+        const int comboIndex = m_projectCombo->findData(pid);
+        if (comboIndex < 0) {
             statusBar()->showMessage(
-                tr("The reference tree changed before \"%1\" could be added.").arg(name), 8000);
+                tr("The reference tree was removed before \"%1\" could be added.").arg(name),
+                8000);
             return;
         }
+        const QString treeName = m_projectCombo->itemText(comboIndex);
         if (!m_app.taxonomyStore().addTaxonWithAncestors(pid, out.value.ancestors, out.value.taxon)) {
             QMessageBox::warning(this, tr("Add Taxon to Reference Tree"),
                                  tr("Could not add \"%1\".").arg(name));
             return;
         }
 
-        mutateTreePreservingState([this, pid] { m_treeModel->setProject(pid); });
-        refreshCoverage();
-        updateMissingList();
-        reloadProjectList();
-        statusBar()->showMessage(tr("Added \"%1\" to the tree.").arg(name), 6000);
+        if (pid == currentProjectId()) {
+            mutateTreePreservingState([this, pid] { m_treeModel->setProject(pid); });
+            refreshCoverage();
+            updateMissingList();
+            reloadProjectList();
+        } else {
+            reloadUntreedTaxa();
+        }
+        statusBar()->showMessage(tr("Added \"%1\" to \"%2\".").arg(name, treeName), 6000);
     });
 }
 
@@ -1889,11 +1859,21 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     m_treeView->setCurrentIndex(idx.sibling(idx.row(), 0));
 
     QMenu menu(this);
+    menu.setToolTipsVisible(true);
 
     QAction *infra = menu.addAction(tr("Fetch Subspecies/Varieties under \"%1\"…").arg(name));
     infra->setEnabled(!m_infraFiller->isRunning() && currentProjectId() > 0);
     connect(infra, &QAction::triggered, this,
             [this, inatId, name] { startInfraspecificFetch(inatId, name); });
+
+    QAction *groupMatch = menu.addAction(tr("Match Library Against \"%1\"").arg(name));
+    groupMatch->setToolTip(
+        tr("Re-check unmatched photos, photos waiting in Review Unmatched, and genus-level "
+           "matches against the taxa in this group only. Your confirmed decisions are never "
+           "changed."));
+    groupMatch->setEnabled(!m_app.matchService().isRunning() && currentProjectId() > 0);
+    connect(groupMatch, &QAction::triggered, this,
+            [this, inatId, name] { startGroupMatch(inatId, name); });
 
     menu.addSeparator();
 
@@ -2117,7 +2097,33 @@ void MainWindow::startMatch()
                                 tr("Add and scan a folder of photos first."));
         return;
     }
+    m_groupMatchName.clear();
+    m_matchingDownload = false;
     m_app.matchService().start();
+}
+
+void MainWindow::startGroupMatch(qint64 inatId, const QString &name)
+{
+    if (m_app.matchService().isRunning())
+        return;
+    if (m_app.scanService().isRunning()) {
+        QMessageBox::information(this, tr("Match Library Against Group"),
+                                tr("Wait for the current scan to finish first."));
+        return;
+    }
+    const int pid = currentProjectId();
+    if (pid <= 0 || !ensureCatalogueReachable())
+        return;
+
+    const QList<qint64> ids = m_app.taxonomyStore().projectSubtreeTaxonIds(pid, inatId);
+    if (ids.isEmpty()) {
+        statusBar()->showMessage(tr("\"%1\" has no taxa in this tree to match against.").arg(name),
+                                 6000);
+        return;
+    }
+    m_groupMatchName = name;
+    m_matchingDownload = false;
+    m_app.matchService().start(QSet<qint64>(ids.begin(), ids.end()));
 }
 
 void MainWindow::newReferenceTree()
@@ -2629,6 +2635,7 @@ void MainWindow::buildCentralWidget()
     m_tabs->addTab(buildMapPage(), tr("Map"));
     m_tabs->addTab(buildBestShotsPage(), tr("My Best Shots"));
     m_tabs->addTab(buildMissingPage(), tr("Unphotographed Taxa"));
+    m_tabs->addTab(buildUntreedPage(), tr("Not in Any Tree"));
     m_tabs->addTab(buildReferencePhotosPage(), tr("Reference Photos"));
     m_tabs->addTab(buildInatDownloadPage(), tr("Download from iNaturalist"));
 
@@ -2685,7 +2692,8 @@ QWidget *MainWindow::buildBrowsePage()
     reassignButton->setToolTip(
         tr("Move the selected photos (or, with nothing selected, every photo shown here) "
            "to a different taxon."));
-    connect(reassignButton, &QPushButton::clicked, this, &MainWindow::reassignTaxonPhotos);
+    connect(reassignButton, &QPushButton::clicked, this,
+            [this] { reassignPhotos(m_taxonGrid, m_taxonModel); });
 
     auto *header = new QHBoxLayout;
     header->addWidget(m_taxonRepImage);
@@ -2763,6 +2771,284 @@ QWidget *MainWindow::buildMissingPage()
     layout->addWidget(m_missingSearch);
     layout->addWidget(m_missingList, 1);
     return page;
+}
+
+namespace {
+
+// Rows of the "Not in Any Tree" tab's Show combo (m_untreedMode).
+enum UntreedMode {
+    UntreedNotInAnyTree = 0,
+    UntreedNotInSelectedTree = 1,
+    UntreedAboveSpecies = 2,
+};
+
+} // namespace
+
+QWidget *MainWindow::buildUntreedPage()
+{
+    m_untreedHeader = new QLabel(this);
+    m_untreedHeader->setWordWrap(true);
+
+    m_untreedSearch = new QLineEdit(this);
+    m_untreedSearch->setPlaceholderText(tr("Filter by common or scientific name…"));
+    m_untreedSearch->setClearButtonEnabled(true);
+    connect(m_untreedSearch, &QLineEdit::textChanged, this, &MainWindow::updateUntreedList);
+
+    m_untreedMode = new QComboBox(this);
+    m_untreedMode->addItem(tr("Taxa not in any tree"));             // UntreedNotInAnyTree
+    m_untreedMode->addItem(tr("Taxa not in the selected tree"));    // UntreedNotInSelectedTree
+    m_untreedMode->addItem(tr("Identified only to genus or higher"));   // UntreedAboveSpecies
+    connect(m_untreedMode, &QComboBox::currentIndexChanged, this, &MainWindow::reloadUntreedTaxa);
+
+    auto *controls = new QHBoxLayout;
+    controls->addWidget(new QLabel(tr("Show:"), this));
+    controls->addWidget(m_untreedMode);
+    controls->addWidget(m_untreedSearch, 1);
+
+    m_untreedList = new QTreeWidget(this);
+    m_untreedList->setColumnCount(3);
+    m_untreedList->setHeaderLabels({tr("Taxon"), tr("Rank"), tr("Photos")});
+    m_untreedList->setRootIsDecorated(false);
+    m_untreedList->setAlternatingRowColors(true);
+    m_untreedList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_untreedList->setSortingEnabled(true);
+    m_untreedList->sortByColumn(0, Qt::AscendingOrder);
+    // Taxon and Rank are user-draggable (a Stretch/ResizeToContents section
+    // can't be resized by hand); Photos, the last column, takes up the slack.
+    m_untreedList->header()->setSectionResizeMode(QHeaderView::Interactive);
+    m_untreedList->header()->setStretchLastSection(true);
+    m_untreedList->header()->resizeSection(0, 240);
+    m_untreedList->header()->resizeSection(1, 85);
+    m_untreedList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_untreedList, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showUntreedListContextMenu);
+    connect(m_untreedList, &QTreeWidget::itemSelectionChanged, this,
+            &MainWindow::updateUntreedGridScope);
+
+    // Text/tooltip set per mode by reloadUntreedTaxa(): "Add to Selected Tree",
+    // or "Reassign to Taxon…" when listing genus-or-higher identifications.
+    m_untreedAddButton = new QPushButton(this);
+    connect(m_untreedAddButton, &QPushButton::clicked, this, [this] {
+        if (m_untreedMode->currentIndex() == UntreedAboveSpecies) {
+            reassignPhotos(m_untreedGrid, m_untreedModel);
+            return;
+        }
+        const QList<QTreeWidgetItem *> selected = m_untreedList->selectedItems();
+        if (selected.size() == 1)
+            addUntreedTaxonToTree(selected.first(), currentProjectId());
+    });
+
+    auto *listPanel = new QWidget(this);
+    auto *listLayout = new QVBoxLayout(listPanel);
+    listLayout->setContentsMargins(0, 0, 0, 0);
+    listLayout->addWidget(m_untreedList, 1);
+    listLayout->addWidget(m_untreedAddButton);
+
+    m_untreedModel = new model::CaptureListModel(m_app.database(), m_app.thumbnails(), this);
+    m_untreedModel->setStatusFilter(QStringLiteral("confirmedOrAuto"));
+    m_untreedGrid = makeCaptureGrid(m_untreedModel);
+    m_untreedGrid->setItemDelegate(new CaptureDelegate(m_untreedGrid));
+    connect(m_untreedGrid, &QAbstractItemView::doubleClicked, this,
+            [this](const QModelIndex &i) { openViewer(m_untreedModel, i); });
+
+    auto *split = new QSplitter(Qt::Horizontal, this);
+    split->addWidget(listPanel);
+    split->addWidget(m_untreedGrid);
+    split->setStretchFactor(0, 2);
+    split->setStretchFactor(1, 3);
+
+    auto *page = new QWidget(this);
+    auto *layout = new QVBoxLayout(page);
+    layout->addWidget(m_untreedHeader);
+    layout->addLayout(controls);
+    layout->addWidget(split, 1);
+    return page;   // populated by refreshCoverage() -> reloadUntreedTaxa()
+}
+
+void MainWindow::reloadUntreedTaxa()
+{
+    if (!m_untreedList)
+        return;
+
+    const int pid = currentProjectId();
+    const int mode = m_untreedMode->currentIndex();
+    m_untreedTaxa.clear();
+    if (m_app.database().isOpen()) {
+        catalogue::UntreedMatchStore store(m_app.database().connectionName());
+        if (mode == UntreedAboveSpecies)
+            m_untreedTaxa = store.aboveSpeciesTaxa();
+        else if (mode == UntreedNotInSelectedTree && pid > 0)
+            m_untreedTaxa = store.untreedTaxa(pid);
+        else if (mode == UntreedNotInAnyTree)
+            m_untreedTaxa = store.untreedTaxa();
+        // (UntreedNotInSelectedTree with no tree selected: nothing to compare against.)
+        if (!store.error().isEmpty())
+            statusBar()->showMessage(tr("Could not list matched taxa: %1").arg(store.error()), 8000);
+    }
+
+    QString base;
+    switch (mode) {
+    case UntreedNotInSelectedTree:
+        base = tr("Not in This Tree");
+        m_untreedHeader->setText(
+            tr("Photos matched to a taxon that isn't in the selected reference tree (other "
+               "trees may have it). Select taxa to see their photos; right-click one to add "
+               "it to a tree."));
+        break;
+    case UntreedAboveSpecies:
+        base = tr("Genus or Higher");
+        m_untreedHeader->setText(
+            tr("Photos identified only to genus (or family, order…), not to a species — "
+               "whether or not the taxon is in a tree. Select taxa to see their photos, then "
+               "use Reassign to narrow photos you've since identified down to a species."));
+        break;
+    default:
+        base = tr("Not in Any Tree");
+        m_untreedHeader->setText(
+            tr("Photos matched to a taxon that isn't in any of your reference trees — "
+               "for example a subspecies or variety a tree doesn't list, or a species "
+               "outside every tree's scope. Select taxa to see their photos; right-click "
+               "one to add it to a tree."));
+        break;
+    }
+
+    if (mode == UntreedAboveSpecies) {
+        m_untreedAddButton->setText(tr("Reassign to Taxon…"));
+        m_untreedAddButton->setToolTip(
+            tr("Reassign the photos selected in the grid (or, with none selected, every "
+               "photo shown) to a different taxon."));
+    } else {
+        m_untreedAddButton->setText(tr("Add to Selected Tree"));
+        m_untreedAddButton->setToolTip(
+            tr("Add the highlighted taxon (and its ancestors) to the reference tree selected "
+               "on the left. Right-click a taxon to add it to a different tree."));
+    }
+
+    const int tab = m_tabs ? m_tabs->indexOf(m_untreedHeader->parentWidget()) : -1;
+    if (tab >= 0)
+        m_tabs->setTabText(tab, m_untreedTaxa.isEmpty()
+                                    ? base
+                                    : QStringLiteral("%1 (%2)").arg(base).arg(m_untreedTaxa.size()));
+
+    updateUntreedList();
+}
+
+void MainWindow::updateUntreedList()
+{
+    if (!m_untreedList)
+        return;
+
+    QSet<qint64> previouslySelected;
+    for (QTreeWidgetItem *item : m_untreedList->selectedItems())
+        previouslySelected.insert(item->data(0, Qt::UserRole).toLongLong());
+
+    const QString filter = m_untreedSearch->text().trimmed();
+
+    {
+        // One grid reload for the whole rebuild, not one per cleared/restored row.
+        QSignalBlocker block(m_untreedList);
+        m_untreedList->setSortingEnabled(false);
+        m_untreedList->clear();
+        for (const catalogue::UntreedTaxon &t : m_untreedTaxa) {
+            if (!filter.isEmpty() && !t.name.contains(filter, Qt::CaseInsensitive)
+                && !t.commonName.contains(filter, Qt::CaseInsensitive))
+                continue;
+
+            auto *item = new QTreeWidgetItem(m_untreedList);
+            item->setText(0, !t.commonName.isEmpty() && t.commonName != t.name
+                                 ? QStringLiteral("%1  ·  %2").arg(t.name, t.commonName)
+                                 : t.name);
+            item->setToolTip(0, item->text(0));
+            item->setData(0, Qt::UserRole, t.inatId);
+            item->setData(0, Qt::UserRole + 1, t.name);
+            item->setText(1, t.rank);
+            item->setData(2, Qt::DisplayRole, t.photoCount);
+            item->setToolTip(2, tr("%1 confirmed, %2 auto-applied")
+                                    .arg(t.confirmedCount)
+                                    .arg(t.photoCount - t.confirmedCount));
+            if (previouslySelected.contains(t.inatId))
+                item->setSelected(true);
+        }
+        m_untreedList->setSortingEnabled(true);
+    }
+    updateUntreedGridScope();
+}
+
+void MainWindow::updateUntreedGridScope()
+{
+    if (!m_untreedModel)
+        return;
+
+    // No selection shows every listed taxon's photos at once.
+    QList<QTreeWidgetItem *> items = m_untreedList->selectedItems();
+    if (items.isEmpty()) {
+        for (int i = 0; i < m_untreedList->topLevelItemCount(); ++i)
+            items << m_untreedList->topLevelItem(i);
+    }
+    m_untreedAddButton->setEnabled(
+        m_untreedMode->currentIndex() == UntreedAboveSpecies
+            ? !items.isEmpty()
+            : m_untreedList->selectedItems().size() == 1 && currentProjectId() > 0);
+
+    // An empty taxon set means "no narrowing" to CaptureListModel (the whole
+    // library), so hide the grid instead when nothing is listed.
+    m_untreedGrid->setVisible(!items.isEmpty());
+    if (items.isEmpty())
+        return;
+
+    QList<qint64> ids;
+    ids.reserve(items.size());
+    for (QTreeWidgetItem *item : items)
+        ids << item->data(0, Qt::UserRole).toLongLong();
+    std::sort(ids.begin(), ids.end());   // stable order, so an unchanged set doesn't reload
+    m_untreedModel->setTaxonSetScope(0, ids);
+}
+
+void MainWindow::showUntreedListContextMenu(const QPoint &pos)
+{
+    QTreeWidgetItem *item = m_untreedList->itemAt(pos);
+    if (!item)
+        return;
+    const qint64 inatId = item->data(0, Qt::UserRole).toLongLong();
+
+    QMenu menu(this);
+    QMenu *addMenu = menu.addMenu(tr("Add to Reference Tree"));
+    const int current = currentProjectId();
+    // Current tree first, then the rest in the combo's (alphabetical) order.
+    QList<int> order;
+    if (m_projectCombo->findData(current) >= 0)
+        order << m_projectCombo->findData(current);
+    for (int i = 0; i < m_projectCombo->count(); ++i) {
+        if (!order.contains(i))
+            order << i;
+    }
+    for (int i : order) {
+        const int pid = m_projectCombo->itemData(i).toInt();
+        QString label = m_projectCombo->itemText(i);
+        if (pid == current)
+            label = tr("%1 (selected)").arg(label);
+        QAction *add = addMenu->addAction(label);
+        connect(add, &QAction::triggered, this,
+                [this, item, pid] { addUntreedTaxonToTree(item, pid); });
+        if (i == order.first() && pid == current && order.size() > 1)
+            addMenu->addSeparator();
+    }
+    addMenu->setEnabled(!order.isEmpty());
+
+    QAction *viewPhoto = menu.addAction(tr("View Reference Photo"));
+    connect(viewPhoto, &QAction::triggered, this, [this, inatId] { viewReferencePhoto(inatId); });
+    menu.exec(m_untreedList->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::addUntreedTaxonToTree(QTreeWidgetItem *item, int projectId)
+{
+    if (!item || projectId <= 0)
+        return;
+    const qint64 inatId = item->data(0, Qt::UserRole).toLongLong();
+    const QString name = item->data(0, Qt::UserRole + 1).toString();
+    if (!ensureCatalogueReachable())
+        return;
+    addTaxonToTree(projectId, inatId, name);
 }
 
 QWidget *MainWindow::buildReferencePhotosPage()
@@ -2878,6 +3164,79 @@ void MainWindow::fetchReferencePhotos()
     m_refPhotoFetcher->start(pid);
 }
 
+void MainWindow::exportReferenceTreePhotos()
+{
+    if (m_app.exportService().isRunning())
+        return;
+
+    const int pid = currentProjectId();
+    if (pid <= 0) {
+        QMessageBox::information(this, tr("Export Photo Collection"),
+                                tr("Select a reference tree first."));
+        return;
+    }
+    if (!ensureCatalogueReachable())
+        return;
+
+    ExportDialog dialog(m_app.database(), m_app.thumbnails(), pid, m_projectCombo->currentText(),
+                       m_treeModel->visibleTaxonIds(), m_treeModel->photographedOnly(),
+                       m_app.settings().exportDestFolder(),
+                       m_app.settings().exportCollectionFolder(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString destRoot = dialog.destRoot();
+    if (dialog.updatesExistingCollection()) {
+        m_app.settings().setExportCollectionFolder(destRoot);
+    } else {
+        if (!QDir().mkpath(destRoot)) {
+            QMessageBox::warning(this, tr("Export Photo Collection"),
+                                 tr("Could not create %1.").arg(destRoot));
+            return;
+        }
+        m_app.settings().setExportDestFolder(destRoot);
+    }
+
+    m_exportTreePhotosAction->setEnabled(false);
+    statusBar()->showMessage(tr("Exporting photos…"));
+    beginTaskProgress(tr("Exporting Photo Collection"),
+                      [this] { m_app.exportService().cancel(); });
+    m_app.exportService().start(pid, destRoot, dialog.options());
+}
+
+void MainWindow::showUnexpectedExportFiles(const collection::ExportSummary &summary)
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Collection Updated"));
+    dialog.resize(640, 420);
+
+    auto *intro = new QLabel(
+        tr("%n file(s) in the collection aren't part of this export — photos reassigned "
+           "to another taxon or excluded since the last export, or files added by hand. "
+           "Nothing was deleted; tidy them up yourself if they're no longer wanted.",
+           nullptr, int(summary.unexpectedFiles.size())),
+        &dialog);
+    intro->setWordWrap(true);
+
+    auto *list = new QPlainTextEdit(summary.unexpectedFiles.join(QLatin1Char('\n')), &dialog);
+    list->setReadOnly(true);
+    list->setLineWrapMode(QPlainTextEdit::NoWrap);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    QPushButton *open = buttons->addButton(tr("Open Collection Folder"),
+                                           QDialogButtonBox::ActionRole);
+    const QString root = summary.collectionRoot;
+    connect(open, &QPushButton::clicked, &dialog,
+            [root] { QDesktopServices::openUrl(QUrl::fromLocalFile(root)); });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(intro);
+    layout->addWidget(list, 1);
+    layout->addWidget(buttons);
+    dialog.exec();
+}
+
 QWidget *MainWindow::buildInatDownloadPage()
 {
     m_inatDownloadModel = new inat::InatDownloadModel(m_app.photoCache(), m_app.taxonomyStore(), this);
@@ -2921,9 +3280,18 @@ QWidget *MainWindow::buildInatDownloadPage()
     connect(m_inatCancelSearchButton, &QPushButton::clicked, this,
             [this] { m_inatObservationFetcher->cancel(); });
 
+    m_inatScopeCombo = new QComboBox(this);
+    m_inatScopeCombo->addItem(tr("Species in this tree"));
+    m_inatScopeCombo->addItem(tr("All my observations"));
+    m_inatScopeCombo->setToolTip(
+        tr("\"All my observations\" isn't limited to the selected tree's species — use it "
+           "with Show: \"New to library\" / \"Not in any tree\" to find taxa you don't "
+           "have yet. \"Restrict to this tree's locality\" still applies to both."));
+
     auto *header = new QHBoxLayout;
     header->addWidget(m_inatUsernameEdit, 1);
     header->addWidget(m_inatTokenEdit, 1);
+    header->addWidget(m_inatScopeCombo);
     header->addWidget(m_inatRestrictToLocality);
     header->addWidget(m_inatSearchButton);
     header->addWidget(m_inatCancelSearchButton);
@@ -2947,10 +3315,32 @@ QWidget *MainWindow::buildInatDownloadPage()
     connect(m_inatHideFaded, &QCheckBox::toggled, this,
             [this](bool on) { m_inatProxyModel->setHideFaded(on); });
 
+    m_inatPresenceCombo = new QComboBox(this);
+    m_inatPresenceCombo->addItem(tr("Show: all"), int(InatFilterProxyModel::AllPresence));
+    m_inatPresenceCombo->addItem(tr("Show: new to library"), int(InatFilterProxyModel::NewToLibrary));
+    m_inatPresenceCombo->addItem(tr("Show: not in any tree"), int(InatFilterProxyModel::NotInAnyTree));
+    m_inatPresenceCombo->addItem(tr("Show: new or not in any tree"),
+                                 int(InatFilterProxyModel::NewOrNotInTree));
+    connect(m_inatPresenceCombo, &QComboBox::currentIndexChanged, this, [this](int i) {
+        m_inatProxyModel->setPresenceFilter(m_inatPresenceCombo->itemData(i).toInt());
+    });
+
+    m_inatCheckButton = new QPushButton(tr("Check Against Library"), this);
+    m_inatCheckButton->setToolTip(
+        tr("Re-checks these results against your reference trees and library (e.g. after "
+           "adding a taxon to a tree or running Match Library). NEW = no photos of that "
+           "taxon in your library, matched or named in a filename; NO TREE = the taxon "
+           "isn't in any reference tree. Results are checked automatically after a search."));
+    m_inatCheckButton->setEnabled(false);
+    connect(m_inatCheckButton, &QPushButton::clicked, this,
+            &MainWindow::checkInatCandidatesAgainstLibrary);
+
     auto *browseRow = new QHBoxLayout;
     browseRow->addWidget(m_inatFilterEdit, 1);
     browseRow->addWidget(m_inatSortCombo);
+    browseRow->addWidget(m_inatPresenceCombo);
     browseRow->addWidget(m_inatHideFaded);
+    browseRow->addWidget(m_inatCheckButton);
 
     m_inatStatus = new QLabel(this);
     m_inatStatus->setWordWrap(true);
@@ -2998,11 +3388,17 @@ QWidget *MainWindow::buildInatDownloadPage()
 
     connect(m_inatObservationFetcher, &inat::InatObservationFetcher::progress, this,
             [this](int done, int total, int found) {
-                statusBar()->showMessage(
-                    tr("Searching iNaturalist — %1 / %2 taxa checked, %3 observation(s) found")
-                        .arg(done)
-                        .arg(total)
-                        .arg(found));
+                if (m_inatScopeCombo->currentIndex() == 1)
+                    statusBar()->showMessage(
+                        tr("Searching all your iNaturalist observations — %1 of %2 fetched")
+                            .arg(found)
+                            .arg(total));
+                else
+                    statusBar()->showMessage(
+                        tr("Searching iNaturalist — %1 / %2 taxa checked, %3 observation(s) found")
+                            .arg(done)
+                            .arg(total)
+                            .arg(found));
             });
     connect(m_inatObservationFetcher, &inat::InatObservationFetcher::finished, this,
             &MainWindow::onInatSearchFinished);
@@ -3010,6 +3406,11 @@ QWidget *MainWindow::buildInatDownloadPage()
     connect(m_inatImportService, &inat::InatImportService::progress, this,
             [this](int done, int total) {
                 statusBar()->showMessage(tr("Downloading photos — %1 / %2").arg(done).arg(total));
+                if (m_inatPipelineActive && !m_inatPipelineCancelled)
+                    updateTaskProgress(done < total
+                                           ? tr("Downloading photo %1 of %2…").arg(done + 1).arg(total)
+                                           : tr("Downloaded %1 photo(s).").arg(total),
+                                       done, total);
             });
     connect(m_inatImportService, &inat::InatImportService::finished, this,
             &MainWindow::onInatImportFinished);
@@ -3028,10 +3429,12 @@ void MainWindow::searchInatObservations()
     if (m_inatObservationFetcher->isRunning())
         return;
 
+    const bool allObservations = m_inatScopeCombo->currentIndex() == 1;
     const int pid = currentProjectId();
-    if (pid <= 0) {
+    if (pid <= 0 && !allObservations) {
         QMessageBox::information(this, tr("Search iNaturalist"),
-                                 tr("Select a reference tree first."));
+                                 tr("Select a reference tree first, or search \"All my "
+                                    "observations\"."));
         return;
     }
     const QString username = m_inatUsernameEdit->text().trimmed();
@@ -3054,25 +3457,31 @@ void MainWindow::searchInatObservations()
     // observation history -- exactly the kind of single search that can take
     // a very long time while the batch counter sits still.
     QList<qint64> leafTaxonIds;
-    for (const auto &leaf : m_app.taxonomyStore().projectLeafPhotos(pid))
-        leafTaxonIds << leaf.inatId;
+    if (!allObservations) {
+        for (const auto &leaf : m_app.taxonomyStore().projectLeafPhotos(pid))
+            leafTaxonIds << leaf.inatId;
+    }
 
     // Confine the search to the tree's own locality too, not just its taxa --
     // otherwise a species that also occurs elsewhere would pull in the user's
     // observations of it from anywhere in the world. Trees built without a
     // place (e.g. from a checklist with no region) simply search worldwide
     // either way; the checkbox lets the user opt out of the restriction too.
-    const qint64 placeId = m_inatRestrictToLocality->isChecked()
+    const qint64 placeId = m_inatRestrictToLocality->isChecked() && pid > 0
                                ? m_app.taxonomyStore().projectPlaceInatId(pid).value_or(0)
                                : 0;
 
     m_inatSearchButton->setEnabled(false);
     m_inatCancelSearchButton->setEnabled(true);
+    m_inatScopeCombo->setEnabled(false);   // the progress text depends on it
     m_inatStatus->setText(
         placeId > 0 ? tr("Searching…")
                     : tr("Searching — results aren't restricted by location…"));
     statusBar()->showMessage(tr("Searching iNaturalist for %1's observations…").arg(username));
-    m_inatObservationFetcher->start(username, leafTaxonIds, placeId);
+    if (allObservations)
+        m_inatObservationFetcher->startAll(username, placeId);
+    else
+        m_inatObservationFetcher->start(username, leafTaxonIds, placeId);
 }
 
 void MainWindow::onInatSearchFinished(bool ok, const QString &error,
@@ -3080,6 +3489,7 @@ void MainWindow::onInatSearchFinished(bool ok, const QString &error,
 {
     m_inatSearchButton->setEnabled(true);
     m_inatCancelSearchButton->setEnabled(false);
+    m_inatScopeCombo->setEnabled(true);
     if (!ok) {
         if (error == QLatin1String("cancelled")) {
             m_inatStatus->setText(tr("Search stopped."));
@@ -3091,14 +3501,46 @@ void MainWindow::onInatSearchFinished(bool ok, const QString &error,
         return;
     }
 
-    m_inatDownloadModel->setCandidates(candidates);
+    m_inatCandidates = candidates;
+    checkInatCandidatesAgainstLibrary();
     const int total = m_inatDownloadModel->rowCountTotal();
-    m_inatStatus->setText(
-        total > 0 ? tr("Found %n candidate photo(s). Faded ones look like something you "
-                      "already have — check before including them.", nullptr, total)
-                  : tr("No candidate photos found — either everything is already in your "
-                      "library, or this user has no observations of species in this tree."));
+    if (total == 0)
+        m_inatStatus->setText(
+            tr("No candidate photos found — either everything is already in your library, "
+               "or this user has no matching observations."));
     statusBar()->showMessage(tr("Found %n candidate photo(s).", nullptr, total), 6000);
+}
+
+void MainWindow::checkInatCandidatesAgainstLibrary()
+{
+    inat::LibraryPresence::annotate(m_app.database().connectionName(), m_inatCandidates);
+    m_inatDownloadModel->setCandidates(m_inatCandidates);
+    m_inatCheckButton->setEnabled(!m_inatCandidates.isEmpty());
+
+    const int total = m_inatDownloadModel->rowCountTotal();
+    if (total == 0)
+        return;
+
+    // Counted per taxon, not per photo -- that's what the user acts on.
+    QSet<qint64> taxa, newTaxa, noTreeTaxa;
+    for (const inat::Candidate &c : std::as_const(m_inatCandidates)) {
+        const qint64 id = c.observation.taxonInatId;
+        if (id <= 0 || c.observation.photos.isEmpty())
+            continue;
+        taxa.insert(id);
+        if (!c.inLibrary)
+            newTaxa.insert(id);
+        if (!c.inAnyTree)
+            noTreeTaxa.insert(id);
+    }
+    m_inatStatus->setText(
+        tr("%1 candidate photo(s) of %2 taxa. %3 taxa are NEW (no photos in your library) "
+           "and %4 are in NO reference TREE — use Show to list just those. Faded photos "
+           "look like ones you already have.")
+            .arg(total)
+            .arg(taxa.size())
+            .arg(newTaxa.size())
+            .arg(noTreeTaxa.size()));
 }
 
 void MainWindow::downloadSelectedInatPhotos()
@@ -3149,21 +3591,42 @@ void MainWindow::downloadSelectedInatPhotos()
     m_inatPendingDestFolder = destFolder;
     m_inatDownloadButton->setEnabled(false);
     statusBar()->showMessage(tr("Downloading %n photo(s)…", nullptr, items.size()));
+
+    // Locks the rest of the app until the whole pipeline -- download, add to
+    // the library, match -- is done; anything else touching the library
+    // meanwhile could interrupt it.
+    m_inatPipelineActive = true;
+    m_inatPipelineCancelled = false;
+    beginTaskProgress(tr("Downloading from iNaturalist"), [this] { cancelInatPipeline(); });
+    updateTaskProgress(tr("Downloading photo 1 of %1…").arg(items.size()), 0, int(items.size()));
     m_inatImportService->start(items, destFolder);
 }
 
 void MainWindow::onInatImportFinished(bool ok, const QString &error, QList<inat::SavedFile> saved)
 {
     m_inatDownloadButton->setEnabled(true);
-    if (!ok) {
-        statusBar()->showMessage(tr("Downloading photos failed: %1").arg(error), 10000);
+    const bool cancelled = !ok && error == QLatin1String("cancelled");
+
+    if (saved.isEmpty()) {
+        finishInatPipeline(cancelled ? tr("Download cancelled — no photos were downloaded.")
+                           : ok      ? tr("Nothing was downloaded.")
+                                     : tr("Downloading photos failed: %1").arg(error));
         return;
     }
+    if (!ok && !cancelled)
+        QMessageBox::warning(this, tr("Download from iNaturalist"),
+                             tr("Downloading stopped after %n photo(s): %1\n\nThe photos "
+                                "already downloaded will still be added to your library.",
+                                nullptr, int(saved.size()))
+                                 .arg(error));
 
     statusBar()->showMessage(
         tr("Downloaded %n photo(s) — adding \"%1\" to the library…", nullptr, saved.size())
             .arg(m_inatPendingDestFolder),
         6000);
+    updateTaskProgress(tr("Adding %n downloaded photo(s) to your library…", nullptr,
+                          int(saved.size())),
+                       0, 0);
 
     // Reuses addWatchedFolder()'s own tail: register the new folder, then
     // scan it so its files become real capture rows.
@@ -3176,17 +3639,73 @@ void MainWindow::onInatImportFinished(bool ok, const QString &error, QList<inat:
     }
     updateEmptyState();
 
-    // Provenance can only be stamped once the scan above actually creates the
-    // capture rows for these new files, so do it once that settles rather
-    // than as part of this handler.
+    // Provenance can only be stamped once a scan has created the capture rows
+    // for these new files. requestScan() guarantees a scan that starts after
+    // the last download landed -- the folder watcher has usually kicked one
+    // off mid-download already, which would miss the final files.
     const QString connectionName = m_app.database().connectionName();
-    const QString destFolder = m_inatPendingDestFolder;
-    connect(&m_app.scanService(), &scan::ScanService::finished, this,
-            [connectionName, saved](const scan::ScanSummary &) {
-                inat::InatImportService::stampProvenance(connectionName, saved);
-            },
-            Qt::SingleShotConnection);
-    startScan();
+    const int count = int(saved.size());
+    requestScan([this, connectionName, saved, count] {
+        inat::InatImportService::stampProvenance(connectionName, saved);
+
+        if (m_inatPipelineCancelled) {
+            finishInatPipeline(
+                tr("Cancelled — %n downloaded photo(s) added to the library but not matched. "
+                   "Run Match Library to match them.",
+                   nullptr, count));
+            return;
+        }
+
+        // Match just the downloaded photos, not the whole library.
+        const QList<qint64> captureIds =
+            inat::InatImportService::captureIdsFor(connectionName, saved);
+        if (captureIds.isEmpty()) {
+            finishInatPipeline(tr("%n photo(s) from iNaturalist added to the library.", nullptr,
+                                  count));
+            return;
+        }
+        if (m_app.matchService().isRunning()) {
+            finishInatPipeline(
+                tr("%n photo(s) from iNaturalist added to the library. Match Library is "
+                   "already running — run it again afterwards to match them.",
+                   nullptr, count));
+            return;
+        }
+        updateTaskProgress(tr("Matching the downloaded photos…"), 0, 0);
+        m_groupMatchName.clear();
+        m_matchingDownload = true;
+        m_app.matchService().startForCaptures(captureIds);
+    });
+}
+
+void MainWindow::cancelInatPipeline()
+{
+    if (!m_inatPipelineActive || m_inatPipelineCancelled)
+        return;
+    m_inatPipelineCancelled = true;
+
+    if (m_inatImportService->isRunning()) {
+        m_inatImportService->cancel();
+        updateTaskProgress(tr("Cancelling — finishing the photo currently downloading, then "
+                              "adding what's already downloaded to your library…"),
+                           0, 0);
+    } else if (m_matchingDownload && m_app.matchService().isRunning()) {
+        m_app.matchService().cancel();
+        updateTaskProgress(tr("Cancelling matching…"), 0, 0);
+    } else if (m_app.scanService().isRunning()) {
+        m_app.scanService().cancel();
+        updateTaskProgress(tr("Cancelling the library scan…"), 0, 0);
+    }
+}
+
+void MainWindow::finishInatPipeline(const QString &message)
+{
+    if (m_inatPipelineActive) {
+        m_inatPipelineActive = false;
+        m_inatPipelineCancelled = false;
+        endTaskProgress();
+    }
+    statusBar()->showMessage(message, 10000);
 }
 
 void MainWindow::selectTaxonInTree(qint64 inatId)
@@ -3314,6 +3833,31 @@ void MainWindow::startScan()
     m_app.scanService().start(roots);
 }
 
+void MainWindow::requestScan(std::function<void()> afterScan)
+{
+    if (afterScan)
+        m_afterQueuedScan.append(std::move(afterScan));
+    if (m_app.scanService().isRunning()) {
+        m_rescanQueued = true;   // picked up by onScanFinished()
+        return;
+    }
+    runQueuedScan();
+}
+
+void MainWindow::runQueuedScan()
+{
+    const QList<std::function<void()>> callbacks = std::exchange(m_afterQueuedScan, {});
+    if (!callbacks.isEmpty()) {
+        connect(&m_app.scanService(), &scan::ScanService::finished, this,
+                [callbacks](const scan::ScanSummary &) {
+                    for (const auto &callback : callbacks)
+                        callback();
+                },
+                Qt::SingleShotConnection);
+    }
+    startScan();
+}
+
 void MainWindow::setScanUiRunning(bool running)
 {
     m_addFolderAction->setEnabled(!running);
@@ -3326,6 +3870,11 @@ void MainWindow::setScanUiRunning(bool running)
 
 void MainWindow::onScanProgress(const scan::ScanProgress &progress)
 {
+    if (m_inatPipelineActive && !m_inatPipelineCancelled)
+        updateTaskProgress(tr("Adding the downloaded photos to your library — scanning "
+                              "(%1 photos checked)…")
+                               .arg(progress.filesSeen),
+                           0, 0);
     // foldersSeen/filesSeen are running totals for this whole scan (every
     // root being scanned this run, not just currentDir) -- word it that way
     // so it doesn't read as "this folder alone has thousands of photos" when
@@ -3354,6 +3903,13 @@ void MainWindow::onScanFinished(const scan::ScanSummary &summary)
                 .arg(summary.capturesUpdated + summary.renditionsUpdated)
                 .arg(summary.renditionsUnchanged),
             8000);
+    }
+
+    if (m_rescanQueued) {
+        m_rescanQueued = false;
+        // Deferred: the scan service only reports itself idle once this
+        // finished signal has been fully delivered.
+        QTimer::singleShot(0, this, &MainWindow::runQueuedScan);
     }
 }
 
