@@ -216,6 +216,9 @@ private:
     void fetchPhotoLocalities();
     int currentProjectId() const;
     void startMatch();
+    // Rescans the library, then calls `startMatching` -- unless the scan was
+    // stopped or failed. See the .cpp for why matching always scans first.
+    void scanThenMatch(std::function<void()> startMatching);
     // Match Library Against This Group: re-checks unresolved photos (see
     // MatchEngine::matchGroup) against the tree's taxa at/below `inatId`.
     void startGroupMatch(qint64 inatId, const QString &name);
@@ -315,6 +318,8 @@ private:
     QList<inat::ImportItem> m_inatPendingItems;   // the running download's selection
     QString m_inatPendingDestFolder;   // set while an import's post-scan steps are still pending
     bool m_rescanQueued = false;       // see requestScan()
+    bool m_lastScanCompleted = false;  // the last scan finished without error or Stop
+    bool m_matchAfterScanPending = false;   // scanThenMatch() is waiting on its scan
     QList<std::function<void()>> m_afterQueuedScan;
 
     CoveragePanel *m_coveragePanel = nullptr;

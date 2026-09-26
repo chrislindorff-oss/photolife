@@ -1965,21 +1965,46 @@ void MainWindow::reloadProjectList()
 
 void MainWindow::startMatch()
 {
-    if (m_app.matchService().isRunning())
+    if (m_app.matchService().isRunning() || m_matchAfterScanPending)
         return;
-    if (m_app.scanService().isRunning()) {
-        QMessageBox::information(this, tr("Match Library"),
-                                tr("Wait for the current scan to finish first."));
-        return;
-    }
-    if (m_model->captureCount() == 0) {
+    if (m_model->captureCount() == 0 && m_app.settings().watchedRoots().isEmpty()) {
         QMessageBox::information(this, tr("Match Library"),
                                 tr("Add and scan a folder of photos first."));
         return;
     }
-    m_groupMatchName.clear();
-    m_matchingDownload = false;
-    m_app.matchService().start();
+    scanThenMatch([this] {
+        m_groupMatchName.clear();
+        m_matchingDownload = false;
+        m_app.matchService().start();
+    });
+}
+
+void MainWindow::scanThenMatch(std::function<void()> startMatching)
+{
+    // Matching reads the names recorded by the last scan, so a rename or
+    // move the folder watcher hasn't caught up with yet (a renamed folder
+    // especially) would otherwise be matched under its old name. Unchanged
+    // files aren't re-read, so this scan is normally quick.
+    if (m_app.settings().watchedRoots().isEmpty()) {
+        startMatching();
+        return;
+    }
+    m_matchAfterScanPending = true;
+    m_matchAction->setEnabled(false);
+    statusBar()->showMessage(tr("Checking the library for changes before matching…"));
+    requestScan([this, startMatching = std::move(startMatching)] {
+        m_matchAfterScanPending = false;
+        m_matchAction->setEnabled(true);
+        if (!m_lastScanCompleted) {
+            statusBar()->showMessage(
+                tr("Matching skipped — the library scan didn't finish, so some names could "
+                   "be out of date."),
+                10000);
+            return;
+        }
+        if (!m_app.matchService().isRunning())
+            startMatching();
+    });
 }
 
 void MainWindow::resolveStaleDecisions(const QList<match::StaleDecision> &stale)
@@ -2015,13 +2040,8 @@ void MainWindow::resolveStaleDecisions(const QList<match::StaleDecision> &stale)
 
 void MainWindow::startGroupMatch(qint64 inatId, const QString &name)
 {
-    if (m_app.matchService().isRunning())
+    if (m_app.matchService().isRunning() || m_matchAfterScanPending)
         return;
-    if (m_app.scanService().isRunning()) {
-        QMessageBox::information(this, tr("Match Library Against Group"),
-                                tr("Wait for the current scan to finish first."));
-        return;
-    }
     const int pid = currentProjectId();
     if (pid <= 0 || !ensureCatalogueReachable())
         return;
@@ -2032,9 +2052,11 @@ void MainWindow::startGroupMatch(qint64 inatId, const QString &name)
                                  6000);
         return;
     }
-    m_groupMatchName = name;
-    m_matchingDownload = false;
-    m_app.matchService().start(QSet<qint64>(ids.begin(), ids.end()));
+    scanThenMatch([this, name, group = QSet<qint64>(ids.begin(), ids.end())] {
+        m_groupMatchName = name;
+        m_matchingDownload = false;
+        m_app.matchService().start(group);
+    });
 }
 
 void MainWindow::newReferenceTree()
@@ -3543,6 +3565,7 @@ void MainWindow::onScanProgress(const scan::ScanProgress &progress)
 void MainWindow::onScanFinished(const scan::ScanSummary &summary)
 {
     setScanUiRunning(false);
+    m_lastScanCompleted = summary.ok() && !summary.cancelled;
     m_model->reload();
     updateEmptyState();
     m_app.libraryWatcher().refresh();
