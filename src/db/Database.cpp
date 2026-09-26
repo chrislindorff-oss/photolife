@@ -9,6 +9,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
+#include <QtDebug>
 
 #include <atomic>
 
@@ -192,7 +193,36 @@ bool Database::open(const CatalogueDescriptor &descriptor, const ProgressCallbac
         return false;
     }
 
+    if (descriptor.backend == CatalogueDescriptor::Backend::Sqlite)
+        compactIfMostlyFree(onProgress);
+
     return true;
+}
+
+void Database::compactIfMostlyFree(const ProgressCallback &onProgress)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("PRAGMA page_count")) || !q.next())
+        return;
+    const qint64 pageCount = q.value(0).toLongLong();
+    if (!q.exec(QStringLiteral("PRAGMA freelist_count")) || !q.next())
+        return;
+    const qint64 freePages = q.value(0).toLongLong();
+    if (!q.exec(QStringLiteral("PRAGMA page_size")) || !q.next())
+        return;
+    const qint64 pageSize = q.value(0).toLongLong();
+
+    constexpr qint64 kMinFreeBytes = 64LL * 1024 * 1024;
+    if (freePages * pageSize < kMinFreeBytes || freePages * 2 < pageCount)
+        return;
+
+    if (onProgress)
+        onProgress(QStringLiteral("Compacting catalogue…"));
+    qInfo() << "Compacting catalogue: reclaiming" << (freePages * pageSize) / (1024 * 1024)
+            << "MB";
+    if (!q.exec(QStringLiteral("VACUUM")))
+        qWarning() << "Catalogue VACUUM failed:" << q.lastError().text();
 }
 
 bool Database::probeReachable(const CatalogueDescriptor &descriptor, QString *errorOut)

@@ -34,6 +34,7 @@ namespace net {
 class HttpClient;
 class INatClient;
 class GeocodeClient;
+class HttpCache;
 class PhotoCache;
 class TileCache;
 class UpdateChecker;
@@ -98,6 +99,7 @@ private:
     std::unique_ptr<collection::ExportService> m_exportService;
     std::unique_ptr<lightroom::LightroomImporter> m_lightroomImporter;
     std::unique_ptr<taxonomy::TaxonomyStore> m_taxonomyStore;
+    std::unique_ptr<net::HttpCache> m_httpCache;
     std::unique_ptr<net::HttpClient> m_http;
     std::unique_ptr<net::INatClient> m_inat;
     std::unique_ptr<net::HttpClient> m_geocodeHttp;

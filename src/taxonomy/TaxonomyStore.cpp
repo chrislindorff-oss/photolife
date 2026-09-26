@@ -968,42 +968,6 @@ QList<qint64> TaxonomyStore::projectSpeciesAncestorIds(int projectId) const
     return QList<qint64>(ids.begin(), ids.end());
 }
 
-std::optional<TaxonomyStore::CacheEntry> TaxonomyStore::cachedResponse(const QString &url) const
-{
-    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
-    q.prepare(QStringLiteral(
-        "SELECT body, etag, last_modified, status FROM http_cache WHERE url = ?"));
-    q.addBindValue(url);
-    if (!q.exec() || !q.next())
-        return std::nullopt;
-
-    CacheEntry e;
-    e.body = q.value(0).toByteArray();
-    e.etag = q.value(1).toString();
-    e.lastModified = q.value(2).toString();
-    e.status = q.value(3).toInt();
-    return e;
-}
-
-bool TaxonomyStore::storeResponse(const QString &url, const QString &etag,
-                                  const QString &lastModified, int status, const QByteArray &body)
-{
-    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
-    q.prepare(QStringLiteral(
-        "INSERT INTO http_cache (url, etag, last_modified, status, body, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, %1) "
-        "ON CONFLICT(url) DO UPDATE SET etag = excluded.etag, "
-        "  last_modified = excluded.last_modified, status = excluded.status, "
-        "  body = excluded.body, fetched_at = excluded.fetched_at")
-                    .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
-    q.addBindValue(url);
-    q.addBindValue(etag.isEmpty() ? QVariant() : etag);
-    q.addBindValue(lastModified.isEmpty() ? QVariant() : lastModified);
-    q.addBindValue(status);
-    q.addBindValue(body);
-    return q.exec();
-}
-
 std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
 {
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));

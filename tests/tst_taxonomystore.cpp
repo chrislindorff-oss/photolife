@@ -45,7 +45,6 @@ private slots:
     void upsertTaxaDedupesRepeatedInatId();
     void upsertTaxaChunksLargeBatches();
     void addProjectTaxaLinksAllAndMergesFlags();
-    void httpCacheRoundTrips();
     void buildCheckpointRoundTripsUpsertsAndClears();
     void projectSpeciesAncestorIdsDerivedFromAncestryColumn();
     void pgAddProjectTaxonMergesFlagsOnConflict();
@@ -824,24 +823,6 @@ void TestTaxonomyStore::addProjectTaxaLinksAllAndMergesFlags()
     QCOMPARE(tree.size(), 2);
     QVERIFY(!nodeFor(60815)->inRegion);
     QVERIFY(nodeFor(900)->inRegion);
-}
-
-void TestTaxonomyStore::httpCacheRoundTrips()
-{
-    const QString url = QStringLiteral("https://api.inaturalist.org/v1/taxa/47217");
-    QVERIFY(!m_store->cachedResponse(url).has_value());
-
-    QVERIFY(m_store->storeResponse(url, QStringLiteral("\"abc123\""), QString(), 200,
-                                   QByteArrayLiteral("{\"results\":[]}")));
-    auto e = m_store->cachedResponse(url);
-    QVERIFY(e.has_value());
-    QCOMPARE(e->etag, QStringLiteral("\"abc123\""));
-    QCOMPARE(e->body, QByteArrayLiteral("{\"results\":[]}"));
-    QCOMPARE(e->status, 200);
-
-    QVERIFY(m_store->storeResponse(url, QStringLiteral("\"def456\""), QString(), 200,
-                                   QByteArrayLiteral("{\"results\":[1]}")));
-    QCOMPARE(m_store->cachedResponse(url)->etag, QStringLiteral("\"def456\""));
 }
 
 void TestTaxonomyStore::buildCheckpointRoundTripsUpsertsAndClears()

@@ -8,6 +8,7 @@
 #include "inat/InatPhotoDownloader.h"
 #include "lightroom/LightroomImporter.h"
 #include "net/GeocodeClient.h"
+#include "net/HttpCache.h"
 #include "net/HttpClient.h"
 #include "net/INatClient.h"
 #include "net/PhotoCache.h"
@@ -85,8 +86,14 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
     m_lightroomImporter = std::make_unique<lightroom::LightroomImporter>(descriptor);
 
     m_taxonomyStore = std::make_unique<taxonomy::TaxonomyStore>(m_database->connectionName());
-    m_http = std::make_unique<net::HttpClient>(
-        std::make_unique<net::QtNetworkTransport>(), m_taxonomyStore.get());
+    // Kept out of the catalogue: it's disposable, and inside the catalogue it
+    // grew to gigabytes of API responses that were never revalidated.
+    m_httpCache = std::make_unique<net::HttpCache>();
+    m_httpCache->open(
+        QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
+            .filePath(QStringLiteral("http-cache.db")));
+    m_http = std::make_unique<net::HttpClient>(std::make_unique<net::QtNetworkTransport>(),
+                                               m_httpCache.get());
     const QByteArray userAgent = QStringLiteral("%1/%2 (+%3)")
                                      .arg(QString::fromLatin1(kAppName),
                                           QString::fromLatin1(kAppVersion),

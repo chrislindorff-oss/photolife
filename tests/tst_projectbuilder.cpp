@@ -117,7 +117,7 @@ void TestProjectBuilder::wire(std::function<Transport::Reply(const Transport::Re
     auto owned = std::make_unique<FakeTransport>();
     owned->responder = std::move(responder);
     m_transport = owned.get();
-    m_http = std::make_unique<HttpClient>(std::move(owned), m_store.get());
+    m_http = std::make_unique<HttpClient>(std::move(owned), nullptr);
     m_http->setMinRequestIntervalMs(0);
     m_http->setRetryBaseDelayMs(1);
     m_inat = std::make_unique<pl::net::INatClient>(*m_http);

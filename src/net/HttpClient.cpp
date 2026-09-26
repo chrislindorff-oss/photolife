@@ -1,6 +1,6 @@
 #include "net/HttpClient.h"
 
-#include "taxonomy/TaxonomyStore.h"
+#include "net/HttpCache.h"
 
 #include <QDateTime>
 #include <QTimer>
@@ -9,8 +9,7 @@
 
 namespace pl::net {
 
-HttpClient::HttpClient(std::unique_ptr<Transport> transport, pl::taxonomy::TaxonomyStore *cache,
-                       QObject *parent)
+HttpClient::HttpClient(std::unique_ptr<Transport> transport, HttpCache *cache, QObject *parent)
     : QObject(parent), m_transport(std::move(transport)), m_cache(cache)
 {
 }
@@ -66,25 +65,27 @@ void HttpClient::dispatch(Job job)
 
     const QString urlKey = job.url.toString(QUrl::FullyEncoded);
     const bool authenticated = !job.bearerToken.isEmpty();
+    const bool useCache = m_cache && !authenticated && HttpCache::isCacheable(job.url);
 
     Transport::Request req;
     req.url = job.url;
     req.userAgent = m_userAgent;
     req.bearerToken = job.bearerToken;
 
-    std::optional<pl::taxonomy::TaxonomyStore::CacheEntry> cached;
-    if (m_cache && !authenticated) {
-        cached = m_cache->cachedResponse(urlKey);
+    std::optional<HttpCache::Entry> cached;
+    if (useCache) {
+        cached = m_cache->lookup(urlKey);
         if (cached) {
             req.ifNoneMatch = cached->etag;
             req.ifModifiedSince = cached->lastModified;
         }
     }
 
-    m_transport->send(req, [this, job = std::move(job), urlKey, cached, authenticated](
+    m_transport->send(req, [this, job = std::move(job), urlKey, cached, useCache](
                                Transport::Reply reply) mutable {
         // 304: serve the cached body.
         if (reply.status == 304 && cached) {
+            m_cache->touch(urlKey);
             HttpResponse resp;
             resp.status = 200;
             resp.body = cached->body;
@@ -116,9 +117,8 @@ void HttpClient::dispatch(Job job)
         resp.body = reply.body;
         resp.error = reply.error;
 
-        if (m_cache && !authenticated && reply.status == 200) {
-            m_cache->storeResponse(urlKey, reply.etag, reply.lastModified, reply.status,
-                                   reply.body);
+        if (useCache && reply.status == 200) {
+            m_cache->store(urlKey, reply.etag, reply.lastModified, reply.status, reply.body);
         }
 
         finishJob(std::move(job), std::move(resp));

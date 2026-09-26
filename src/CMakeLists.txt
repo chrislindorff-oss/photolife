@@ -45,6 +45,7 @@ qt_add_library(photolife_core STATIC
     model/TaxonomyTreeModel.h model/TaxonomyTreeModel.cpp
     net/GeocodeClient.h     net/GeocodeClient.cpp
     net/GeocodeParse.h      net/GeocodeParse.cpp
+    net/HttpCache.h         net/HttpCache.cpp
     net/HttpClient.h        net/HttpClient.cpp
     net/PhotoCache.h        net/PhotoCache.cpp
     net/INatClient.h        net/INatClient.cpp
@@ -164,6 +165,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/015_decision_name.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/016_place_ancestry.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/017_taxon_origin.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/018_drop_http_cache.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -181,6 +183,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/015_decision_name.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/016_place_ancestry.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/017_taxon_origin.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/018_drop_http_cache.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

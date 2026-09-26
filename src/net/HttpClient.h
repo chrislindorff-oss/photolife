@@ -10,11 +10,9 @@
 #include <functional>
 #include <memory>
 
-namespace pl::taxonomy {
-class TaxonomyStore;
-}
-
 namespace pl::net {
+
+class HttpCache;
 
 struct HttpResponse
 {
@@ -28,14 +26,15 @@ struct HttpResponse
 
 // Serialised, rate-limited HTTP GET with retry/backoff and ETag conditional
 // requests. One request in flight at a time; the next is dispatched no sooner
-// than minRequestInterval after the last. Lives on and is used from one thread
+// than minRequestInterval after the last. Only URLs HttpCache::isCacheable
+// accepts are cached. Lives on and is used from one thread
 // (the network stack it drives is asynchronous, so this need not be a worker).
 class HttpClient : public QObject
 {
     Q_OBJECT
 
 public:
-    HttpClient(std::unique_ptr<Transport> transport, pl::taxonomy::TaxonomyStore *cache,
+    HttpClient(std::unique_ptr<Transport> transport, HttpCache *cache,
                QObject *parent = nullptr);
     ~HttpClient() override;
 
@@ -74,7 +73,7 @@ private:
     static bool isRetriable(const Transport::Reply &reply);
 
     std::unique_ptr<Transport> m_transport;
-    pl::taxonomy::TaxonomyStore *m_cache;
+    HttpCache *m_cache;
 
     QByteArray m_userAgent;
     int m_minIntervalMs = 1100;   // ~55 requests/minute, under iNat's 60

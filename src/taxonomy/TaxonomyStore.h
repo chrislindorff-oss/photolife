@@ -235,19 +235,6 @@ public:
     // Marks a species as checked, so a later run doesn't query it again.
     bool markInfraChecked(int projectId, qint64 speciesInatId);
 
-    // --- conditional-GET cache --------------------------------------------
-
-    struct CacheEntry
-    {
-        QByteArray body;
-        QString etag;
-        QString lastModified;
-        int status = 0;
-    };
-    std::optional<CacheEntry> cachedResponse(const QString &url) const;
-    bool storeResponse(const QString &url, const QString &etag, const QString &lastModified,
-                       int status, const QByteArray &body);
-
     // --- reads ------------------------------------------------------------
 
     std::optional<Place> placeByInatId(qint64 inatId) const;

@@ -3,10 +3,9 @@
 #include <QElapsedTimer>
 #include <QTimer>
 
-#include "db/Database.h"
+#include "net/HttpCache.h"
 #include "net/HttpClient.h"
 #include "net/Transport.h"
-#include "taxonomy/TaxonomyStore.h"
 
 using namespace pl;
 using namespace pl::net;
@@ -55,6 +54,10 @@ private slots:
     void doesNotRetryClientError();
     void retriesOnNetworkError();
     void authenticatedRequestSendsTokenAndBypassesCache();
+    void skipsCacheForUncacheableUrls();
+    void cacheRoundTrips();
+    void isCacheableRejectsPagedAndBatchedUrls();
+    void pruneDropsOldestBeyondBudget();
 };
 
 void TestHttpClient::servesSuccessfulBody()
@@ -106,9 +109,8 @@ void TestHttpClient::serialisesAndRateLimits()
 
 void TestHttpClient::usesEtagAndServesCachedBodyOn304()
 {
-    Database db;
-    QVERIFY(db.open(QStringLiteral(":memory:")));
-    taxonomy::TaxonomyStore store(db.connectionName());
+    HttpCache cache;
+    QVERIFY(cache.open(QStringLiteral(":memory:")));
 
     auto transport = std::make_unique<FakeTransport>();
     FakeTransport *raw = transport.get();
@@ -121,7 +123,7 @@ void TestHttpClient::usesEtagAndServesCachedBodyOn304()
         return r;
     };
 
-    HttpClient client(std::move(transport), &store);
+    HttpClient client(std::move(transport), &cache);
     client.setMinRequestIntervalMs(0);
 
     const QUrl url(QStringLiteral("https://api.inaturalist.org/v1/taxa/1"));
@@ -227,9 +229,8 @@ void TestHttpClient::retriesOnNetworkError()
 
 void TestHttpClient::authenticatedRequestSendsTokenAndBypassesCache()
 {
-    Database db;
-    QVERIFY(db.open(QStringLiteral(":memory:")));
-    taxonomy::TaxonomyStore store(db.connectionName());
+    HttpCache cache;
+    QVERIFY(cache.open(QStringLiteral(":memory:")));
 
     auto transport = std::make_unique<FakeTransport>();
     FakeTransport *raw = transport.get();
@@ -245,9 +246,9 @@ void TestHttpClient::authenticatedRequestSendsTokenAndBypassesCache()
         return r;
     };
 
-    HttpClient client(std::move(transport), &store);
+    HttpClient client(std::move(transport), &cache);
     client.setMinRequestIntervalMs(0);
-    const QUrl url(QStringLiteral("https://api.inaturalist.org/v1/observations"));
+    const QUrl url(QStringLiteral("https://api.inaturalist.org/v1/taxa/47217"));
 
     HttpResponse first;
     bool firstDone = false;
@@ -271,6 +272,88 @@ void TestHttpClient::authenticatedRequestSendsTokenAndBypassesCache()
     QTRY_VERIFY(thirdDone);
     QVERIFY(third.fromCache);
     QCOMPARE(third.body, QByteArrayLiteral("public-payload"));   // unchanged by the authenticated call
+}
+
+void TestHttpClient::skipsCacheForUncacheableUrls()
+{
+    HttpCache cache;
+    QVERIFY(cache.open(QStringLiteral(":memory:")));
+
+    auto transport = std::make_unique<FakeTransport>();
+    FakeTransport *raw = transport.get();
+    transport->responder = [](const Transport::Request &, int) {
+        return okReply(QByteArrayLiteral("page"), QStringLiteral("\"etag-1\""));
+    };
+
+    HttpClient client(std::move(transport), &cache);
+    client.setMinRequestIntervalMs(0);
+    const QUrl url(QStringLiteral(
+        "https://api.inaturalist.org/v1/observations?user_login=someone&page=2&per_page=200"));
+
+    int done = 0;
+    client.get(url, [&](HttpResponse) { ++done; });
+    client.get(url, [&](HttpResponse) { ++done; });
+    QTRY_COMPARE(done, 2);
+    QVERIFY(raw->received.at(1).ifNoneMatch.isEmpty());
+    QCOMPARE(cache.entryCount(), 0);
+}
+
+void TestHttpClient::cacheRoundTrips()
+{
+    HttpCache cache;
+    QVERIFY(cache.open(QStringLiteral(":memory:")));
+    const QString url = QStringLiteral("https://api.inaturalist.org/v1/taxa/47217");
+    QVERIFY(!cache.lookup(url).has_value());
+
+    QVERIFY(cache.store(url, QStringLiteral("\"abc123\""), QString(), 200,
+                        QByteArrayLiteral("{\"results\":[]}")));
+    auto e = cache.lookup(url);
+    QVERIFY(e.has_value());
+    QCOMPARE(e->etag, QStringLiteral("\"abc123\""));
+    QCOMPARE(e->body, QByteArrayLiteral("{\"results\":[]}"));
+    QCOMPARE(e->status, 200);
+
+    QVERIFY(cache.store(url, QStringLiteral("\"def456\""), QString(), 200,
+                        QByteArrayLiteral("{\"results\":[1]}")));
+    QCOMPARE(cache.lookup(url)->etag, QStringLiteral("\"def456\""));
+    QCOMPARE(cache.entryCount(), 1);
+}
+
+void TestHttpClient::isCacheableRejectsPagedAndBatchedUrls()
+{
+    auto cacheable = [](const char *url) {
+        return HttpCache::isCacheable(QUrl(QString::fromLatin1(url)));
+    };
+    QVERIFY(cacheable("https://api.inaturalist.org/v1/taxa/47217"));
+    QVERIFY(cacheable("https://api.inaturalist.org/v1/places/autocomplete?q=Victoria"));
+    QVERIFY(cacheable("https://api.ala.org.au/specieslist/ws/speciesListItems/dr2201?max=1000&offset=0"));
+    QVERIFY(!cacheable("https://api.inaturalist.org/v1/taxa/1,2,3"));
+    QVERIFY(!cacheable("https://api.inaturalist.org/v1/taxa/1%2C2%2C3"));
+    QVERIFY(!cacheable("https://api.inaturalist.org/v1/observations?user_login=x&id_above=5"));
+    QVERIFY(!cacheable("https://api.inaturalist.org/v1/observations/species_counts?place_id=7830"));
+    QVERIFY(!cacheable("https://api.inaturalist.org/v1/taxa?q=eucalyptus&page=3"));
+}
+
+void TestHttpClient::pruneDropsOldestBeyondBudget()
+{
+    HttpCache cache;
+    QVERIFY(cache.open(QStringLiteral(":memory:")));
+    const QByteArray body(100, 'x');
+    for (int i = 0; i < 5; ++i) {
+        QVERIFY(cache.store(QStringLiteral("https://example.test/%1").arg(i), QString(), QString(),
+                            200, body));
+        QTest::qWait(5);   // distinct used_at stamps
+    }
+    cache.touch(QStringLiteral("https://example.test/0"));   // now the most recently used
+
+    cache.prune(HttpCache::kDefaultMaxAgeDays, 250);
+    QCOMPARE(cache.entryCount(), 2);
+    QVERIFY(cache.lookup(QStringLiteral("https://example.test/0")).has_value());
+    QVERIFY(cache.lookup(QStringLiteral("https://example.test/4")).has_value());
+
+    QTest::qWait(5);
+    cache.prune(0, HttpCache::kDefaultMaxBytes);   // everything is older than "now - 0 days"
+    QCOMPARE(cache.entryCount(), 0);
 }
 
 QTEST_GUILESS_MAIN(TestHttpClient)

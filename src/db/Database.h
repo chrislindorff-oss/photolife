@@ -80,6 +80,10 @@ public:
 
 private:
     bool applyPendingMigrations(const ProgressCallback &onProgress);
+    // SQLite never shrinks its file on its own: after a migration drops a
+    // large table the space sits on the freelist. VACUUMs when most of the
+    // file is free. Failure is logged, not fatal -- the catalogue still works.
+    void compactIfMostlyFree(const ProgressCallback &onProgress);
     bool ensureMigrationsTableExists();
     bool runScript(const QString &sql);
     bool fail(const QString &context, const QString &detail);
