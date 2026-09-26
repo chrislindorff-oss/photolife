@@ -69,9 +69,10 @@ public:
     void start(const QString &userLogin, const QList<qint64> &taxonIds, qint64 placeId = 0);
 
     // Every one of the user's observations with photos (optionally within
-    // `placeId`), not limited to any reference tree's taxa. progress() then
-    // reports observations fetched so far against the API's total.
-    void startAll(const QString &userLogin, qint64 placeId = 0);
+    // `placeId`, and/or at or below taxon `taxonId`), not limited to any
+    // reference tree's taxa. progress() then reports observations fetched so
+    // far against the API's total.
+    void startAll(const QString &userLogin, qint64 placeId = 0, qint64 taxonId = 0);
     void cancel() { m_cancelled = true; }
     bool isRunning() const { return m_running; }
 
@@ -111,6 +112,7 @@ private:
     bool m_cancelled = false;
     QString m_userLogin;
     qint64 m_placeId = 0;
+    qint64 m_allTaxonId = 0;   // startAll()'s taxon limit (0 = none)
     QList<QList<qint64>> m_batches;
     int m_batchIndex = 0;
     int m_page = 1;

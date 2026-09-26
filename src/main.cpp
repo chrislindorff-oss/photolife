@@ -491,24 +491,28 @@ int main(int argc, char *argv[])
         const int tab = parser.value(tabOption).toInt();
         QTimer::singleShot(1000, [&] {
             // --tab numbering matches the nine logical screens (kept stable across the
-            // Reference Tree / All Library Photos / Review Unmatched view-mode split, and
-            // across the Reference Tree mode's own tab order/insertions):
+            // Reference Tree / All Library Photos / Review Unmatched / iNaturalist
+            // view-mode split, and across the Reference Tree mode's own tab order/insertions):
             //   0 Photos of Tree Selection, 1 All Library Photos, 2 Review Unmatched,
             //   3 Unphotographed Taxa, 4 Reference Photos, 5 My Best Shots, 6 Map,
-            //   7 Download from iNaturalist, 8 Not in Any Tree.
+            //   7 iNaturalist (Download My Observations), 8 Not in Any Tree.
             // Values are indices within the Reference Tree mode's QTabWidget.
-            static const int kTreeTabIndex[] = {0, -1, -1, 3, 5, 2, 1, 6, 4};
+            static const int kTreeTabIndex[] = {0, -1, -1, 3, 5, 2, 1, -1, 4};
             for (QWidget *w : QApplication::topLevelWidgets()) {
                 auto *treeAction = w->findChild<QAction *>(QStringLiteral("viewTreeAction"));
                 auto *libraryAction = w->findChild<QAction *>(QStringLiteral("viewLibraryAction"));
                 auto *reviewAction = w->findChild<QAction *>(QStringLiteral("viewReviewAction"));
-                auto *tabs = w->findChild<QTabWidget *>();
+                auto *inatAction = w->findChild<QAction *>(QStringLiteral("viewInatAction"));
+                auto *tabs = w->findChild<QTabWidget *>(QStringLiteral("treeTabs"));
                 if (tab == 1) {
                     if (libraryAction)
                         libraryAction->setChecked(true);
                 } else if (tab == 2) {
                     if (reviewAction)
                         reviewAction->setChecked(true);
+                } else if (tab == 7) {
+                    if (inatAction)
+                        inatAction->setChecked(true);
                 } else {
                     if (treeAction)
                         treeAction->setChecked(true);

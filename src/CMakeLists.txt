@@ -24,6 +24,8 @@ qt_add_library(photolife_core STATIC
     inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
     inat/LibraryPresence.h inat/LibraryPresence.cpp
     inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
+    inat/InatSpeciesListFetcher.h inat/InatSpeciesListFetcher.cpp
+    inat/SpeciesComparison.h inat/SpeciesComparison.cpp
     lightroom/LightroomCatalogReader.h lightroom/LightroomCatalogReader.cpp
     lightroom/LightroomImportEngine.h lightroom/LightroomImportEngine.cpp
     lightroom/LightroomImporter.h lightroom/LightroomImporter.cpp
@@ -76,6 +78,10 @@ qt_add_library(photolife_core STATIC
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/InatCoordinateConfirmDialog.h ui/InatCoordinateConfirmDialog.cpp
+    ui/InatComparePage.h    ui/InatComparePage.cpp
+    ui/InatDownloadPage.h   ui/InatDownloadPage.cpp
+    ui/InatScopeWidgets.h   ui/InatScopeWidgets.cpp
+    ui/InatToolsView.h      ui/InatToolsView.cpp
     ui/LibraryFoldersDialog.h ui/LibraryFoldersDialog.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
     ui/MapView.h            ui/MapView.cpp

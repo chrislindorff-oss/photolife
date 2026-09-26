@@ -16,10 +16,7 @@
 #include "coverage/CoverageCalculator.h"
 #include "geo/LocalityFetcher.h"
 #include "inat/ExifWriter.h"
-#include "inat/InatDownloadModel.h"
 #include "inat/InatImportService.h"
-#include "inat/InatObservationFetcher.h"
-#include "inat/LibraryPresence.h"
 #include "inat/InatPhotoDownloader.h"
 #include "lightroom/LightroomImporter.h"
 #include "match/MatchReviewer.h"
@@ -47,6 +44,9 @@
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
 #include "ui/InatCoordinateConfirmDialog.h"
+#include "ui/InatComparePage.h"
+#include "ui/InatDownloadPage.h"
+#include "ui/InatToolsView.h"
 #include "ui/LibraryFoldersDialog.h"
 #include "ui/MapView.h"
 #include "ui/NewProjectDialog.h"
@@ -86,20 +86,17 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSignalBlocker>
-#include <QSortFilterProxyModel>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QDir>
 #include <QEventLoop>
 #include <QFutureWatcher>
-#include <QPainter>
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStatusBar>
-#include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QToolButton>
@@ -120,15 +117,6 @@
 namespace pl {
 namespace {
 
-// Draws the same border/caption look as CaptureDelegate, for the iNaturalist
-// download grid's InatDownloadModel rows. A separate class rather than reuse:
-// CaptureDelegate reads model::CaptureListModel-specific roles (status,
-// best-shot, badges) whose numeric values collide with unrelated
-// InatDownloadModel roles (e.g. MatchStatusRole == HasGpsRole == UserRole+7),
-// so calling it against this model would paint bogus status dots. The
-// "faded" look for likely-duplicate candidates is already baked into the
-// decoration pixmap itself (InatDownloadModel::dimmed()), so no extra
-// painting is needed for that here.
 // The modal progress window beginTaskProgress() shows. Unlike a plain
 // QProgressDialog, it can't be dismissed while its task runs: Escape would
 // otherwise just hide it (QDialog::reject) -- unlocking the rest of the app
@@ -163,176 +151,7 @@ private:
     bool m_cancellable;
 };
 
-class InatCandidateDelegate : public QStyledItemDelegate
-{
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-
-protected:
-    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
-    {
-        QStyledItemDelegate::initStyleOption(option, index);
-        option->text.clear();
-        option->icon = QIcon();
-    }
-
-public:
-    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
-    {
-        const QString caption = index.data(Qt::DisplayRole).toString();
-        const int lines = std::max(1, int(caption.count(QLatin1Char('\n'))) + 1);
-        return QSize(option.decorationSize.width() + 20,
-                    option.decorationSize.height() + 20 + lines * 16);
-    }
-
-    void paint(QPainter *painter, const QStyleOptionViewItem &option,
-               const QModelIndex &index) const override
-    {
-        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
-        const bool selected = option.state & QStyle::State_Selected;
-
-        painter->fillRect(option.rect, option.palette.color(QPalette::Base));
-        if (selected) {
-            painter->save();
-            painter->setRenderHint(QPainter::Antialiasing);
-            painter->setPen(Qt::NoPen);
-            painter->setBrush(theme.selectedRow);
-            painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
-            painter->restore();
-        }
-
-        painter->save();
-        painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(QPen(selected ? theme.primaryAccent : theme.border, selected ? 2 : 1));
-        painter->setBrush(Qt::NoBrush);
-        painter->drawRoundedRect(option.rect.adjusted(1, 1, -2, -2), theme.radius, theme.radius);
-        painter->restore();
-
-        const QIcon icon = index.data(Qt::DecorationRole).value<QIcon>();
-        const QRect decoBox(option.rect.left() + (option.rect.width() - option.decorationSize.width()) / 2,
-                            option.rect.top(), option.decorationSize.width(),
-                            option.decorationSize.height());
-        QRect imageRect = decoBox;
-        if (!icon.isNull()) {
-            const QSize native = icon.availableSizes().value(0, option.decorationSize);
-            const QSize fitted = native.scaled(option.decorationSize, Qt::KeepAspectRatio);
-            imageRect = QRect(QPoint(0, 0), fitted);
-            imageRect.moveCenter(decoBox.center());
-            painter->drawPixmap(imageRect, icon.pixmap(native));
-        }
-        const int imageBottom = imageRect.bottom();
-
-        // NEW (no photos of this taxon in the library) / NO TREE (taxon in no
-        // reference tree): pills across the top-left of the thumbnail.
-        if (index.data(inat::InatDownloadModel::PresenceCheckedRole).toBool()) {
-            QList<std::pair<QString, QColor>> badges;
-            if (!index.data(inat::InatDownloadModel::InLibraryRole).toBool())
-                badges.append({QStringLiteral("NEW"), theme.primaryAccent});
-            if (!index.data(inat::InatDownloadModel::InAnyTreeRole).toBool())
-                badges.append({QStringLiteral("NO TREE"), theme.warning});
-            if (!badges.isEmpty()) {
-                QFont font = painter->font();
-                font.setPointSize(7);
-                font.setBold(true);
-                const QFontMetrics fm(font);
-                const int padH = 6, pillH = 16, gap = 4;
-                int x = imageRect.left() + 4;
-                const int y = imageRect.top() + 4;
-                painter->save();
-                painter->setRenderHint(QPainter::Antialiasing);
-                painter->setFont(font);
-                for (const auto &[text, color] : badges) {
-                    const QRect pill(x, y, fm.horizontalAdvance(text) + padH * 2, pillH);
-                    painter->setPen(Qt::NoPen);
-                    painter->setBrush(color);
-                    painter->drawRoundedRect(pill, pillH / 2.0, pillH / 2.0);
-                    painter->setPen(Qt::white);
-                    painter->drawText(pill, Qt::AlignCenter, text);
-                    x += pill.width() + gap;
-                }
-                painter->restore();
-            }
-        }
-
-        const QString caption = index.data(Qt::DisplayRole).toString();
-        if (!caption.isEmpty()) {
-            QFont font = painter->font();
-            if (font.pointSize() > 0)
-                font.setPointSize(qMax(1, font.pointSize() - 1));
-            else
-                font.setPixelSize(qMax(1, font.pixelSize() - 1));
-            QFontMetrics fm(font);
-            const int lineH = 16;
-            const int top = imageBottom + 4;
-            const QRect textArea(option.rect.left() + 4, top, option.rect.width() - 8,
-                                 option.rect.bottom() - top);
-
-            painter->save();
-            painter->setFont(font);
-            painter->setPen(option.palette.color(QPalette::Text));
-            int y = textArea.top();
-            for (const QString &line : caption.split(QLatin1Char('\n'))) {
-                const QString elided = fm.elidedText(line, Qt::ElideRight, textArea.width());
-                painter->drawText(QRect(textArea.left(), y, textArea.width(), lineH),
-                                  Qt::AlignHCenter | Qt::AlignVCenter, elided);
-                y += lineH;
-            }
-            painter->restore();
-        }
-    }
-};
-
 } // namespace
-
-// A QSortFilterProxyModel that additionally hides InatDownloadModel rows
-// flagged LikelyDuplicateRole when hideFaded is on, layered on top of the
-// base class's own name-substring filtering.
-class InatFilterProxyModel : public QSortFilterProxyModel
-{
-public:
-    using QSortFilterProxyModel::QSortFilterProxyModel;
-
-    void setHideFaded(bool hide)
-    {
-        if (m_hideFaded == hide)
-            return;
-        m_hideFaded = hide;
-        invalidateFilter();
-    }
-
-    // Rows of the page's Show combo.
-    enum Presence { AllPresence, NewToLibrary, NotInAnyTree, NewOrNotInTree };
-    void setPresenceFilter(int presence)
-    {
-        if (m_presence == presence)
-            return;
-        m_presence = presence;
-        invalidateFilter();
-    }
-
-protected:
-    bool filterAcceptsRow(int row, const QModelIndex &parent) const override
-    {
-        if (!QSortFilterProxyModel::filterAcceptsRow(row, parent))
-            return false;
-        const QModelIndex idx = sourceModel()->index(row, 0, parent);
-        if (m_hideFaded && idx.data(inat::InatDownloadModel::LikelyDuplicateRole).toBool())
-            return false;
-        if (m_presence != AllPresence
-            && idx.data(inat::InatDownloadModel::PresenceCheckedRole).toBool()) {
-            const bool isNew = !idx.data(inat::InatDownloadModel::InLibraryRole).toBool();
-            const bool noTree = !idx.data(inat::InatDownloadModel::InAnyTreeRole).toBool();
-            if ((m_presence == NewToLibrary && !isNew) || (m_presence == NotInAnyTree && !noTree)
-                || (m_presence == NewOrNotInTree && !isNew && !noTree))
-                return false;
-        }
-        return true;
-    }
-
-private:
-    bool m_hideFaded = false;
-    int m_presence = AllPresence;
-};
 
 MainWindow::MainWindow(Application &app, QWidget *parent)
     : QMainWindow(parent), m_app(app)
@@ -349,11 +168,20 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         new checklist::ChecklistImporter(m_app.inat(), m_app.taxonomyStore(), this);
     m_localityFetcher =
         new geo::LocalityFetcher(m_app.geocoder(), m_app.database().connectionName(), this);
-    m_inatObservationFetcher = new inat::InatObservationFetcher(
-        m_app.inat(), m_app.database().connectionName(), this);
     m_inatImportService =
         new inat::InatImportService(m_app.inatPhotoDownloader(), QString(), this);
     m_inatImportService->setExifWriter(&inat::writeExif);
+    connect(m_inatImportService, &inat::InatImportService::progress, this,
+            [this](int done, int total) {
+                statusBar()->showMessage(tr("Downloading photos — %1 / %2").arg(done).arg(total));
+                if (m_inatPipelineActive && !m_inatPipelineCancelled)
+                    updateTaskProgress(done < total
+                                           ? tr("Downloading photo %1 of %2…").arg(done + 1).arg(total)
+                                           : tr("Downloaded %1 photo(s).").arg(total),
+                                       done, total);
+            });
+    connect(m_inatImportService, &inat::InatImportService::finished, this,
+            &MainWindow::onInatImportFinished);
 
     buildMenus();
     buildCentralWidget();
@@ -415,8 +243,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 const bool download = std::exchange(m_matchingDownload, false);
                 if (download) {
                     // The downloaded taxa are no longer NEW -- refresh the badges.
-                    if (!m_inatCandidates.isEmpty())
-                        checkInatCandidatesAgainstLibrary();
+                    m_inatView->downloadPage()->recheckAgainstLibrary();
                     finishInatPipeline(
                         !s.ok()       ? tr("Matching the downloaded photos failed: %1").arg(s.error)
                         : s.cancelled ? tr("Matching cancelled — the downloaded photos are in the "
@@ -648,6 +475,7 @@ void MainWindow::buildMenus()
     QMenu *libraryMenu = menuBar()->addMenu(tr("&Library"));
     QMenu *treeMenu = menuBar()->addMenu(tr("&Reference Tree"));
     QMenu *matchingMenu = menuBar()->addMenu(tr("&Matching"));
+    QMenu *inatMenu = menuBar()->addMenu(tr("i&Naturalist Tools"));
     m_viewMenu = menuBar()->addMenu(tr("&View"));
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
 
@@ -656,6 +484,7 @@ void MainWindow::buildMenus()
     buildReferenceTreeMenu(treeMenu);
     buildViewMenu();                  // must precede buildMatchingMenu(): creates m_viewReviewAction
     buildMatchingMenu(matchingMenu);  // reuses m_matchAction + m_viewReviewAction
+    buildInatMenu(inatMenu);          // after buildViewMenu(): switches via m_viewInatAction
     buildHelpMenu(helpMenu);
     buildToolBar();                   // last: reuses actions from every menu above + m_filterCombo
 
@@ -783,6 +612,11 @@ void MainWindow::buildViewMenu()
     m_viewReviewAction->setObjectName(QStringLiteral("viewReviewAction"));
     m_viewModeGroup->addAction(m_viewReviewAction);
 
+    m_viewInatAction = m_viewMenu->addAction(tr("&iNaturalist"));
+    m_viewInatAction->setCheckable(true);
+    m_viewInatAction->setObjectName(QStringLiteral("viewInatAction"));
+    m_viewModeGroup->addAction(m_viewInatAction);
+
     m_viewMenu->addSeparator();
     auto *displayMenu = m_viewMenu->addMenu(tr("&Display…"));
     displayMenu->menuAction()->setToolTip(
@@ -838,6 +672,27 @@ void MainWindow::buildMatchingMenu(QMenu *matchingMenu)
                 tr("Forgotten names take effect on the next Match Library run."), 6000);
         });
         dialog.exec();
+    });
+}
+
+void MainWindow::buildInatMenu(QMenu *inatMenu)
+{
+    // These just bring up the iNaturalist view -- m_inatView itself is only
+    // built later, in buildCentralWidget(), hence the lambdas.
+    inatMenu->addAction(tr("&Download My Observations"), this, [this] {
+        m_viewInatAction->setChecked(true);
+        m_inatView->showDownloadPage();
+    });
+
+    inatMenu->addAction(tr("&Compare Species with Trees"), this, [this] {
+        m_viewInatAction->setChecked(true);
+        m_inatView->showComparePage();
+    });
+
+    inatMenu->addSeparator();
+    inatMenu->addAction(tr("iNaturalist &Account"), this, [this] {
+        m_viewInatAction->setChecked(true);
+        m_inatView->accountBar()->focusUsername();
     });
 }
 
@@ -897,6 +752,7 @@ void MainWindow::buildToolBar()
     toolbar->addAction(m_viewTreeAction);
     toolbar->addAction(m_viewLibraryAction);
     toolbar->addAction(m_viewReviewAction);
+    toolbar->addAction(m_viewInatAction);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(tr("Show: "), toolbar));
@@ -928,6 +784,7 @@ void MainWindow::buildReferenceTreeDock()
         m_treeModel->setProject(index >= 0 ? m_projectCombo->itemData(index).toInt() : -1);
         m_treeView->expandToDepth(1);
         refreshCoverage();
+        m_inatView->followActiveTree(currentProjectId());
 
         // Land the user on the newly chosen tree: select its top node, scroll
         // to the top, give the tree keyboard focus, and switch to the photo
@@ -1205,6 +1062,13 @@ void MainWindow::onTreeSelectionChanged()
     }
     if (m_reviewPane) {
         m_reviewPane->setTreeTaxon(
+            useStatusScope ? 0 : m_selectedTaxon,
+            (!useStatusScope && m_selectedTaxon > 0)
+                ? idx.data(model::TaxonomyTreeModel::NameRole).toString()
+                : QString());
+    }
+    if (m_inatView) {
+        m_inatView->setTreeSelection(
             useStatusScope ? 0 : m_selectedTaxon,
             (!useStatusScope && m_selectedTaxon > 0)
                 ? idx.data(model::TaxonomyTreeModel::NameRole).toString()
@@ -2070,14 +1934,21 @@ void MainWindow::reloadProjectList()
         }
     }
 
+    if (m_projectCombo->count() > 0) {
+        const int restore = m_projectCombo->findData(previous);
+        m_projectCombo->setCurrentIndex(restore >= 0 ? restore : 0);
+    }
+
+    QList<std::pair<int, QString>> trees;
+    for (int i = 0; i < m_projectCombo->count(); ++i)
+        trees.append({m_projectCombo->itemData(i).toInt(), m_projectCombo->itemText(i)});
+    m_inatView->setTrees(trees, currentProjectId());
+
     if (m_projectCombo->count() == 0) {
         m_treeModel->setProject(-1);
         refreshCoverage();
         return;
     }
-
-    const int restore = m_projectCombo->findData(previous);
-    m_projectCombo->setCurrentIndex(restore >= 0 ? restore : 0);
     m_treeModel->setProject(m_projectCombo->currentData().toInt());
     m_treeView->expandToDepth(1);
     refreshCoverage();
@@ -2379,12 +2250,12 @@ void MainWindow::fetchCoordinatesFromInat(const QModelIndex &idx)
     if (username.isEmpty()) {
         QMessageBox::information(
             this, tr("Attempt to Fetch Coordinates"),
-            tr("Set up your iNaturalist username on the \"Download from iNaturalist\" tab "
-               "first."));
+            tr("Set up your iNaturalist username in the iNaturalist view "
+               "(iNaturalist Tools → iNaturalist Account) first."));
         return;
     }
-    // The shared INatClient's token is otherwise only ever applied from the
-    // Download tab's own search button -- it can't be assumed already set.
+    // The shared INatClient's token is otherwise only ever applied by the
+    // iNaturalist view's account bar -- it can't be assumed already set.
     m_app.inat().setAccessToken(m_app.settings().inatApiToken());
 
     const int captureId = idx.data(model::CaptureListModel::IdRole).toInt();
@@ -2628,7 +2499,39 @@ void MainWindow::buildCentralWidget()
         updateBestShotsTabText();
     });
 
+    m_inatView = new InatToolsView(m_app, this);
+    connect(m_inatView->downloadPage(), &InatDownloadPage::statusMessage, this,
+            [this](const QString &text, int timeoutMs) {
+                statusBar()->showMessage(text, timeoutMs);
+            });
+    connect(m_inatView->downloadPage(), &InatDownloadPage::downloadRequested, this,
+            &MainWindow::downloadSelectedInatPhotos);
+
+    InatComparePage *comparePage = m_inatView->comparePage();
+    connect(comparePage, &InatComparePage::statusMessage, this,
+            [this](const QString &text, int timeoutMs) {
+                statusBar()->showMessage(text, timeoutMs);
+            });
+    connect(comparePage, &InatComparePage::addToTreeRequested, this,
+            [this](int projectId, qint64 inatId, const QString &name) {
+                addTaxonToTree(projectId, inatId, name);
+            });
+    connect(comparePage, &InatComparePage::showInTreeRequested, this,
+            [this](int projectId, qint64 inatId) {
+                const int index = m_projectCombo->findData(projectId);
+                if (index >= 0 && index != m_projectCombo->currentIndex())
+                    m_projectCombo->setCurrentIndex(index);
+                m_viewTreeAction->setChecked(true);
+                selectTaxonInTree(inatId);
+            });
+    connect(comparePage, &InatComparePage::downloadTaxonRequested, this,
+            [this](qint64 inatId, const QString &label) {
+                m_inatView->downloadPage()->limitToTaxon(inatId, label);
+                m_inatView->showDownloadPage();
+            });
+
     m_tabs = new QTabWidget(this);
+    m_tabs->setObjectName(QStringLiteral("treeTabs"));   // main.cpp's --screenshot finds it by name
     // "Photos of Tree Selection" must stay tab 0: several call sites jump to
     // it via m_tabs->widget(0) rather than by name/index lookup.
     m_tabs->addTab(buildBrowsePage(), tr("Photos of Tree Selection"));
@@ -2637,12 +2540,12 @@ void MainWindow::buildCentralWidget()
     m_tabs->addTab(buildMissingPage(), tr("Unphotographed Taxa"));
     m_tabs->addTab(buildUntreedPage(), tr("Not in Any Tree"));
     m_tabs->addTab(buildReferencePhotosPage(), tr("Reference Photos"));
-    m_tabs->addTab(buildInatDownloadPage(), tr("Download from iNaturalist"));
 
     m_centralStack = new QStackedWidget(this);
     m_centralStack->addWidget(m_tabs);        // Reference Tree mode
     m_centralStack->addWidget(m_photoStack);  // All Library Photos mode
     m_centralStack->addWidget(m_reviewPane);  // Review Unmatched mode
+    m_centralStack->addWidget(m_inatView);    // iNaturalist mode
     setCentralWidget(m_centralStack);
 
     connect(m_viewTreeAction, &QAction::toggled, this, [this](bool on) {
@@ -2656,6 +2559,10 @@ void MainWindow::buildCentralWidget()
     connect(m_viewReviewAction, &QAction::toggled, this, [this](bool on) {
         if (on)
             m_centralStack->setCurrentWidget(m_reviewPane);
+    });
+    connect(m_viewInatAction, &QAction::toggled, this, [this](bool on) {
+        if (on)
+            m_centralStack->setCurrentWidget(m_inatView);
     });
     m_viewLibraryAction->setChecked(true);   // start on All Photos
 
@@ -3237,323 +3144,10 @@ void MainWindow::showUnexpectedExportFiles(const collection::ExportSummary &summ
     dialog.exec();
 }
 
-QWidget *MainWindow::buildInatDownloadPage()
+void MainWindow::downloadSelectedInatPhotos(const QList<inat::ImportItem> &items)
 {
-    m_inatDownloadModel = new inat::InatDownloadModel(m_app.photoCache(), m_app.taxonomyStore(), this);
-    m_inatProxyModel = new InatFilterProxyModel(this);
-    m_inatProxyModel->setSourceModel(m_inatDownloadModel);
-    m_inatProxyModel->setFilterRole(inat::InatDownloadModel::NameRole);
-    m_inatProxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
-    m_inatProxyModel->setDynamicSortFilter(true);
-    m_inatProxyModel->setSortRole(inat::InatDownloadModel::NameRole);
-
-    m_inatUsernameEdit = new QLineEdit(this);
-    m_inatUsernameEdit->setPlaceholderText(tr("iNaturalist username"));
-    m_inatUsernameEdit->setText(m_app.settings().inatUsername());
-
-    m_inatTokenEdit = new QLineEdit(this);
-    m_inatTokenEdit->setPlaceholderText(tr("Personal API token (optional)"));
-    m_inatTokenEdit->setText(m_app.settings().inatApiToken());
-    m_inatTokenEdit->setEchoMode(QLineEdit::Password);
-    m_inatTokenEdit->setToolTip(
-        tr("Optional. Without one, geoprivacy-obscured species (common for rare orchids) come "
-           "back with fuzzed coordinates even for your own observations. Get a token from "
-           "inaturalist.org/users/api_token while logged in — it expires after about 24 hours, "
-           "so you may need to paste a fresh one each session."));
-
-    m_inatRestrictToLocality = new QCheckBox(tr("Restrict to this tree's locality"), this);
-    m_inatRestrictToLocality->setChecked(true);
-    m_inatRestrictToLocality->setToolTip(
-        tr("When checked, only observations within this reference tree's own locality count "
-           "— a species that also occurs elsewhere won't pull in observations from outside "
-           "the tree's region. Trees with no locality set search worldwide either way."));
-
-    m_inatSearchButton = new QPushButton(tr("Search iNaturalist"), this);
-    connect(m_inatSearchButton, &QPushButton::clicked, this, &MainWindow::searchInatObservations);
-
-    m_inatCancelSearchButton = new QPushButton(tr("Stop"), this);
-    m_inatCancelSearchButton->setEnabled(false);
-    m_inatCancelSearchButton->setToolTip(
-        tr("A search covers every species in this tree one at a time; a prolific "
-           "observer or a broad tree can mean a lot of iNaturalist pages to page "
-           "through. Stop if it's taking too long."));
-    connect(m_inatCancelSearchButton, &QPushButton::clicked, this,
-            [this] { m_inatObservationFetcher->cancel(); });
-
-    m_inatScopeCombo = new QComboBox(this);
-    m_inatScopeCombo->addItem(tr("Species in this tree"));
-    m_inatScopeCombo->addItem(tr("All my observations"));
-    m_inatScopeCombo->setToolTip(
-        tr("\"All my observations\" isn't limited to the selected tree's species — use it "
-           "with Show: \"New to library\" / \"Not in any tree\" to find taxa you don't "
-           "have yet. \"Restrict to this tree's locality\" still applies to both."));
-
-    auto *header = new QHBoxLayout;
-    header->addWidget(m_inatUsernameEdit, 1);
-    header->addWidget(m_inatTokenEdit, 1);
-    header->addWidget(m_inatScopeCombo);
-    header->addWidget(m_inatRestrictToLocality);
-    header->addWidget(m_inatSearchButton);
-    header->addWidget(m_inatCancelSearchButton);
-
-    m_inatFilterEdit = new QLineEdit(this);
-    m_inatFilterEdit->setPlaceholderText(tr("Filter by species name…"));
-    m_inatFilterEdit->setClearButtonEnabled(true);
-    connect(m_inatFilterEdit, &QLineEdit::textChanged, this,
-            [this](const QString &text) { m_inatProxyModel->setFilterFixedString(text); });
-
-    m_inatSortCombo = new QComboBox(this);
-    m_inatSortCombo->addItem(tr("Name (A → Z)"), int(Qt::AscendingOrder));
-    m_inatSortCombo->addItem(tr("Name (Z → A)"), int(Qt::DescendingOrder));
-    connect(m_inatSortCombo, &QComboBox::currentIndexChanged, this, [this](int i) {
-        m_inatProxyModel->sort(0, Qt::SortOrder(m_inatSortCombo->itemData(i).toInt()));
-    });
-
-    m_inatHideFaded = new QCheckBox(tr("Hide faded photos"), this);
-    m_inatHideFaded->setToolTip(
-        tr("Hides candidates that look like something already in your library."));
-    connect(m_inatHideFaded, &QCheckBox::toggled, this,
-            [this](bool on) { m_inatProxyModel->setHideFaded(on); });
-
-    m_inatPresenceCombo = new QComboBox(this);
-    m_inatPresenceCombo->addItem(tr("Show: all"), int(InatFilterProxyModel::AllPresence));
-    m_inatPresenceCombo->addItem(tr("Show: new to library"), int(InatFilterProxyModel::NewToLibrary));
-    m_inatPresenceCombo->addItem(tr("Show: not in any tree"), int(InatFilterProxyModel::NotInAnyTree));
-    m_inatPresenceCombo->addItem(tr("Show: new or not in any tree"),
-                                 int(InatFilterProxyModel::NewOrNotInTree));
-    connect(m_inatPresenceCombo, &QComboBox::currentIndexChanged, this, [this](int i) {
-        m_inatProxyModel->setPresenceFilter(m_inatPresenceCombo->itemData(i).toInt());
-    });
-
-    m_inatCheckButton = new QPushButton(tr("Check Against Library"), this);
-    m_inatCheckButton->setToolTip(
-        tr("Re-checks these results against your reference trees and library (e.g. after "
-           "adding a taxon to a tree or running Match Library). NEW = no photos of that "
-           "taxon in your library, matched or named in a filename; NO TREE = the taxon "
-           "isn't in any reference tree. Results are checked automatically after a search."));
-    m_inatCheckButton->setEnabled(false);
-    connect(m_inatCheckButton, &QPushButton::clicked, this,
-            &MainWindow::checkInatCandidatesAgainstLibrary);
-
-    auto *browseRow = new QHBoxLayout;
-    browseRow->addWidget(m_inatFilterEdit, 1);
-    browseRow->addWidget(m_inatSortCombo);
-    browseRow->addWidget(m_inatPresenceCombo);
-    browseRow->addWidget(m_inatHideFaded);
-    browseRow->addWidget(m_inatCheckButton);
-
-    m_inatStatus = new QLabel(this);
-    m_inatStatus->setWordWrap(true);
-    m_inatStatus->setText(
-        tr("Enter your iNaturalist username and search to find your own observations of "
-           "species in this reference tree that aren't in your library yet."));
-
-    m_inatGrid = new QListView(this);
-    m_inatGrid->setModel(m_inatProxyModel);
-    m_inatGrid->setViewMode(QListView::IconMode);
-    m_inatGrid->setResizeMode(QListView::Adjust);
-    m_inatGrid->setMovement(QListView::Static);
-    m_inatGrid->setUniformItemSizes(true);
-    m_inatGrid->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_inatGrid->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_inatGrid->setIconSize(QSize(192, 192));
-    m_inatGrid->setGridSize(QSize(212, 232));
-    m_inatGrid->setWordWrap(true);
-    m_inatGrid->setSpacing(6);
-    m_inatGrid->setItemDelegate(new InatCandidateDelegate(m_inatGrid));
-
-    auto *selectAllButton = new QPushButton(tr("Select All"), this);
-    selectAllButton->setToolTip(
-        tr("Selects every photo currently shown except the faded ones — those look like "
-           "something already in your library. Click a faded photo directly if you want it "
-           "included anyway."));
-    connect(selectAllButton, &QPushButton::clicked, this, [this] {
-        QItemSelection selection;
-        for (int r = 0; r < m_inatProxyModel->rowCount(); ++r) {
-            const QModelIndex idx = m_inatProxyModel->index(r, 0);
-            if (!idx.data(inat::InatDownloadModel::LikelyDuplicateRole).toBool())
-                selection.select(idx, idx);
-        }
-        m_inatGrid->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect);
-    });
-
-    m_inatDownloadButton = new QPushButton(tr("Download Selected…"), this);
-    connect(m_inatDownloadButton, &QPushButton::clicked, this,
-            &MainWindow::downloadSelectedInatPhotos);
-
-    auto *footer = new QHBoxLayout;
-    footer->addWidget(m_inatStatus, 1);
-    footer->addWidget(selectAllButton);
-    footer->addWidget(m_inatDownloadButton);
-
-    connect(m_inatObservationFetcher, &inat::InatObservationFetcher::progress, this,
-            [this](int done, int total, int found) {
-                if (m_inatScopeCombo->currentIndex() == 1)
-                    statusBar()->showMessage(
-                        tr("Searching all your iNaturalist observations — %1 of %2 fetched")
-                            .arg(found)
-                            .arg(total));
-                else
-                    statusBar()->showMessage(
-                        tr("Searching iNaturalist — %1 / %2 taxa checked, %3 observation(s) found")
-                            .arg(done)
-                            .arg(total)
-                            .arg(found));
-            });
-    connect(m_inatObservationFetcher, &inat::InatObservationFetcher::finished, this,
-            &MainWindow::onInatSearchFinished);
-
-    connect(m_inatImportService, &inat::InatImportService::progress, this,
-            [this](int done, int total) {
-                statusBar()->showMessage(tr("Downloading photos — %1 / %2").arg(done).arg(total));
-                if (m_inatPipelineActive && !m_inatPipelineCancelled)
-                    updateTaskProgress(done < total
-                                           ? tr("Downloading photo %1 of %2…").arg(done + 1).arg(total)
-                                           : tr("Downloaded %1 photo(s).").arg(total),
-                                       done, total);
-            });
-    connect(m_inatImportService, &inat::InatImportService::finished, this,
-            &MainWindow::onInatImportFinished);
-
-    m_inatDownloadPage = new QWidget(this);
-    auto *layout = new QVBoxLayout(m_inatDownloadPage);
-    layout->addLayout(header);
-    layout->addLayout(browseRow);
-    layout->addWidget(m_inatGrid, 1);
-    layout->addLayout(footer);
-    return m_inatDownloadPage;
-}
-
-void MainWindow::searchInatObservations()
-{
-    if (m_inatObservationFetcher->isRunning())
+    if (m_inatImportService->isRunning() || items.isEmpty())
         return;
-
-    const bool allObservations = m_inatScopeCombo->currentIndex() == 1;
-    const int pid = currentProjectId();
-    if (pid <= 0 && !allObservations) {
-        QMessageBox::information(this, tr("Search iNaturalist"),
-                                 tr("Select a reference tree first, or search \"All my "
-                                    "observations\"."));
-        return;
-    }
-    const QString username = m_inatUsernameEdit->text().trimmed();
-    if (username.isEmpty()) {
-        QMessageBox::information(this, tr("Search iNaturalist"),
-                                 tr("Enter an iNaturalist username first."));
-        return;
-    }
-    m_app.settings().setInatUsername(username);
-
-    const QString token = m_inatTokenEdit->text().trimmed();
-    m_app.settings().setInatApiToken(token);
-    m_app.inat().setAccessToken(token);
-
-    // Leaf-rank taxa only (species and below) -- projectTaxonInatIds() returns
-    // every taxon in the tree, including higher-rank nodes and the synthetic
-    // "Life" root every tree carries for structure. iNat's taxon_id filter
-    // matches a taxon's descendants too, so including a broad ancestor like
-    // that would turn one "batch" into a search over the user's entire
-    // observation history -- exactly the kind of single search that can take
-    // a very long time while the batch counter sits still.
-    QList<qint64> leafTaxonIds;
-    if (!allObservations) {
-        for (const auto &leaf : m_app.taxonomyStore().projectLeafPhotos(pid))
-            leafTaxonIds << leaf.inatId;
-    }
-
-    // Confine the search to the tree's own locality too, not just its taxa --
-    // otherwise a species that also occurs elsewhere would pull in the user's
-    // observations of it from anywhere in the world. Trees built without a
-    // place (e.g. from a checklist with no region) simply search worldwide
-    // either way; the checkbox lets the user opt out of the restriction too.
-    const qint64 placeId = m_inatRestrictToLocality->isChecked() && pid > 0
-                               ? m_app.taxonomyStore().projectPlaceInatId(pid).value_or(0)
-                               : 0;
-
-    m_inatSearchButton->setEnabled(false);
-    m_inatCancelSearchButton->setEnabled(true);
-    m_inatScopeCombo->setEnabled(false);   // the progress text depends on it
-    m_inatStatus->setText(
-        placeId > 0 ? tr("Searching…")
-                    : tr("Searching — results aren't restricted by location…"));
-    statusBar()->showMessage(tr("Searching iNaturalist for %1's observations…").arg(username));
-    if (allObservations)
-        m_inatObservationFetcher->startAll(username, placeId);
-    else
-        m_inatObservationFetcher->start(username, leafTaxonIds, placeId);
-}
-
-void MainWindow::onInatSearchFinished(bool ok, const QString &error,
-                                      QList<inat::Candidate> candidates)
-{
-    m_inatSearchButton->setEnabled(true);
-    m_inatCancelSearchButton->setEnabled(false);
-    m_inatScopeCombo->setEnabled(true);
-    if (!ok) {
-        if (error == QLatin1String("cancelled")) {
-            m_inatStatus->setText(tr("Search stopped."));
-            statusBar()->showMessage(tr("Search stopped."), 4000);
-        } else {
-            m_inatStatus->setText(tr("Search failed: %1").arg(error));
-            statusBar()->showMessage(tr("Searching iNaturalist failed: %1").arg(error), 10000);
-        }
-        return;
-    }
-
-    m_inatCandidates = candidates;
-    checkInatCandidatesAgainstLibrary();
-    const int total = m_inatDownloadModel->rowCountTotal();
-    if (total == 0)
-        m_inatStatus->setText(
-            tr("No candidate photos found — either everything is already in your library, "
-               "or this user has no matching observations."));
-    statusBar()->showMessage(tr("Found %n candidate photo(s).", nullptr, total), 6000);
-}
-
-void MainWindow::checkInatCandidatesAgainstLibrary()
-{
-    inat::LibraryPresence::annotate(m_app.database().connectionName(), m_inatCandidates);
-    m_inatDownloadModel->setCandidates(m_inatCandidates);
-    m_inatCheckButton->setEnabled(!m_inatCandidates.isEmpty());
-
-    const int total = m_inatDownloadModel->rowCountTotal();
-    if (total == 0)
-        return;
-
-    // Counted per taxon, not per photo -- that's what the user acts on.
-    QSet<qint64> taxa, newTaxa, noTreeTaxa;
-    for (const inat::Candidate &c : std::as_const(m_inatCandidates)) {
-        const qint64 id = c.observation.taxonInatId;
-        if (id <= 0 || c.observation.photos.isEmpty())
-            continue;
-        taxa.insert(id);
-        if (!c.inLibrary)
-            newTaxa.insert(id);
-        if (!c.inAnyTree)
-            noTreeTaxa.insert(id);
-    }
-    m_inatStatus->setText(
-        tr("%1 candidate photo(s) of %2 taxa. %3 taxa are NEW (no photos in your library) "
-           "and %4 are in NO reference TREE — use Show to list just those. Faded photos "
-           "look like ones you already have.")
-            .arg(total)
-            .arg(taxa.size())
-            .arg(newTaxa.size())
-            .arg(noTreeTaxa.size()));
-}
-
-void MainWindow::downloadSelectedInatPhotos()
-{
-    if (m_inatImportService->isRunning())
-        return;
-
-    const QModelIndexList selected = m_inatGrid->selectionModel()->selectedIndexes();
-    if (selected.isEmpty()) {
-        QMessageBox::information(this, tr("Download Selected"),
-                                 tr("Select at least one photo first."));
-        return;
-    }
 
     const QString destParent = QFileDialog::getExistingDirectory(
         this, tr("Choose a Folder for Downloaded Photos"), QDir::homePath(),
@@ -3572,24 +3166,8 @@ void MainWindow::downloadSelectedInatPhotos()
         return;
     }
 
-    QList<inat::ImportItem> items;
-    for (const QModelIndex &idx : selected) {
-        inat::ImportItem item;
-        item.observationId = idx.data(inat::InatDownloadModel::ObservationIdRole).toLongLong();
-        item.photoId = idx.data(inat::InatDownloadModel::PhotoIdRole).toLongLong();
-        item.downloadUrl = idx.data(inat::InatDownloadModel::DownloadUrlRole).toString();
-        item.observedOn = idx.data(inat::InatDownloadModel::ObservedOnRole).toString();
-        if (idx.data(inat::InatDownloadModel::HasGpsRole).toBool()) {
-            item.latitude = idx.data(inat::InatDownloadModel::LatitudeRole).toDouble();
-            item.longitude = idx.data(inat::InatDownloadModel::LongitudeRole).toDouble();
-        }
-        item.taxonName = idx.data(inat::InatDownloadModel::NameRole).toString();
-        item.placeGuess = idx.data(inat::InatDownloadModel::PlaceGuessRole).toString();
-        items.append(item);
-    }
-
     m_inatPendingDestFolder = destFolder;
-    m_inatDownloadButton->setEnabled(false);
+    m_inatView->downloadPage()->setDownloadEnabled(false);
     statusBar()->showMessage(tr("Downloading %n photo(s)…", nullptr, items.size()));
 
     // Locks the rest of the app until the whole pipeline -- download, add to
@@ -3604,7 +3182,7 @@ void MainWindow::downloadSelectedInatPhotos()
 
 void MainWindow::onInatImportFinished(bool ok, const QString &error, QList<inat::SavedFile> saved)
 {
-    m_inatDownloadButton->setEnabled(true);
+    m_inatView->downloadPage()->setDownloadEnabled(true);
     const bool cancelled = !ok && error == QLatin1String("cancelled");
 
     if (saved.isEmpty()) {

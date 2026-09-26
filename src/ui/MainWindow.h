@@ -66,17 +66,15 @@ namespace geo {
 class LocalityFetcher;
 }
 namespace inat {
-class InatObservationFetcher;
-class InatDownloadModel;
 class InatImportService;
-struct Candidate;
+struct ImportItem;
 struct SavedFile;
 }
 
 class CoveragePanel;
 class HelpWindow;
 class ImageViewer;
-class InatFilterProxyModel;
+class InatToolsView;
 class MapView;
 class ReferencePhotoDialog;
 class ReviewPane;
@@ -99,6 +97,7 @@ private:
     void buildReferenceTreeMenu(QMenu *treeMenu);
     void buildViewMenu();
     void buildMatchingMenu(QMenu *matchingMenu);
+    void buildInatMenu(QMenu *inatMenu);
     void buildHelpMenu(QMenu *helpMenu);
     void buildToolBar();
     void buildCentralWidget();
@@ -136,14 +135,10 @@ private:
     // After an update-mode export: lists files in the collection that this
     // run didn't produce (see ExportOptions::reportUnexpectedFiles).
     void showUnexpectedExportFiles(const collection::ExportSummary &summary);
-    QWidget *buildInatDownloadPage();
-    void searchInatObservations();
-    void downloadSelectedInatPhotos();
-    void onInatSearchFinished(bool ok, const QString &error, QList<inat::Candidate> candidates);
+    // Starts the pipeline below for the photos the iNaturalist view's
+    // Download My Observations page asked for.
+    void downloadSelectedInatPhotos(const QList<inat::ImportItem> &items);
     void onInatImportFinished(bool ok, const QString &error, QList<inat::SavedFile> saved);
-    // Annotates m_inatCandidates against the trees and library, refills the
-    // grid and summarises the result in the page's status line.
-    void checkInatCandidatesAgainstLibrary();
     // The locked-down download pipeline (download -> add to library -> match
     // just those photos), shown in one modal progress window. Cancel stops
     // the current step and skips the rest; photos already downloaded are
@@ -242,6 +237,7 @@ private:
     QAction *m_viewTreeAction = nullptr;
     QAction *m_viewLibraryAction = nullptr;
     QAction *m_viewReviewAction = nullptr;
+    QAction *m_viewInatAction = nullptr;
     QAction *m_darkModeAction = nullptr;
     QLabel *m_pgStatusLabel = nullptr;
     PostgresConnectionMonitor *m_pgMonitor = nullptr;
@@ -308,28 +304,10 @@ private:
     geo::LocalityFetcher *m_localityFetcher = nullptr;
     QAction *m_fetchLocalitiesAction = nullptr;
 
-    inat::InatObservationFetcher *m_inatObservationFetcher = nullptr;
-    inat::InatDownloadModel *m_inatDownloadModel = nullptr;
-    InatFilterProxyModel *m_inatProxyModel = nullptr;
+    InatToolsView *m_inatView = nullptr;
     inat::InatImportService *m_inatImportService = nullptr;
-    QWidget *m_inatDownloadPage = nullptr;
-    QListView *m_inatGrid = nullptr;
-    QLineEdit *m_inatUsernameEdit = nullptr;
-    QLineEdit *m_inatTokenEdit = nullptr;
-    QCheckBox *m_inatRestrictToLocality = nullptr;
-    QLineEdit *m_inatFilterEdit = nullptr;
-    QComboBox *m_inatSortCombo = nullptr;
-    QCheckBox *m_inatHideFaded = nullptr;
-    QComboBox *m_inatScopeCombo = nullptr;     // selected tree's taxa / all my observations
-    QComboBox *m_inatPresenceCombo = nullptr;  // Show: all / new to library / not in any tree
-    QPushButton *m_inatCheckButton = nullptr;  // re-check results against trees and library
-    QList<inat::Candidate> m_inatCandidates;   // last search's results, for re-checking
     bool m_inatPipelineActive = false;
     bool m_inatPipelineCancelled = false;
-    QLabel *m_inatStatus = nullptr;
-    QPushButton *m_inatSearchButton = nullptr;
-    QPushButton *m_inatCancelSearchButton = nullptr;
-    QPushButton *m_inatDownloadButton = nullptr;
     QString m_inatPendingDestFolder;   // set while an import's post-scan steps are still pending
     bool m_rescanQueued = false;       // see requestScan()
     QList<std::function<void()>> m_afterQueuedScan;

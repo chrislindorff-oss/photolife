@@ -831,6 +831,40 @@ TaxonomyStore::TaxonPhoto TaxonomyStore::taxonPhoto(qint64 inatId) const
     return out;
 }
 
+QHash<qint64, Taxon> TaxonomyStore::taxaByInatIds(const QList<qint64> &inatIds) const
+{
+    QHash<qint64, Taxon> out;
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    for (qsizetype start = 0; start < inatIds.size(); start += kMaxBatchBindParams) {
+        const QList<qint64> chunk = inatIds.mid(start, kMaxBatchBindParams);
+        const QStringList placeholders(chunk.size(), QStringLiteral("?"));
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral(
+                      "SELECT inat_id, parent_inat_id, rank, rank_level, name, common_name, "
+                      "ancestry, is_active FROM taxon WHERE inat_id IN (%1)")
+                      .arg(placeholders.join(QLatin1Char(','))));
+        for (qint64 id : chunk)
+            q.addBindValue(qlonglong(id));
+        if (!q.exec())
+            continue;
+        while (q.next()) {
+            Taxon t;
+            t.inatId = q.value(0).toLongLong();
+            if (!q.value(1).isNull())
+                t.parentInatId = q.value(1).toLongLong();
+            t.rank = q.value(2).toString();
+            if (!q.value(3).isNull())
+                t.rankLevel = q.value(3).toInt();
+            t.name = q.value(4).toString();
+            t.commonName = q.value(5).toString();
+            t.ancestry = q.value(6).toString();
+            t.isActive = q.value(7).toBool();
+            out.insert(t.inatId, t);
+        }
+    }
+    return out;
+}
+
 int TaxonomyStore::taxonCount() const
 {
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));

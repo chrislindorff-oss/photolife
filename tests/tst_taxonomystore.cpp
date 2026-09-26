@@ -27,6 +27,7 @@ private slots:
     void placeRoundTrips();
     void taxonUpsertStoresNamesAndIsIdempotent();
     void reUpsertReplacesNamesWithoutDuplicating();
+    void taxaByInatIdsReturnsCachedAndSkipsUnknown();
     void projectMembershipAndTree();
     void projectLocalityBoxResolvesFromPlace();
     void taxonPhotoPersistsAndSurvivesPhotolessUpsert();
@@ -155,6 +156,35 @@ void TestTaxonomyStore::taxonUpsertStoresNamesAndIsIdempotent()
     q.addBindValue(id1);
     QVERIFY(q.exec() && q.next());
     QCOMPARE(q.value(0).toString(), QStringLiteral("accepted"));
+}
+
+void TestTaxonomyStore::taxaByInatIdsReturnsCachedAndSkipsUnknown()
+{
+    Taxon family;
+    family.inatId = 47217;
+    family.rank = QStringLiteral("family");
+    family.rankLevel = 30;
+    family.name = QStringLiteral("Orchidaceae");
+    family.commonName = QStringLiteral("Orchids");
+    family.ancestry = QStringLiteral("48460/47126/211194");
+    family.parentInatId = 211194;
+    Taxon species;
+    species.inatId = 83357;
+    species.rank = QStringLiteral("species");
+    species.name = QStringLiteral("Glossodia major");
+    species.ancestry = QStringLiteral("48460/47126/211194/47217/752416");
+    species.parentInatId = 752416;
+    QVERIFY(!m_store->upsertTaxa({family, species}).isEmpty());
+
+    const QHash<qint64, Taxon> got = m_store->taxaByInatIds({47217, 83357, 999999});
+    QCOMPARE(got.size(), 2);
+    QCOMPARE(got.value(47217).rank, QStringLiteral("family"));
+    QCOMPARE(got.value(47217).rankLevel.value_or(0), 30);
+    QCOMPARE(got.value(47217).commonName, QStringLiteral("Orchids"));
+    QCOMPARE(got.value(83357).ancestry, species.ancestry);
+    QCOMPARE(got.value(83357).parentInatId.value_or(0), qint64(752416));
+    QVERIFY(!got.contains(999999));
+    QVERIFY(m_store->taxaByInatIds({}).isEmpty());
 }
 
 void TestTaxonomyStore::reUpsertReplacesNamesWithoutDuplicating()

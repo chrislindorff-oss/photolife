@@ -18,9 +18,11 @@ private slots:
     void searchTaxaPassesRankAndParses();
     void fetchTaxonReturnsAncestorsAndChildren();
     void speciesCountsParsesPageAndAncestry();
+    void userSpeciesCountsSendsOnlyGivenFilters();
     void observationCountReadsTotalResults();
     void fetchObservationsSendsDateRangeWhenProvided();
     void fetchObservationsOmitsDateParamsWhenInvalid();
+    void fetchAllObservationsSendsTaxonOnlyWhenGiven();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
 
@@ -152,6 +154,47 @@ void TestINatClient::speciesCountsParsesPageAndAncestry()
     QVERIFY(url.contains(QStringLiteral("verifiable=true")));
 }
 
+void TestINatClient::userSpeciesCountsSendsOnlyGivenFilters()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(R"({
+            "total_results": 1, "page": 1, "per_page": 500,
+            "results": [
+                {"count": 4, "taxon": {"id": 83357, "rank": "species",
+                 "name": "Glossodia major", "ancestry": "48460/47217/738348/752416"}}
+            ]
+        })");
+    });
+
+    Outcome<SpeciesCountsPage> got;
+    int calls = 0;
+    m_inat->userSpeciesCounts(QStringLiteral("someone"), 47217, 6744, ObservationQuality::Research,
+                              1, 500, [&](auto o) { got = o; ++calls; });
+    QTRY_COMPARE(calls, 1);
+    m_inat->userSpeciesCounts(QStringLiteral("someone"), 0, 0, ObservationQuality::Any, 2, 500,
+                              [&](auto) { ++calls; });
+    QTRY_COMPARE(calls, 2);
+
+    QVERIFY(got.ok());
+    QCOMPARE(got.value.results.size(), 1);
+    QCOMPARE(got.value.results.first().count, 4);
+    QCOMPARE(got.value.results.first().ancestorIds.last(), qint64(752416));
+
+    const QString filtered = m_transport->received.at(0).url.toString();
+    QVERIFY(filtered.contains(QStringLiteral("user_login=someone")));
+    QVERIFY(filtered.contains(QStringLiteral("taxon_id=47217")));
+    QVERIFY(filtered.contains(QStringLiteral("place_id=6744")));
+    QVERIFY(filtered.contains(QStringLiteral("quality_grade=research")));
+    QVERIFY(!filtered.contains(QStringLiteral("verifiable")));
+
+    const QString plain = m_transport->received.at(1).url.toString();
+    QVERIFY(!plain.contains(QStringLiteral("taxon_id")));
+    QVERIFY(!plain.contains(QStringLiteral("place_id")));
+    QVERIFY(!plain.contains(QStringLiteral("quality_grade")));
+    QVERIFY(!plain.contains(QStringLiteral("verifiable")));
+    QVERIFY(plain.contains(QStringLiteral("page=2")));
+}
+
 void TestINatClient::observationCountReadsTotalResults()
 {
     wire([](const Transport::Request &, int) {
@@ -173,6 +216,24 @@ void TestINatClient::observationCountReadsTotalResults()
     QVERIFY(url.contains(QStringLiteral("place_id=6744")));
     QVERIFY(url.contains(QStringLiteral("verifiable=true")));
     QVERIFY(url.contains(QStringLiteral("per_page=0")));
+}
+
+void TestINatClient::fetchAllObservationsSendsTaxonOnlyWhenGiven()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(R"({"total_results": 0, "results": []})"));
+    });
+
+    int calls = 0;
+    m_inat->fetchAllObservations(QStringLiteral("someone"), 0, 47217, 0,
+                                 [&](auto) { ++calls; });
+    QTRY_COMPARE(calls, 1);
+    m_inat->fetchAllObservations(QStringLiteral("someone"), 0, 0, 0, [&](auto) { ++calls; });
+    QTRY_COMPARE(calls, 2);
+
+    QVERIFY(m_transport->received.at(0).url.toString().contains(
+        QStringLiteral("taxon_id=47217")));
+    QVERIFY(!m_transport->received.at(1).url.toString().contains(QStringLiteral("taxon_id")));
 }
 
 void TestINatClient::fetchObservationsSendsDateRangeWhenProvided()

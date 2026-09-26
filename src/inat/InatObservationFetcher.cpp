@@ -112,11 +112,12 @@ void InatObservationFetcher::begin(const QString &userLogin, qint64 placeId)
     m_batches.clear();
 }
 
-void InatObservationFetcher::startAll(const QString &userLogin, qint64 placeId)
+void InatObservationFetcher::startAll(const QString &userLogin, qint64 placeId, qint64 taxonId)
 {
     if (m_running)
         return;
     begin(userLogin, placeId);
+    m_allTaxonId = taxonId;
     m_idAbove = 0;
     m_allTotal = 0;
     loadLocalRecords();
@@ -130,7 +131,7 @@ void InatObservationFetcher::fetchAllPage()
         return;
 
     m_inat.fetchAllObservations(
-        m_userLogin, m_placeId, m_idAbove, [this](net::Outcome<net::ObservationPage> out) {
+        m_userLogin, m_placeId, m_allTaxonId, m_idAbove, [this](net::Outcome<net::ObservationPage> out) {
             if (checkCancelled())
                 return;
             if (!out.ok()) {

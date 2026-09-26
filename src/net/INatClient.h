@@ -50,6 +50,14 @@ struct TaxonDetail
     QList<pl::taxonomy::Taxon> children;
 };
 
+// Which of an observer's observations userSpeciesCounts() counts.
+enum class ObservationQuality
+{
+    Any,          // every observation, casual included
+    Verifiable,   // research grade + needs ID
+    Research,     // research grade only
+};
+
 struct ObservationPage
 {
     int totalResults = 0;
@@ -95,6 +103,14 @@ public:
     void speciesCounts(qint64 taxonId, qint64 placeId, int page, int perPage,
                        std::function<void(Outcome<SpeciesCountsPage>)> done);
 
+    // GET /v1/observations/species_counts?user_login=&taxon_id=&place_id=&page=
+    // One observer's "leaf" taxa -- the most specific taxa they've recorded,
+    // each with its observation count and ancestry. `taxonId`/`placeId` of 0
+    // omit that filter; `quality` picks which observations count.
+    void userSpeciesCounts(const QString &userLogin, qint64 taxonId, qint64 placeId,
+                           ObservationQuality quality, int page, int perPage,
+                           std::function<void(Outcome<SpeciesCountsPage>)> done);
+
     // GET /v1/observations?taxon_id=&place_id=&verifiable=true&per_page=0
     // Just the verifiable-observation count for a taxon in a place (0 = no place
     // filter) — enough to tell whether a taxon actually occurs there.
@@ -116,13 +132,18 @@ public:
                            qint64 placeId, const QDate &dateFrom, const QDate &dateTo, int page,
                            std::function<void(Outcome<ObservationPage>)> done);
 
-    // Every one of the user's observations with photos, not limited to any
-    // taxa, in ascending id order: pass 0 for the first page, then the last
-    // result's id to continue. An empty page means there are no more.
-    void fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 idAbove,
+    // Every one of the user's observations with photos, in ascending id
+    // order: pass 0 for the first page, then the last result's id to
+    // continue. An empty page means there are no more. `taxonId` > 0 limits
+    // it to that taxon and everything beneath it (iNat's taxon_id matches
+    // descendants); 0 = every taxon.
+    void fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 taxonId,
+                              qint64 idAbove,
                               std::function<void(Outcome<ObservationPage>)> done);
 
 private:
+    void getSpeciesCountsPage(const QUrl &url,
+                              std::function<void(Outcome<SpeciesCountsPage>)> done);
     void getObservationPage(const QUrl &url, std::function<void(Outcome<ObservationPage>)> done);
 
     HttpClient &m_http;

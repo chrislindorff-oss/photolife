@@ -213,6 +213,11 @@ public:
     };
     TaxonPhoto taxonPhoto(qint64 inatId) const;
 
+    // The cached taxa among `inatIds` (rank, names, ancestry, parent), keyed
+    // by inat id; ids not in the cache are simply absent. Chunked, so any
+    // list size is fine.
+    QHash<qint64, Taxon> taxaByInatIds(const QList<qint64> &inatIds) const;
+
     // The iNat id of a taxon whose accepted or alternative name folds to `folded`
     // (accepted preferred). Lets a caller skip a network lookup for a name
     // already cached.

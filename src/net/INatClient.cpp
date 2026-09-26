@@ -146,7 +146,33 @@ void INatClient::speciesCounts(qint64 taxonId, qint64 placeId, int page, int per
     q.addQueryItem(QStringLiteral("page"), QString::number(page));
     q.addQueryItem(QStringLiteral("per_page"), QString::number(perPage));
     url.setQuery(q);
+    getSpeciesCountsPage(url, std::move(done));
+}
 
+void INatClient::userSpeciesCounts(const QString &userLogin, qint64 taxonId, qint64 placeId,
+                                   ObservationQuality quality, int page, int perPage,
+                                   std::function<void(Outcome<SpeciesCountsPage>)> done)
+{
+    QUrl url(m_baseUrl + QStringLiteral("/observations/species_counts"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("user_login"), userLogin);
+    if (taxonId > 0)
+        q.addQueryItem(QStringLiteral("taxon_id"), QString::number(taxonId));
+    if (placeId > 0)
+        q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    if (quality == ObservationQuality::Verifiable)
+        q.addQueryItem(QStringLiteral("verifiable"), QStringLiteral("true"));
+    else if (quality == ObservationQuality::Research)
+        q.addQueryItem(QStringLiteral("quality_grade"), QStringLiteral("research"));
+    q.addQueryItem(QStringLiteral("page"), QString::number(page));
+    q.addQueryItem(QStringLiteral("per_page"), QString::number(perPage));
+    url.setQuery(q);
+    getSpeciesCountsPage(url, std::move(done));
+}
+
+void INatClient::getSpeciesCountsPage(const QUrl &url,
+                                      std::function<void(Outcome<SpeciesCountsPage>)> done)
+{
     m_http.get(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<SpeciesCountsPage> out;
         if (!resp.error.isEmpty()) {
@@ -245,7 +271,8 @@ void INatClient::fetchObservations(const QString &userLogin, const QList<qint64>
     getObservationPage(url, std::move(done));
 }
 
-void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 idAbove,
+void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 taxonId,
+                                      qint64 idAbove,
                                       std::function<void(Outcome<ObservationPage>)> done)
 {
     QUrl url(m_baseUrl + QStringLiteral("/observations"));
@@ -253,6 +280,8 @@ void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, 
     q.addQueryItem(QStringLiteral("user_login"), userLogin);
     if (placeId > 0)
         q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    if (taxonId > 0)
+        q.addQueryItem(QStringLiteral("taxon_id"), QString::number(taxonId));
     q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
     // Keyset paging (id_above, ascending ids) rather than page=N: the API
     // refuses page-number paging past 10,000 results, which a whole
