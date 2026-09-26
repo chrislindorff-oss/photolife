@@ -199,8 +199,11 @@ files and folders you've just renamed or moved are matched under their new names
 normally takes a second or so, since unchanged files aren't re-read). Then, for each
 capture, it parses the folder path and the file name (plus any Lightroom keywords),
 reconciles them against the cached taxonomy (including synonyms), scores the result,
-and either applies it automatically or puts it in the review queue. If you stop that
-scan, the match is skipped too.</p>
+and either applies it automatically or puts it in the review queue. A progress window
+shows both steps &mdash; the scan, then each photo being matched &mdash; for the whole
+library and for <b>Match Library Against &ldquo;&hellip;&rdquo;</b> on a single taxon
+or group alike. <b>Cancel</b> stops whichever step is running; matches already made are
+kept, and if the scan is stopped the match is skipped.</p>
 <p>Automatic matches simply follow a renamed file to its new name. A decision you made
 yourself is never changed without asking: if you rename a photo you've identified, and
 its new name points to a different taxon, Match Library asks rather than guessing. After the run, a

@@ -236,6 +236,10 @@ private:
     // Rescans the library, then calls `startMatching` -- unless the scan was
     // stopped or failed. See the .cpp for why matching always scans first.
     void scanThenMatch(std::function<void()> startMatching);
+    // The progress window for Match Library / Match Library Against a group:
+    // the pre-match scan, then matching. Cancel stops whichever is running.
+    void beginMatchProgress(const QString &title);
+    void endMatchProgress();
     // Match Library Against This Group: re-checks unresolved photos (see
     // MatchEngine::matchGroup) against the tree's taxa at/below `inatId`.
     void startGroupMatch(qint64 inatId, const QString &name);
@@ -354,6 +358,8 @@ private:
     bool m_rescanQueued = false;       // see requestScan()
     bool m_lastScanCompleted = false;  // the last scan finished without error or Stop
     bool m_matchAfterScanPending = false;   // scanThenMatch() is waiting on its scan
+    bool m_matchProgressActive = false;     // beginMatchProgress()'s window is up
+    bool m_matchCancelled = false;          // ...and its Cancel was pressed
     QList<std::function<void()>> m_afterQueuedScan;
 
     CoveragePanel *m_coveragePanel = nullptr;

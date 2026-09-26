@@ -317,9 +317,19 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         if (m_matchingDownload && m_inatPipelineActive && !m_inatPipelineCancelled)
             updateTaskProgress(tr("Matching the downloaded photos — %1 of %2…").arg(done).arg(total),
                                done, total);
+        if (m_matchProgressActive && !m_matchCancelled)
+            updateTaskProgress(
+                m_groupMatchName.isEmpty()
+                    ? tr("Matching photo %1 of %2…").arg(done).arg(total)
+                    : tr("Matching against \"%1\" — photo %2 of %3…")
+                          .arg(m_groupMatchName)
+                          .arg(done)
+                          .arg(total),
+                done, total);
     });
     connect(&matcher, &match::MatchService::finished, this,
             [this](match::MatchEngine::Stats s) {
+                endMatchProgress();   // before any Renamed Photos question
                 m_matchAction->setEnabled(true);
                 m_model->reload();
                 m_bestShotModel->reload();
@@ -2257,6 +2267,7 @@ void MainWindow::startMatch()
                                 tr("Add and scan a folder of photos first."));
         return;
     }
+    beginMatchProgress(tr("Match Library"));
     scanThenMatch([this] {
         m_groupMatchName.clear();
         m_matchingDownload = false;
@@ -2280,16 +2291,51 @@ void MainWindow::scanThenMatch(std::function<void()> startMatching)
     requestScan([this, startMatching = std::move(startMatching)] {
         m_matchAfterScanPending = false;
         m_matchAction->setEnabled(true);
+        if (m_matchCancelled) {
+            endMatchProgress();
+            statusBar()->showMessage(tr("Matching cancelled."), 6000);
+            return;
+        }
         if (!m_lastScanCompleted) {
+            endMatchProgress();
             statusBar()->showMessage(
                 tr("Matching skipped — the library scan didn't finish, so some names could "
                    "be out of date."),
                 10000);
             return;
         }
-        if (!m_app.matchService().isRunning())
-            startMatching();
+        if (m_app.matchService().isRunning()) {
+            endMatchProgress();
+            return;
+        }
+        startMatching();
     });
+}
+
+void MainWindow::beginMatchProgress(const QString &title)
+{
+    m_matchProgressActive = true;
+    m_matchCancelled = false;
+    beginTaskProgress(title, [this] {
+        m_matchCancelled = true;
+        if (m_app.scanService().isRunning())
+            m_app.scanService().cancel();
+        if (m_app.matchService().isRunning())
+            m_app.matchService().cancel();
+        updateTaskProgress(tr("Cancelling…"), 0, 0);
+    });
+    updateTaskProgress(m_app.settings().watchedRoots().isEmpty()
+                           ? tr("Matching…")
+                           : tr("Checking the library for changes…"),
+                       0, 0);
+}
+
+void MainWindow::endMatchProgress()
+{
+    if (!m_matchProgressActive)
+        return;
+    m_matchProgressActive = false;
+    endTaskProgress();
 }
 
 void MainWindow::resolveStaleDecisions(const QList<match::StaleDecision> &stale)
@@ -2337,6 +2383,7 @@ void MainWindow::startGroupMatch(qint64 inatId, const QString &name)
                                  6000);
         return;
     }
+    beginMatchProgress(tr("Match Library Against \"%1\"").arg(name));
     scanThenMatch([this, name, group = QSet<qint64>(ids.begin(), ids.end())] {
         m_groupMatchName = name;
         m_matchingDownload = false;
@@ -3835,6 +3882,10 @@ void MainWindow::onScanProgress(const scan::ScanProgress &progress)
     if (m_inatPipelineActive && !m_inatPipelineCancelled)
         updateTaskProgress(tr("Adding the downloaded photos to your library — scanning "
                               "(%1 photos checked)…")
+                               .arg(progress.filesSeen),
+                           0, 0);
+    if (m_matchProgressActive && !m_matchCancelled)
+        updateTaskProgress(tr("Checking the library for changes — %1 photos checked…")
                                .arg(progress.filesSeen),
                            0, 0);
     // foldersSeen/filesSeen are running totals for this whole scan (every
