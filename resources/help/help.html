@@ -6,8 +6,10 @@
 <h1>PhotoLife Help</h1>
 
 <p>PhotoLife builds a catalogue alongside your nature-photo library and hangs
-each photo on the tree of life. It never moves, renames or edits your files &mdash;
-it reads them and keeps its own database.</p>
+each photo on the tree of life. It never moves, renames or deletes your photos
+&mdash; it reads them and keeps its own database. The only times it writes to a
+photo file are when you explicitly ask it to (see
+<a href="#writes">What PhotoLife writes to your photos</a>).</p>
 
 <h2>Contents</h2>
 <ul>
@@ -19,10 +21,15 @@ it reads them and keeps its own database.</p>
   <li><a href="#match">4. Match your photos</a></li>
   <li><a href="#review">5. Review the uncertain matches</a></li>
   <li><a href="#browse">Browsing &amp; coverage</a></li>
+  <li><a href="#untreed">Photos not in any tree</a></li>
   <li><a href="#refphotos">Reference photos &amp; best shots</a></li>
-  <li><a href="#map">The map</a></li>
+  <li><a href="#map">The map &amp; photo localities</a></li>
+  <li><a href="#export">Exporting a photo collection</a></li>
+  <li><a href="#inat">iNaturalist tools</a></li>
   <li><a href="#viewer">The image viewer</a></li>
   <li><a href="#names">Learned names</a></li>
+  <li><a href="#writes">What PhotoLife writes to your photos</a></li>
+  <li><a href="#settings">Catalogue, appearance &amp; updates</a></li>
   <li><a href="#files">Where PhotoLife keeps things</a></li>
   <li><a href="#raw">RAW files</a></li>
   <li><a href="#shortcuts">Keyboard shortcuts</a></li>
@@ -44,25 +51,30 @@ it reads them and keeps its own database.</p>
   <li><b>Browse</b> the tree and watch your coverage grow.</li>
 </ol>
 <p>Steps 2&ndash;4 need an internet connection (they query the iNaturalist API);
-everything is cached, so afterwards PhotoLife works offline.</p>
+everything is cached, so afterwards PhotoLife works offline. If you post to
+iNaturalist, the <a href="#inat">iNaturalist tools</a> can also download your own
+observations into the library and compare your iNaturalist list with your trees.</p>
 
 <h2 id="views">Finding your way around</h2>
-<p>The toolbar (and the <b>View</b> menu) has three mutually-exclusive modes:</p>
+<p>The toolbar (and the <b>View</b> menu) has four mutually-exclusive modes:</p>
 <ul>
-  <li><b>Reference Tree</b> &mdash; the default. The tab row underneath shows
+  <li><b>Reference Tree</b> &mdash; the tab row underneath shows
       <b>Photos of Tree Selection</b>, <b>Map</b>, <b>My Best Shots</b>,
-      <b>Unphotographed Taxa</b>, <b>Reference Photos</b> and <b>Download from
-      iNaturalist</b> &mdash; all of them scoped to whatever taxon or reference
-      tree you have selected on the left.</li>
+      <b>Unphotographed Taxa</b>, <b>Not in Any Tree</b> and <b>Reference Photos</b>
+      &mdash; all of them scoped to whatever taxon or reference tree you have
+      selected on the left.</li>
   <li><b>All Library Photos</b> &mdash; every photo in the catalogue, regardless of
-      any reference tree. This is where the <b>Show</b> status filter and the
-      right-click photo menu live.</li>
+      any reference tree. PhotoLife starts in this mode. This is where the
+      <b>Show</b> status filter in the toolbar applies.</li>
   <li><b>Review Unmatched</b> &mdash; the review queue (see below). Its count badge
       shows how many photos are waiting.</li>
+  <li><b>iNaturalist</b> &mdash; tools that work with an iNaturalist account (see
+      <a href="#inat">iNaturalist tools</a>). Also reachable from the
+      <b>iNaturalist Tools</b> menu.</li>
 </ul>
-<p>The <b>Reference Trees</b> panel on the left (search box, tree, coverage summary)
-stays visible no matter which mode you're in, so you can still search or select a
-taxon while reviewing or browsing the whole library.</p>
+<p>The <b>Reference Trees</b> panel on the left (tree picker, search box, tree,
+coverage summary) stays visible no matter which mode you're in, so you can still
+search or select a taxon while reviewing or browsing the whole library.</p>
 
 <h2 id="library">1. Add your photo folders</h2>
 <p><b>Library &rarr; Add Folder to Library&hellip;</b> and choose a folder. PhotoLife
@@ -70,13 +82,22 @@ walks it, records every image, and groups a RAW file and its same-name JPEG as o
 <i>capture</i>. It skips junk (<tt>Thumbs.db</tt>, sidecar files, folders like
 &ldquo;To Sort and Upload&rdquo;).</p>
 <p>It watches your folders afterwards and re-scans automatically when they change.
-<b>Library &rarr; Rescan Library</b> forces a full re-scan; unchanged files are never
-re-read. <b>Library &rarr; Remove Photos With Missing Files&hellip;</b> finds catalogued
-photos whose file has since vanished (moved or deleted outside PhotoLife) and lets you
-drop them from the catalogue.</p>
+<b>Library &rarr; Rescan Library</b> (F5) forces a full re-scan; unchanged files are
+never re-read, and <b>Stop Scan</b> cancels one in progress. A file you rename or move
+keeps its matches and thumbnail &mdash; PhotoLife recognises it by its contents.</p>
+<p><b>Library &rarr; Manage Library Folders&hellip;</b> lists the folders being watched,
+flags any that have gone missing, and lets you stop watching one (its catalogued photos
+are kept). <b>Library &rarr; Remove Photos With Missing Files&hellip;</b> finds
+catalogued photos whose file has since vanished (moved or deleted outside PhotoLife)
+and lets you drop them from the catalogue.</p>
 <p>Your folder names matter: a <i>Family / Genus / Species</i> tree with scientific
 names in the file names matches best, but PhotoLife copes with synonyms, misspellings,
 <tt>sp.</tt>, hybrids, aggregates, and common-name folders for fauna.</p>
+<p><b>Library &rarr; Import Lightroom Catalog&hellip;</b> reads the keywords you've
+tagged photos with in Adobe Lightroom Classic (a <tt>.lrcat</tt> file) and uses them as
+an extra matching hint alongside folder and file names &mdash; handy for photos whose
+file names don't name the species. It needs a reference tree to exist first. Your
+Lightroom catalog is only read, never changed.</p>
 
 <h2 id="trees">2. Build a reference tree</h2>
 <p><b>Reference Tree &rarr; New Reference Tree&hellip;</b> Give it a name, a root taxon
@@ -84,17 +105,35 @@ names in the file names matches best, but PhotoLife copes with synonyms, misspel
 leave blank for worldwide). PhotoLife looks up the place and taxon on iNaturalist and
 asks you to confirm the exact match for each before building &mdash; useful when a
 name is ambiguous. Once confirmed, it pulls the region&rsquo;s species list and fills
-in the intermediate ranks so the tree is connected from kingdom down to species.</p>
+in the intermediate ranks so the tree is connected from kingdom down to species. A
+very large tree pauses every few thousand species to ask whether to keep going.</p>
 <p>You can keep several trees and switch between them with the drop-down at the top
-of the <b>Reference Trees</b> panel on the left. <b>Reference Tree &rarr; Refresh
-Reference Tree</b> re-pulls the current one from iNaturalist; <b>Reference Tree
-&rarr; Delete Reference Tree&hellip;</b> removes one you no longer need (your photos
-and their matches are untouched).</p>
-<p><b>Reference Tree &rarr; Fetch Subspecies/Varieties&hellip;</b> checks the current tree&rsquo;s
-species (or, from the tree&rsquo;s right-click menu, just one branch) for iNaturalist
-subspecies, varieties and hybrids iNat&rsquo;s regular species list doesn&rsquo;t
-report on its own &mdash; it makes a few requests per species, so it can be slow for a
-large branch, but it's safe to quit and re-run later.</p>
+of the <b>Reference Trees</b> panel on the left. From the <b>Reference Tree</b>
+menu:</p>
+<ul>
+  <li><b>Refresh Reference Tree</b> re-pulls the current one from iNaturalist.</li>
+  <li><b>Add Taxon to Reference Tree&hellip;</b> adds a single taxon (with its
+      ancestors) that the region's list didn't include.</li>
+  <li><b>Fetch Subspecies/Varieties&hellip;</b> checks the tree&rsquo;s species for
+      iNaturalist subspecies, varieties and hybrids that iNat&rsquo;s regular species
+      list doesn&rsquo;t report on its own. It makes a few requests per species, so it
+      can be slow for a large tree, but it's safe to quit and re-run later.</li>
+  <li><b>Delete Reference Tree&hellip;</b> removes a tree you no longer need (your
+      photos and their matches are untouched).</li>
+</ul>
+<p>Right-click a taxon in the tree for more:</p>
+<ul>
+  <li><b>Fetch Subspecies/Varieties under &ldquo;&hellip;&rdquo;</b> &mdash; the
+      same, for just that branch.</li>
+  <li><b>Match Library Against &ldquo;&hellip;&rdquo;</b> &mdash; re-checks your
+      unresolved photos against just that group, preferring its taxa when a name is
+      ambiguous (e.g. a common name shared with another group).</li>
+  <li><b>Show Photos of This Taxon</b> and <b>Open on iNaturalist</b>.</li>
+  <li><b>Prune from Reference Tree&hellip;</b> &mdash; removes that taxon and
+      everything beneath it from this tree only (other trees, and your photos, are
+      untouched). Pruned taxa stay out when the tree is refreshed; the tree is then
+      shown as &ldquo;(customized)&rdquo;.</li>
+</ul>
 <p>The <b>Search taxa</b> box under the drop-down jumps the tree to a taxon as you
 type &mdash; matching its scientific or common name &mdash; and press <b>Enter</b> to
 step through the other matches. If the right pane is on <b>Photos of Tree Selection</b>
@@ -105,27 +144,81 @@ species, skipping family/genus rows).</p>
 
 <h2 id="checklist">3. Import a regional checklist</h2>
 <p><b>Reference Tree &rarr; Import Checklist&hellip;</b> and pick a CSV of
-<tt>&lt;name&gt;,&lt;conservation status&gt;</tt> rows (such as a state vascular-plant
+<tt>&lt;name&gt;,&lt;conservation status&gt;</tt> rows, optionally with whether each
+taxon is native or introduced (an <i>Origin</i> column, a third column holding values
+like <tt>*</tt>, <i>introduced</i> or <i>native</i>, or a <tt>*</tt> before introduced
+names, as VicFlora and the VBA use) (such as a state vascular-plant
 list). PhotoLife adds any species in the current tree&rsquo;s genera &mdash;
 including rarities with no iNaturalist observations &mdash; and records their threat
 status, which then shows in the coverage panel and the tree tooltips.</p>
+<p>A status belongs to the species, not to one tree: rows outside the current
+tree&rsquo;s genera aren't added to it, but if PhotoLife already knows the species
+(from any of your trees), its status is still recorded, so every tree containing it
+counts it. For a broad list such as all of a state's vascular plants, import it into
+your broadest matching tree (e.g. <i>Vascular Plants of Victoria</i>) so its rarities
+are added too.</p>
+<p>A checklist's statuses are recorded for the region of the tree you import it into,
+and each tree counts only statuses listed for its own region or a region containing
+it. A Victorian list therefore counts in <i>Vascular Plants of Victoria</i> and in a
+Grampians or Brisbane Ranges tree, but not in a South Australian or Australia-wide
+tree. PhotoLife asks iNaturalist which regions lie within which (in the background,
+once per region); until it knows, it compares the regions' map boundaries.</p>
+<p>Introduced species follow the same regional rule. Besides a checklist's origin
+column, PhotoLife asks iNaturalist, in the background, which of each tree's taxa are
+introduced in the tree's region.</p>
+
+<h3>Australian conservation and origin data</h3>
+<p>For trees in Australia, PhotoLife also fetches, in the background and about once a
+month:</p>
+<ul>
+  <li><b>Threatened status</b> from the <b>Atlas of Living Australia</b>: every state's
+      and territory's official conservation list, and the national <b>EPBC Act</b>
+      list. Each counts only in trees within its region &mdash; Victoria's list in
+      Victorian trees, the EPBC list in every Australian tree.</li>
+  <li><b>Native or introduced</b>, state by state, for plants from the <b>Australian
+      Plant Census</b> (a download of about 100&nbsp;MB, kept on disk). A plant
+      naturalised in a state counts as introduced there; one native there (even if
+      also naturalised in parts of it) counts as native.</li>
+</ul>
+<p>Only species already in your trees are matched, so after building a new tree
+PhotoLife re-matches automatically. <b>Reference Tree &rarr; Update Threatened &amp;
+Introduced Status (Australia)</b> forces a fresh download of both.</p>
+<p>When several records apply to a species, the most specific region wins (a
+state's listing over the EPBC list), then the more authoritative source: for
+threatened status, the ALA's lists over an imported checklist (a checklist still
+supplies categories the ALA doesn't have, such as Victoria's advisory
+&ldquo;Rare&rdquo;); for native/introduced, the Australian Plant Census, then a
+checklist, then iNaturalist. The APC has no nation-wide flag, so an Australia-wide
+tree's introduced counts come from iNaturalist.</p>
 
 <h2 id="match">4. Match your photos</h2>
-<p><b>Matching &rarr; Match Library.</b> For each capture PhotoLife parses the folder
-path and the file name, reconciles them against the cached taxonomy (including
-synonyms), scores the result, and either applies it automatically or puts it in the
-review queue. Re-running Match never disturbs a decision you made yourself.</p>
-<p>Switch to the <b>All Library Photos</b> view to see every photo regardless of
-reference tree. A coloured dot on each thumbnail shows its status:
+<p><b>Matching &rarr; Match Library.</b> PhotoLife first rescans the library, so
+files and folders you've just renamed or moved are matched under their new names (this
+normally takes a second or so, since unchanged files aren't re-read). Then, for each
+capture, it parses the folder path and the file name (plus any Lightroom keywords),
+reconciles them against the cached taxonomy (including synonyms), scores the result,
+and either applies it automatically or puts it in the review queue. If you stop that
+scan, the match is skipped too.</p>
+<p>Automatic matches simply follow a renamed file to its new name. A decision you made
+yourself is never changed without asking: if you rename a photo you've identified, and
+its new name points to a different taxon, Match Library asks rather than guessing. After the run, a
+<b>Renamed Photos</b> window lists each such photo with what you identified it as and
+what its name now says. Checked photos are re-associated with the taxon in their new
+name. Unchecked photos keep your identification and aren't asked about again unless
+renamed once more. <b>Decide Later</b> changes nothing. The first run after updating
+also lists older identifications whose file names clearly contradict them.</p>
+<p>In the <b>All Library Photos</b> view a coloured dot on each thumbnail shows its
+status:
 <span style="color:#2E7D32">&#9679;</span> automatic,
 <span style="color:#E69A00">&#9679;</span> needs review,
 <span style="color:#C62828">&#9679;</span> unmatched,
 <span style="color:#1565C0">&#9679;</span> confirmed by you.
-The <b>Show</b> box in the toolbar filters by status, and <b>Display&hellip;</b>
-lets you choose which fields (name, matched taxon, date, filename, file type) appear
-under each thumbnail. Right-click a photo (here or in any other grid) for a context
-menu &mdash; open it in your file manager, star or unstar it as a best shot, or
-remove it from the catalogue.</p>
+The <b>Show</b> box in the toolbar filters by status, and <b>View &rarr;
+Display&hellip;</b> chooses which fields (name, matched taxon, date, filename, locality,
+file type) appear under each thumbnail in the photo grids.</p>
+<p>Right-click a photo (here or in any other grid) to open it in your file manager,
+star or unstar it as a best shot, remove it from the catalogue, or <b>Attempt to fetch
+coordinates from iNat</b> (see <a href="#writes">below</a>).</p>
 
 <h2 id="review">5. Review the uncertain matches</h2>
 <p>Switch to the <b>Review Unmatched</b> view. The list on the left shows everything
@@ -162,18 +255,39 @@ mouse.</p>
 
 <h2 id="browse">Browsing &amp; coverage</h2>
 <p>The <b>Photos of Tree Selection</b> tab follows your selection in the tree: pick a
-taxon and you see its cover photo, its details, and a grid of just its photos (with a
-<b>Reassign to Taxon&hellip;</b> button if you need to move a batch of photos to a
-different species). The <b>Coverage</b> column in the tree shows a <b>&#10004;</b> for
-photographed species, a <b>&middot;</b> for missing ones, and a &ldquo;have /
-total&rdquo; count on genera and families.</p>
-<p>The panel under the tree summarises the whole project: species photographed,
-threatened-species coverage broken out by status, and the most recent capture. The
-<b>Unphotographed Taxa</b> tab is a plain list of the gaps, with its own filter box
-&mdash; activate an entry to jump to it in the tree.</p>
-<p>The <b>Only taxa I&rsquo;ve photographed</b> checkbox above the tree collapses it
-to just the branches you have a photo somewhere in &mdash; a quick &ldquo;what have I
-got&rdquo; view. Untick it to see the whole reference tree again.</p>
+taxon and you see its cover photo, its details, and a grid of just its photos. The
+<b>Reassign to Taxon&hellip;</b> button moves the selected photos (or, with none
+selected, every photo shown) to a different taxon. The <b>Coverage</b> column in the
+tree shows a <b>&#10004;</b> for photographed species, a <b>&middot;</b> for missing
+ones, and a &ldquo;have / total&rdquo; count on genera and families.</p>
+<p>The panel under the tree summarises the whole tree: species photographed,
+threatened-species coverage broken out by status, introduced species photographed
+(on the right, with the share of the tree's species they make up), the most recent
+capture, and how many reference photos are cached. Hover a taxon in the tree to see
+its status and whether it's introduced. Click the threatened summary, or any one status
+tier, to filter both the tree and the photos to just those taxa; <b>Clear filter</b>
+undoes it.</p>
+<p>The <b>Unphotographed Taxa</b> tab is a plain list of the gaps, with its own filter
+box &mdash; activate an entry to jump to it in the tree, or right-click it to view its
+reference photo. The <b>Only taxa I&rsquo;ve photographed</b> checkbox above the tree
+collapses it to just the branches you have a photo somewhere in &mdash; a quick
+&ldquo;what have I got&rdquo; view. Untick it to see the whole reference tree again.</p>
+<p>The coverage box beside it filters to <b>Fully covered</b> taxa (Coverage
+<b>X&nbsp;/&nbsp;X</b>, or &#10004; for a species) or <b>Not fully covered</b> ones,
+among the ranks you've chosen to show with <b>Ranks&hellip;</b>. For example, show only
+genera and pick <b>Not fully covered</b> to list the genera you're still missing
+species from. Greyed rows aren't a match themselves; they're only there as the path
+to one (such as the incomplete family a complete genus belongs to). It combines with
+<b>Only taxa I&rsquo;ve photographed</b>: together with <b>Not fully covered</b> they
+show taxa you've photographed some, but not all, of.</p>
+
+<h2 id="untreed">Photos not in any tree</h2>
+<p>The <b>Not in Any Tree</b> tab lists taxa your photos are matched to that are
+missing from your trees &mdash; for example a subspecies a tree doesn't list, or a
+species outside every tree's scope. Its <b>Show</b> box switches between taxa not in
+any tree, taxa not in the selected tree, and photos identified only to genus or
+higher. Select taxa to see their photos; right-click one (or use <b>Add to Selected
+Tree</b>) to add it to a tree.</p>
 
 <h2 id="refphotos">Reference photos &amp; best shots</h2>
 <p>The <b>Reference Photos</b> tab shows one iNaturalist photo per species in the
@@ -185,20 +299,92 @@ of its species &mdash; only available once the photo is identified. Starred phot
 a gold star badge on their thumbnail and show up together in the <b>My Best Shots</b>
 tab. The full-size viewer also has an Add/Remove Best Shot button.</p>
 
-<h2 id="map">The map</h2>
+<h2 id="map">The map &amp; photo localities</h2>
 <p>The <b>Map</b> tab plots every geotagged photo in the current tree selection as a
 pin on an OpenStreetMap view, scoped exactly like <b>Photos of Tree Selection</b>.
 Drag to pan, scroll to zoom, and use <b>Fit to Photos</b> to frame everything in view
-&mdash; it does this automatically whenever you change the tree selection. Photos
-taken close together cluster into one pin showing a count; click a single-photo pin to
-open it, or a cluster to pick which of its photos to open. Only photos whose file
-carried GPS data appear here &mdash; look for the <b>GEO</b> badge on a thumbnail
-elsewhere in the app, or hover it for the exact coordinates.</p>
+&mdash; it does this automatically whenever you change the tree selection.
+<b>Restrict to Active Reference Tree Locality</b> hides photos taken outside the
+tree's region. Photos taken close together cluster into one pin showing a count; click
+a single-photo pin to open it, or a cluster to pick which of its photos to open. Only
+photos whose file carried GPS data appear here &mdash; look for the <b>GEO</b> badge
+on a thumbnail elsewhere in the app, or hover it for the exact coordinates.</p>
+<p><b>Library &rarr; Fetch Photo Localities</b> looks up a place name (suburb, park,
+region) for each geotagged photo from OpenStreetMap. It goes slowly, to respect
+OpenStreetMap's usage limits, and remembers results, so it only needs doing once per
+photo. Turn on <b>Locality</b> under <b>View &rarr; Display&hellip;</b> to show it
+under thumbnails.</p>
+
+<h2 id="export">Exporting a photo collection</h2>
+<p><b>Reference Tree &rarr; Export Photo Collection&hellip;</b> copies the current
+tree's matched photos into a folder structure that mirrors the tree &mdash; a tidy
+copy to share or back up. Your originals stay where they are. You can include
+automatic matches or just the ones you've confirmed, create folders for taxa you
+haven't photographed yet, match exactly what the tree is currently showing, and put
+common names in folder names. A preview shows which photos will be copied.</p>
+<p>Choose <b>Update an existing collection</b> to add new photos to a collection you
+exported before; PhotoLife checks it's the right folder, skips photos already there,
+and lists any files in the collection it didn't put there.</p>
+
+<h2 id="inat">iNaturalist tools</h2>
+<p>The <b>iNaturalist</b> view (toolbar, <b>View</b> menu or <b>iNaturalist Tools</b>
+menu) holds the features that work with an iNaturalist account rather than a
+particular reference tree. The account bar at the top is shared by all of them:
+your iNaturalist username, and optionally a personal API token from
+inaturalist.org/users/api_token (it expires after about 24 hours). Without a token,
+geoprivacy-obscured species come back with fuzzed coordinates, even for your own
+observations. <b>iNaturalist Tools &rarr; iNaturalist Account</b> jumps straight to
+it.</p>
+<p><b>Download My Observations</b> finds photos from your own observations that
+aren't in your library yet.</p>
+<ul>
+  <li>Choose a <b>Tree</b> (it follows the tree selected on the left until you pick one
+      yourself), then search either <b>Species in this tree</b> or <b>All my
+      observations</b>. <b>Restrict to this tree's locality</b> limits either search to
+      the tree's region.</li>
+  <li><b>Limit to taxon</b> narrows either search to one group (a family, genus,
+      order&hellip;) and everything beneath it: pick one with <b>Choose Taxon&hellip;</b>,
+      or use the taxon selected in the Reference Trees panel with <b>Use Tree
+      Selection</b>. <b>All Taxa</b> removes the limit.</li>
+  <li>Results are badged <b>NEW</b> (no photos of that taxon in your library) or
+      <b>NO TREE</b> (the taxon isn't in any reference tree); <b>Show</b> lists just
+      those. Faded photos look like ones you already have; <b>Select All</b> skips
+      them.</li>
+  <li><b>Download Selected&hellip;</b> saves full-resolution originals, with EXIF
+      author, GPS, date and taxon, into a new timestamped folder inside the folder you
+      choose. It then adds that folder to your library and matches just those photos.
+      The rest of PhotoLife is locked until it's done; <b>Cancel</b> stops after the
+      current photo and still adds what was downloaded.</li>
+  <li>Photos come from iNaturalist's storage on Amazon S3, which occasionally drops a
+      connection even on a good network, so each photo is retried a few times before
+      being skipped. Any that still fail are listed at the end and left selected, so
+      <b>Download Selected&hellip;</b> again retries just those.</li>
+</ul>
+<p><b>Compare Species</b> sets an iNaturalist observer's taxa against your reference
+trees and photo library &mdash; for example, to find species you've recorded on
+iNaturalist that are missing from a tree.</p>
+<ul>
+  <li>By default the <b>Observer</b> is you, but any username works.</li>
+  <li>Choose a <b>Rank</b> (species, genus, family&hellip;); subspecies count as their
+      species, species as their genus, and so on. Choose which <b>Observations</b>
+      count (all, verifiable, or research grade only), what to <b>Compare with</b> (one
+      tree or all of them) and, optionally, a <b>Limit to taxon</b> group.</li>
+  <li>After you press <b>Compare</b>, the counts across the top (<b>On iNat, not in
+      tree</b>, <b>On iNat, not in library</b>, <b>In tree, not on iNat</b>&hellip;)
+      filter the table below when clicked. <b>Export CSV&hellip;</b> saves the rows
+      shown.</li>
+  <li>Right-click a row to see those observations on iNaturalist, show the taxon in its
+      tree, add it to the tree, or jump to <b>Download My Observations</b> for just that
+      taxon.</li>
+  <li>Taxa observed only above the chosen rank (e.g. a genus-only record when comparing
+      species) can't be placed and are reported separately.</li>
+</ul>
 
 <h2 id="viewer">The image viewer</h2>
-<p>Double-click any thumbnail to open the full-size viewer. Left/Right (or Page
-Up/Down) move through the current set, Home/End jump to the ends, and Esc closes it.
-If the photo has GPS data, a <b>View on Map</b> button opens its location in your
+<p>Double-click any thumbnail to open the full-size viewer. <b>Previous</b>/<b>Next</b>
+(or the Left/Right and Page Up/Down keys) move through the current set, Home/End jump
+to the ends, and Esc closes it. The star button adds or removes the photo as a best
+shot. If the photo has GPS data, <b>View on Map</b> opens its location in your
 browser.</p>
 
 <h2 id="names">Learned names</h2>
@@ -206,11 +392,40 @@ browser.</p>
 up from your reviewing. Forgetting one puts the affected photos back in the queue on
 the next Match Library run.</p>
 
+<h2 id="writes">What PhotoLife writes to your photos</h2>
+<p>Everyday use &mdash; scanning, matching, reviewing, browsing &mdash; only ever reads
+your photos. PhotoLife writes files only when you ask it to:</p>
+<ul>
+  <li><b>Download My Observations</b> creates <i>new</i> photo files in the folder you
+      choose.</li>
+  <li><b>Export Photo Collection</b> writes <i>copies</i> into the folder you
+      choose.</li>
+  <li><b>Attempt to fetch coordinates from iNat</b> (right-click a single photo) finds
+      your iNaturalist observation of that species on the day the photo was taken,
+      shows you its location to confirm, and then writes those coordinates into the
+      photo file's GPS data. It's available for an identified, dated JPEG that has no
+      GPS data yet, and needs your username in the iNaturalist view.</li>
+</ul>
+
+<h2 id="settings">Catalogue, appearance &amp; updates</h2>
+<ul>
+  <li><b>File &rarr; Catalogue Settings&hellip;</b> chooses where the catalogue lives:
+      a <b>Local (SQLite)</b> file on this computer (the default), or a <b>Shared
+      (Postgres)</b> database several people can work on together, each from their own
+      copy of PhotoLife. With a shared catalogue, a coloured indicator at the right of
+      the menu bar shows whether you're connected. If two people change the same photo
+      at the same moment, the last change wins.</li>
+  <li><b>View &rarr; Dark Mode</b> switches between the light and dark themes.</li>
+  <li><b>Help &rarr; Check for Updates&hellip;</b> looks for a newer release, and
+      <b>Help &rarr; Storage Usage&hellip;</b> shows how much disk space the catalogue
+      and caches are using.</li>
+</ul>
+
 <h2 id="files">Where PhotoLife keeps things</h2>
-<p>The catalogue database, thumbnail cache and map-tile cache live in your user data
-folder (<tt>~/.local/share/PhotoLife</tt> on Linux, <tt>%LOCALAPPDATA%\PhotoLife</tt>
-on Windows). Your original photos are never touched. Deleting that folder resets
-PhotoLife without affecting a single photo.</p>
+<p>The catalogue database, thumbnail cache, reference-photo cache and map-tile cache
+live in your user data folder (<tt>~/.local/share/PhotoLife</tt> on Linux,
+<tt>%LOCALAPPDATA%\PhotoLife</tt> on Windows). Deleting that folder resets PhotoLife
+without affecting a single photo in your library.</p>
 
 <h2 id="raw">RAW files</h2>
 <p>When a shot has both a RAW and a JPEG, PhotoLife shows the JPEG. For a RAW with no
@@ -249,11 +464,15 @@ It only re-reads location data; nothing else about your catalogue changes.</p>
 PhotoLife --scan &lt;folder&gt;
 PhotoLife --build-project "&lt;name&gt;" --taxon &lt;taxon&gt; --rank &lt;rank&gt; --place "&lt;region&gt;"
 PhotoLife --import-checklist &lt;file.csv&gt; --into "&lt;project&gt;" --source "&lt;label&gt;"
+PhotoLife --import-lightroom &lt;catalog.lrcat&gt; --into "&lt;project&gt;"
 PhotoLife --match
 </pre>
+<p><tt>--match</tt> also prints any photos you identified that have since been renamed
+to a different taxon; settle those in the app with the next Match Library.</p>
 
-<p style="color:gray"><small>PhotoLife &mdash; taxonomy and species lists from the
-iNaturalist API; map tiles from OpenStreetMap; read-only catalogue.</small></p>
+<p style="color:gray"><small>PhotoLife &mdash; taxonomy, species lists and
+observations from the iNaturalist API; map tiles and place names from
+OpenStreetMap.</small></p>
 
 </body>
 </html>
