@@ -4,6 +4,8 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+#include <optional>
+
 namespace pl::checklist {
 namespace {
 
@@ -41,13 +43,62 @@ QStringList splitCsvLine(const QString &line)
     return fields;
 }
 
-bool looksLikeHeader(const QString &name, const QString &status)
+// "introduced" / "native" for a recognised origin value, else "".
+QString originFromValue(const QString &raw)
 {
-    const QString n = name.toLower();
-    const QString s = status.toLower();
-    return (n == QLatin1String("name") || n == QLatin1String("scientific name")
-            || n == QLatin1String("taxon") || n == QLatin1String("species"))
-           && (s.isEmpty() || s.contains(QLatin1String("status")));
+    const QString v = raw.trimmed().toLower();
+    if (v.isEmpty())
+        return {};
+    if (v == QLatin1String("*") || v.startsWith(QLatin1String("introduc"))
+        || v.startsWith(QLatin1String("exotic")) || v.startsWith(QLatin1String("naturali"))
+        || v.startsWith(QLatin1String("alien")) || v.startsWith(QLatin1String("non-native"))
+        || v == QLatin1String("weed") || v == QLatin1String("i"))
+        return QStringLiteral("introduced");
+    if (v.startsWith(QLatin1String("native")) || v.startsWith(QLatin1String("indigenous"))
+        || v.startsWith(QLatin1String("endemic")) || v == QLatin1String("n"))
+        return QStringLiteral("native");
+    return {};
+}
+
+bool isNameHeader(const QString &h)
+{
+    return h == QLatin1String("name") || h == QLatin1String("scientific name")
+           || h == QLatin1String("scientific_name") || h == QLatin1String("taxon")
+           || h == QLatin1String("taxon name") || h == QLatin1String("species");
+}
+
+bool isOriginHeader(const QString &h)
+{
+    return h.contains(QLatin1String("origin")) || h.contains(QLatin1String("nativ"))
+           || h.contains(QLatin1String("introduc")) || h.contains(QLatin1String("establishment"));
+}
+
+// Column positions, from a header row or the plain "<name>,<status>" layout.
+struct Columns
+{
+    int name = 0;
+    int status = 1;
+    int origin = -1;          // -1: none named -- try the third column's values
+    bool fromHeader = false;
+};
+
+std::optional<Columns> headerColumns(const QStringList &fields)
+{
+    Columns c;
+    c.name = c.status = -1;
+    for (int i = 0; i < fields.size(); ++i) {
+        const QString h = fields.at(i).trimmed().toLower();
+        if (c.name < 0 && isNameHeader(h))
+            c.name = i;
+        else if (c.status < 0 && h.contains(QLatin1String("status")))
+            c.status = i;
+        else if (c.origin < 0 && isOriginHeader(h))
+            c.origin = i;
+    }
+    if (c.name < 0)
+        return std::nullopt;
+    c.fromHeader = true;
+    return c;
 }
 
 } // namespace
@@ -60,36 +111,36 @@ QList<ChecklistEntry> parseChecklistCsv(const QByteArray &bytes)
 
     QList<ChecklistEntry> entries;
     bool firstRow = true;
+    Columns cols;
 
     const QStringList lines = text.split(QRegularExpression(QStringLiteral("\r\n|\n|\r")));
-    for (const QString &rawLine : lines) {
-        const QString line = rawLine;
+    for (const QString &line : lines) {
         if (line.trimmed().isEmpty())
             continue;
 
-        QString name;
-        QString status;
-        if (line.contains(QLatin1Char('"'))) {
-            const QStringList fields = splitCsvLine(line);
-            name = fields.value(0).trimmed();
-            status = fields.value(1).trimmed();
-        } else {
-            const int comma = line.indexOf(QLatin1Char(','));
-            if (comma < 0) {
-                name = line.trimmed();
-            } else {
-                name = line.left(comma).trimmed();
-                // second field runs to the next comma (extra columns ignored)
-                const int next = line.indexOf(QLatin1Char(','), comma + 1);
-                status = (next < 0 ? line.mid(comma + 1) : line.mid(comma + 1, next - comma - 1))
-                             .trimmed();
-            }
-        }
+        const QStringList fields = line.contains(QLatin1Char('"'))
+                                       ? splitCsvLine(line)
+                                       : line.split(QLatin1Char(','));
 
         if (firstRow) {
             firstRow = false;
-            if (looksLikeHeader(name, status))
+            if (const auto header = headerColumns(fields)) {
+                cols = *header;
                 continue;
+            }
+        }
+
+        QString name = fields.value(cols.name).trimmed();
+        const QString status = cols.status >= 0 ? fields.value(cols.status).trimmed() : QString();
+        QString origin;
+        if (cols.origin >= 0)
+            origin = originFromValue(fields.value(cols.origin));
+        else if (!cols.fromHeader)
+            origin = originFromValue(fields.value(2));
+        if (name.startsWith(QLatin1Char('*'))) {
+            name = name.mid(1).trimmed();
+            if (origin.isEmpty())
+                origin = QStringLiteral("introduced");
         }
 
         if (name.isEmpty())
@@ -99,6 +150,7 @@ QList<ChecklistEntry> parseChecklistCsv(const QByteArray &bytes)
         e.name = name;
         e.status = status;
         e.statusFolded = status.toLower();
+        e.origin = origin;
         entries.append(e);
     }
 

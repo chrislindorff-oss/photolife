@@ -100,6 +100,10 @@ pl::taxonomy::Place parsePlace(const QJsonObject &obj)
     p.displayName = obj.value(QStringLiteral("display_name")).toString();
     if (const QJsonValue al = obj.value(QStringLiteral("admin_level")); al.isDouble())
         p.adminLevel = int(al.toDouble());
+    for (const QJsonValue &a : obj.value(QStringLiteral("ancestor_place_ids")).toArray()) {
+        if (const auto id = optId(a))
+            p.ancestorIds.append(*id);
+    }
 
     const QJsonObject box = obj.value(QStringLiteral("bounding_box_geojson")).toObject();
     const QJsonArray rings = box.value(QStringLiteral("coordinates")).toArray();

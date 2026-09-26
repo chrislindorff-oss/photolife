@@ -3,6 +3,7 @@
 #include "ui/Theme.h"
 
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLocale>
 #include <QProgressBar>
@@ -49,13 +50,36 @@ CoveragePanel::CoveragePanel(QWidget *parent)
     m_tiers->setContentsMargins(0, 0, 0, 0);
     m_tiers->setLabelAlignment(Qt::AlignLeft);
 
+    // Introduced species sit on the right, level with the threatened block.
+    m_introduced = new QLabel(this);
+    m_introduced->setAlignment(Qt::AlignRight | Qt::AlignTop);
+    m_introducedDetail = new QLabel(this);
+    m_introducedDetail->setAlignment(Qt::AlignRight | Qt::AlignTop);
+    m_introducedDetail->setEnabled(false);
+    const QString introducedTip =
+        tr("Species introduced in this tree's region (or a region containing it), from an "
+           "imported checklist's origin column or, failing that, iNaturalist.");
+    m_introduced->setToolTip(introducedTip);
+    m_introducedDetail->setToolTip(introducedTip);
+
+    auto *threatenedColumn = new QVBoxLayout;
+    threatenedColumn->addWidget(m_threatened);
+    threatenedColumn->addWidget(tierBox);
+    threatenedColumn->addWidget(m_clearFilterLink);
+    threatenedColumn->addStretch(1);
+    auto *introducedColumn = new QVBoxLayout;
+    introducedColumn->addWidget(m_introduced);
+    introducedColumn->addWidget(m_introducedDetail);
+    introducedColumn->addStretch(1);
+    auto *statusRow = new QHBoxLayout;
+    statusRow->addLayout(threatenedColumn, 1);
+    statusRow->addLayout(introducedColumn);
+
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(8, 8, 8, 8);
     layout->addWidget(m_headline);
     layout->addWidget(m_bar);
-    layout->addWidget(m_threatened);
-    layout->addWidget(tierBox);
-    layout->addWidget(m_clearFilterLink);
+    layout->addLayout(statusRow);
     layout->addWidget(m_newest);
     layout->addWidget(m_cacheUsage);
     layout->addStretch(1);
@@ -68,6 +92,8 @@ void CoveragePanel::clear()
     m_headline->setText(tr("No reference tree selected."));
     m_bar->setValue(0);
     m_threatened->clear();
+    m_introduced->clear();
+    m_introducedDetail->clear();
     m_newest->clear();
     m_cacheUsage->clear();
     while (m_tiers->rowCount() > 0)
@@ -90,6 +116,8 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
         m_headline->setText(tr("No species in this tree yet."));
         m_bar->setValue(0);
         m_threatened->clear();
+        m_introduced->clear();
+        m_introducedDetail->clear();
         m_newest->clear();
         m_cacheUsage->clear();
         m_threatenedWithPhotos = 0;
@@ -123,6 +151,18 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
         }
     } else {
         m_threatened->setText(tr("No threatened species listed."));
+    }
+
+    if (coverage.introducedTotal > 0) {
+        m_introduced->setText(tr("%1 of %2 introduced species photographed")
+                                  .arg(coverage.introducedWithPhotos)
+                                  .arg(coverage.introducedTotal));
+        m_introducedDetail->setText(
+            tr("%1% of this tree's species")
+                .arg(int(std::lround(100.0 * coverage.introducedTotal / coverage.speciesTotal))));
+    } else {
+        m_introduced->setText(tr("No introduced species listed."));
+        m_introducedDetail->clear();
     }
 
     m_newest->setText(coverage.newestCapture.isEmpty()

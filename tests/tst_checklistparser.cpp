@@ -17,6 +17,9 @@ private slots:
     void handlesQuotedFieldsWithCommas();
     void ignoresExtraColumns();
     void realVbaSample();
+    void readsOriginFromHeaderColumn();
+    void readsOriginFromThirdColumnValues();
+    void starBeforeNameMeansIntroduced();
 };
 
 void TestChecklistParser::parsesNameStatusPairs()
@@ -89,6 +92,47 @@ void TestChecklistParser::realVbaSample()
     QCOMPARE(e.size(), 5);
     QCOMPARE(e.at(4).name, QStringLiteral("Abutilon fraseri subsp. diplotrichum"));
     QCOMPARE(e.at(4).status, QStringLiteral("Endangered"));
+}
+
+void TestChecklistParser::readsOriginFromHeaderColumn()
+{
+    // Columns in any order once a header names them.
+    const auto entries = parseChecklistCsv(QByteArrayLiteral(
+        "Origin,Scientific Name,Conservation Status\n"
+        "*,Abutilon grandifolium,\n"
+        "Native,Abutilon oxycarpum,Endangered\n"
+        ",Abutilon spp.,\n"));
+    QCOMPARE(entries.size(), 3);
+    QCOMPARE(entries.at(0).name, QStringLiteral("Abutilon grandifolium"));
+    QCOMPARE(entries.at(0).origin, QStringLiteral("introduced"));
+    QCOMPARE(entries.at(1).status, QStringLiteral("Endangered"));
+    QCOMPARE(entries.at(1).origin, QStringLiteral("native"));
+    QVERIFY(entries.at(2).origin.isEmpty());
+}
+
+void TestChecklistParser::readsOriginFromThirdColumnValues()
+{
+    const auto entries = parseChecklistCsv(QByteArrayLiteral(
+        "Arctotheca calendula,,Naturalised\n"
+        "Glossodia major,,native\n"
+        "Diuris pardina,Rare,some note\n"));
+    QCOMPARE(entries.at(0).origin, QStringLiteral("introduced"));
+    QCOMPARE(entries.at(1).origin, QStringLiteral("native"));
+    QVERIFY(entries.at(2).origin.isEmpty());   // not an origin value
+    QCOMPARE(entries.at(2).status, QStringLiteral("Rare"));
+}
+
+void TestChecklistParser::starBeforeNameMeansIntroduced()
+{
+    const auto entries = parseChecklistCsv(QByteArrayLiteral(
+        "*Abutilon grandifolium,\n"
+        "* Acacia baileyana,\n"
+        "Acacia acinacea,\n"));
+    QCOMPARE(entries.at(0).name, QStringLiteral("Abutilon grandifolium"));
+    QCOMPARE(entries.at(0).origin, QStringLiteral("introduced"));
+    QCOMPARE(entries.at(1).name, QStringLiteral("Acacia baileyana"));
+    QCOMPARE(entries.at(1).origin, QStringLiteral("introduced"));
+    QVERIFY(entries.at(2).origin.isEmpty());
 }
 
 QTEST_APPLESS_MAIN(TestChecklistParser)

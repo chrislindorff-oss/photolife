@@ -79,6 +79,9 @@ public:
     thumb::ThumbnailCache &thumbnails();
     taxonomy::TaxonomyStore &taxonomyStore();
     net::INatClient &inat();
+    // The rate-limited, caching HTTP client iNatClient uses -- for other
+    // JSON APIs (e.g. the Atlas of Living Australia).
+    net::HttpClient &http();
     net::GeocodeClient &geocoder();
     net::PhotoCache &photoCache();
     net::TileCache &tileCache();

@@ -50,6 +50,9 @@ struct ScanSummary;
 }
 namespace taxonomy {
 class ProjectBuilder;
+class OriginFetcher;
+class AlaStatusSync;
+class ApcOriginSync;
 class InfraspecificFiller;
 class ReferencePhotoFetcher;
 }
@@ -151,6 +154,13 @@ private:
     void switchToTreeTab(QWidget *page);
     void setBestShotForSelection(QListView *grid, bool nominate);
     void reloadProjectList();
+    // Fetches iNaturalist place ancestry for tree regions that lack it.
+    void fetchMissingPlaceAncestry();
+    // Threatened status (ALA) and plant origins (APC) for Australian trees:
+    // when due (monthly), when `force`d from the menu, or -- `rematchOnly`,
+    // after a tree gains taxa -- re-matched against what's already fetched.
+    void syncAustralianSources(bool force, bool rematchOnly);
+    bool hasAustralianTree() const;
     void newReferenceTree();
     void refreshReferenceTree();
     void addTaxonToReferenceTree();
@@ -308,6 +318,10 @@ private:
     taxonomy::ProjectBuilder *m_builder = nullptr;
     bool m_builderIsNewTree = false;   // distinguishes New from Refresh in m_builder::finished
     taxonomy::InfraspecificFiller *m_infraFiller = nullptr;
+    taxonomy::OriginFetcher *m_originFetcher = nullptr;
+    taxonomy::AlaStatusSync *m_alaSync = nullptr;
+    taxonomy::ApcOriginSync *m_apcSync = nullptr;
+    bool m_reportSourceSync = false;   // the user asked: report the outcome
     checklist::ChecklistImporter *m_checklistImporter = nullptr;
     geo::LocalityFetcher *m_localityFetcher = nullptr;
     QAction *m_fetchLocalitiesAction = nullptr;

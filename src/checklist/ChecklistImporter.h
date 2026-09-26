@@ -24,6 +24,13 @@ namespace pl::checklist {
 // the checklist's spelling as a synonym so the matcher recognises it. Fills any
 // missing ancestor taxa at the end so the tree stays connected.
 //
+// A status (or origin: native/introduced) belongs to the taxon, not to one
+// tree, so a row skipped for being outside the project's genera still has it
+// recorded when its taxon
+// is already in the local cache (e.g. from another tree) -- the stats of every
+// tree holding that taxon then include it. Such rows cost no network call and
+// are not added to the project.
+//
 // Drive it from the thread that owns the INatClient / store connection.
 class ChecklistImporter : public QObject
 {
@@ -38,6 +45,10 @@ public:
         QList<ChecklistEntry> entries;
         bool onlyKnownGenera = true;        // skip rows whose genus isn't in the project
     };
+
+    // Rows of the last run skipped as outside the project's genera whose
+    // status and/or origin was still recorded (see the class comment).
+    int statusesOutsideProject() const { return m_statusesOutsideProject; }
 
     ChecklistImporter(pl::net::INatClient &inat, pl::taxonomy::TaxonomyStore &store,
                       QObject *parent = nullptr);
@@ -57,6 +68,8 @@ private:
     void fail(const QString &error);
     void succeed();
     bool stop();
+    // The row's conservation status and origin, whichever it has.
+    void recordFacts(qint64 taxonInatId, const ChecklistEntry &entry);
 
     pl::net::INatClient &m_inat;
     pl::taxonomy::TaxonomyStore &m_store;
@@ -69,6 +82,7 @@ private:
     int m_index = 0;
     int m_imported = 0;
     int m_skipped = 0;
+    int m_statusesOutsideProject = 0;
     int m_unresolved = 0;
 
     QSet<qint64> m_known;               // taxa already in the store/project this run

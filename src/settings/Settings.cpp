@@ -169,6 +169,16 @@ QString Settings::inatApiToken() const
     return m_settings.value(QLatin1String(kInatApiToken)).toString();
 }
 
+QDateTime Settings::sourceSyncedAt(const QString &source) const
+{
+    return m_settings.value(QStringLiteral("sources/%1/syncedAt").arg(source)).toDateTime();
+}
+
+void Settings::setSourceSyncedAt(const QString &source, const QDateTime &when)
+{
+    m_settings.setValue(QStringLiteral("sources/%1/syncedAt").arg(source), when);
+}
+
 void Settings::setInatApiToken(const QString &token)
 {
     m_settings.setValue(QLatin1String(kInatApiToken), token);

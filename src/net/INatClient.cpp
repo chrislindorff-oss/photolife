@@ -59,6 +59,24 @@ void INatClient::resolvePlaces(const QString &query,
     });
 }
 
+void INatClient::fetchPlaces(const QList<qint64> &inatIds,
+                             std::function<void(Outcome<QList<pl::taxonomy::Place>>)> done)
+{
+    QStringList ids;
+    for (qint64 id : inatIds)
+        ids << QString::number(id);
+    const QUrl url(m_baseUrl + QStringLiteral("/places/") + ids.join(QLatin1Char(',')));
+    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+        Outcome<QList<pl::taxonomy::Place>> out;
+        const QJsonArray results = resultsArray(resp, &out.error);
+        if (out.ok()) {
+            for (const QJsonValue &v : results)
+                out.value.append(inat::parsePlace(v.toObject()));
+        }
+        done(out);
+    });
+}
+
 void INatClient::searchTaxa(const QString &query, const QString &rank,
                             std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done)
 {
@@ -164,6 +182,20 @@ void INatClient::userSpeciesCounts(const QString &userLogin, qint64 taxonId, qin
         q.addQueryItem(QStringLiteral("verifiable"), QStringLiteral("true"));
     else if (quality == ObservationQuality::Research)
         q.addQueryItem(QStringLiteral("quality_grade"), QStringLiteral("research"));
+    q.addQueryItem(QStringLiteral("page"), QString::number(page));
+    q.addQueryItem(QStringLiteral("per_page"), QString::number(perPage));
+    url.setQuery(q);
+    getSpeciesCountsPage(url, std::move(done));
+}
+
+void INatClient::introducedSpeciesCounts(qint64 taxonId, qint64 placeId, int page, int perPage,
+                                         std::function<void(Outcome<SpeciesCountsPage>)> done)
+{
+    QUrl url(m_baseUrl + QStringLiteral("/observations/species_counts"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("taxon_id"), QString::number(taxonId));
+    q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
+    q.addQueryItem(QStringLiteral("introduced"), QStringLiteral("true"));
     q.addQueryItem(QStringLiteral("page"), QString::number(page));
     q.addQueryItem(QStringLiteral("per_page"), QString::number(perPage));
     url.setQuery(q);

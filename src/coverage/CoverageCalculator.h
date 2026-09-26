@@ -20,6 +20,9 @@ struct TaxonCoverage
     int speciesWithPhotos = 0;    // ...that have a photo somewhere in their own subtree
     int threatenedTotal = 0;      // species with a non-empty status
     int threatenedWithPhotos = 0;
+    int introducedTotal = 0;      // species introduced in the tree's region
+    int introducedWithPhotos = 0;
+    bool introduced = false;      // this taxon is introduced in the tree's region
     int captureCount = 0;         // matched captures on this taxon or a descendant
     QString newestCapture;        // ISO date, max over the subtree
 
@@ -40,6 +43,8 @@ struct ProjectCoverage
     int speciesWithPhotos = 0;
     int threatenedTotal = 0;
     int threatenedWithPhotos = 0;
+    int introducedTotal = 0;
+    int introducedWithPhotos = 0;
     int captureCount = 0;
     QString newestCapture;
 
@@ -56,8 +61,10 @@ struct ProjectCoverage
     }
 };
 
-// Joins the project's cached tree, its conservation statuses, and the
-// auto/confirmed capture_match rows, and rolls counts up every rank.
+// Joins the project's cached tree, its conservation statuses and origins
+// (native/introduced), and the auto/confirmed capture_match rows, and rolls
+// counts up every rank. Statuses and origins count only when recorded for the
+// tree's region or a region containing it.
 // Read-only; give it an open connection name.
 ProjectCoverage computeCoverage(const QString &connectionName, int projectId);
 

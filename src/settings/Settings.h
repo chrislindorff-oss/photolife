@@ -3,6 +3,7 @@
 #include "db/CatalogueDescriptor.h"
 
 #include <QSettings>
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
 
@@ -69,6 +70,11 @@ public:
     // not a permanent login.
     QString inatApiToken() const;
     void setInatApiToken(const QString &token);
+
+    // When an external data source (e.g. "ala", "apc") was last synced;
+    // invalid if never.
+    QDateTime sourceSyncedAt(const QString &source) const;
+    void setSourceSyncedAt(const QString &source, const QDateTime &when);
 
     // Last folder chosen as the destination for "Export Photo Collection…".
     // Empty until the user has run it once.

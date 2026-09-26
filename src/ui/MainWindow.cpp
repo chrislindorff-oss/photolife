@@ -31,6 +31,9 @@
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
 #include "taxonomy/InfraspecificFiller.h"
+#include "taxonomy/OriginFetcher.h"
+#include "taxonomy/AlaStatusSync.h"
+#include "taxonomy/ApcOriginSync.h"
 #include "taxonomy/ProjectBuilder.h"
 #include "taxonomy/ReferencePhotoFetcher.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -98,6 +101,7 @@
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStandardPaths>
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -168,6 +172,62 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         new taxonomy::ReferencePhotoFetcher(m_app.inat(), m_app.taxonomyStore(), this);
     m_checklistImporter =
         new checklist::ChecklistImporter(m_app.inat(), m_app.taxonomyStore(), this);
+    m_originFetcher =
+        new taxonomy::OriginFetcher(m_app.inat(), m_app.taxonomyStore(), this);
+    connect(m_originFetcher, &taxonomy::OriginFetcher::projectFinished, this,
+            [this](int projectId, bool ok, int written) {
+                if (ok && written > 0 && projectId == currentProjectId())
+                    refreshCoverage();
+            });
+    m_alaSync = new taxonomy::AlaStatusSync(m_app.http(), m_app.taxonomyStore(), this);
+    connect(m_alaSync, &taxonomy::AlaStatusSync::finished, this,
+            [this](bool ok, const QString &error, int lists, int matched) {
+                if (ok) {
+                    m_app.settings().setSourceSyncedAt(QStringLiteral("ala"),
+                                                       QDateTime::currentDateTime());
+                    refreshCoverage();
+                } else {
+                    qWarning().noquote() << "ALA conservation lists:" << error;
+                }
+                if (m_reportSourceSync)
+                    statusBar()->showMessage(
+                        ok ? tr("Threatened status updated from %1 Atlas of Living Australia "
+                                "lists — %2 taxa in your trees listed.")
+                                 .arg(lists)
+                                 .arg(matched)
+                           : tr("Updating threatened status from the Atlas of Living "
+                                "Australia failed: %1")
+                                 .arg(error),
+                        10000);
+            });
+    m_apcSync = new taxonomy::ApcOriginSync(
+        m_app.taxonomyStore(),
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            .filePath(QStringLiteral("sources")),
+        QStringLiteral("%1/%2").arg(QString::fromLatin1(kAppName), QString::fromLatin1(kAppVersion))
+            .toUtf8(),
+        this);
+    connect(m_apcSync, &taxonomy::ApcOriginSync::progress, this, [this](const QString &phase) {
+        if (m_reportSourceSync)
+            statusBar()->showMessage(phase);
+    });
+    connect(m_apcSync, &taxonomy::ApcOriginSync::finished, this,
+            [this](bool ok, const QString &error, int matched) {
+                if (ok) {
+                    m_app.settings().setSourceSyncedAt(QStringLiteral("apc"),
+                                                       QDateTime::currentDateTime());
+                    refreshCoverage();
+                } else {
+                    qWarning().noquote() << "Australian Plant Census:" << error;
+                }
+                if (m_reportSourceSync)
+                    statusBar()->showMessage(
+                        ok ? tr("Native/introduced status updated from the Australian Plant "
+                                "Census — %1 plant taxa in your trees matched.")
+                                 .arg(matched)
+                           : tr("Updating from the Australian Plant Census failed: %1").arg(error),
+                        10000);
+            });
     m_localityFetcher =
         new geo::LocalityFetcher(m_app.geocoder(), m_app.database().connectionName(), this);
     m_inatImportService =
@@ -299,6 +359,9 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                     return;
                 }
                 statusBar()->showMessage(tr("Reference tree ready."), 6000);
+                fetchMissingPlaceAncestry();
+                m_originFetcher->enqueue({projectId});
+                syncAustralianSources(false, true);   // match the new taxa
                 reloadProjectList();
                 const int idx = m_projectCombo->findData(projectId);
                 if (idx >= 0)
@@ -425,10 +488,16 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                     statusBar()->showMessage(tr("Checklist import failed: %1").arg(error), 10000);
                     return;
                 }
+                const int outside = m_checklistImporter->statusesOutsideProject();
                 statusBar()->showMessage(
                     tr("Checklist imported — %1 added, %2 skipped, %3 unresolved")
-                        .arg(imported).arg(skipped).arg(unresolved),
-                    8000);
+                            .arg(imported).arg(skipped).arg(unresolved)
+                        + (outside > 0
+                               ? tr(" (statuses recorded for %n skipped taxa already known "
+                                    "from other trees)",
+                                    nullptr, outside)
+                               : QString()),
+                    10000);
                 m_treeModel->setProject(currentProjectId());
                 m_treeView->expandToDepth(1);
                 refreshCoverage();
@@ -474,9 +543,79 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     m_model->reload();
     updateEmptyState();
     reloadProjectList();
+    fetchMissingPlaceAncestry();
+    // Introduced taxa per tree region, from iNaturalist -- quietly, in the
+    // background; a checklist's origins fill in (and override) as imported.
+    m_originFetcher->enqueue(m_app.taxonomyStore().projectsMissingOrigins());
+    syncAustralianSources(false, false);
+}
+
+bool MainWindow::hasAustralianTree() const
+{
+    auto &store = m_app.taxonomyStore();
+    std::optional<taxonomy::Place> australia = store.placeByInatId(6744);
+    if (!australia) {
+        australia = taxonomy::Place{};
+        australia->inatId = 6744;
+    }
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    if (!q.exec(QStringLiteral("SELECT DISTINCT place_inat_id FROM project "
+                               "WHERE place_inat_id IS NOT NULL")))
+        return false;
+    while (q.next()) {
+        taxonomy::Place place;
+        if (const auto cached = store.placeByInatId(q.value(0).toLongLong()))
+            place = *cached;
+        place.inatId = q.value(0).toLongLong();
+        if (taxonomy::TaxonomyStore::placeWithin(place, *australia))
+            return true;
+    }
+    return false;
+}
+
+void MainWindow::syncAustralianSources(bool force, bool rematchOnly)
+{
+    // ALA's state/national conservation lists and the APC's per-state plant
+    // origins only mean anything for trees in Australia -- and the APC file
+    // is ~100 MB, so don't fetch either for anyone without one.
+    if (!force && !hasAustralianTree())
+        return;
+    m_reportSourceSync = force;
+    auto due = [this](const QString &source) {
+        const QDateTime last = m_app.settings().sourceSyncedAt(source);
+        return !last.isValid() || last.daysTo(QDateTime::currentDateTime()) > 30;
+    };
+    if (force || rematchOnly || due(QStringLiteral("ala")))
+        m_alaSync->start();
+    if (force || rematchOnly || due(QStringLiteral("apc")))
+        m_apcSync->start(force);
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::fetchMissingPlaceAncestry()
+{
+    // Which regions lie within which decides where a region's conservation
+    // statuses count (see computeCoverage). Trees built before that was
+    // recorded, or from a place search that didn't return it, get it here --
+    // quietly, in the background; bounding boxes stand in until it arrives.
+    const QList<qint64> ids = m_app.taxonomyStore().projectPlacesMissingAncestry();
+    for (qsizetype i = 0; i < ids.size(); i += 30) {
+        m_app.inat().fetchPlaces(ids.mid(i, 30), [this](net::Outcome<QList<taxonomy::Place>> out) {
+            if (!out.ok())
+                return;   // offline: try again next launch
+            bool changed = false;
+            for (const taxonomy::Place &p : std::as_const(out.value)) {
+                if (p.ancestorIds.isEmpty())
+                    m_app.taxonomyStore().markPlaceAncestryUnavailable(p.inatId);
+                else if (m_app.taxonomyStore().upsertPlace(p))
+                    changed = true;
+            }
+            if (changed)
+                refreshCoverage();
+        });
+    }
+}
 
 void MainWindow::buildMenus()
 {
@@ -593,6 +732,23 @@ void MainWindow::buildReferenceTreeMenu(QMenu *treeMenu)
     treeMenu->addSeparator();
     m_fetchRefPhotosAction = treeMenu->addAction(tr("Fetch Reference &Photos"),
                                                  this, &MainWindow::fetchReferencePhotos);
+    treeMenu->setToolTipsVisible(true);
+    QAction *updateStatuses = treeMenu->addAction(
+        tr("Update Threatened && Introduced Status (Australia)"), this, [this] {
+            if (m_alaSync->isRunning() || m_apcSync->isRunning()) {
+                statusBar()->showMessage(tr("Already updating — please wait."), 4000);
+                return;
+            }
+            statusBar()->showMessage(
+                tr("Updating from the Atlas of Living Australia and the Australian Plant "
+                   "Census…"));
+            syncAustralianSources(true, false);
+        });
+    updateStatuses->setToolTip(
+        tr("Re-downloads each state's and the national (EPBC) conservation lists from the "
+           "Atlas of Living Australia, and native/introduced status by state for plants from "
+           "the Australian Plant Census (about 100 MB). Both also refresh by themselves "
+           "about monthly."));
 
     treeMenu->addSeparator();
     m_exportTreePhotosAction = treeMenu->addAction(tr("&Export Photo Collection…"),

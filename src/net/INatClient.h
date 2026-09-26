@@ -88,6 +88,10 @@ public:
     void resolvePlaces(const QString &query,
                        std::function<void(Outcome<QList<pl::taxonomy::Place>>)> done);
 
+    // GET /v1/places/{id1,id2,...}  (up to 30 ids; caller batches)
+    void fetchPlaces(const QList<qint64> &inatIds,
+                     std::function<void(Outcome<QList<pl::taxonomy::Place>>)> done);
+
     // GET /v1/taxa?q=&rank=
     void searchTaxa(const QString &query, const QString &rank,
                     std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done);
@@ -110,6 +114,12 @@ public:
     void userSpeciesCounts(const QString &userLogin, qint64 taxonId, qint64 placeId,
                            ObservationQuality quality, int page, int perPage,
                            std::function<void(Outcome<SpeciesCountsPage>)> done);
+
+    // GET /v1/observations/species_counts?taxon_id=&place_id=&introduced=true&page=
+    // The taxa at or below `taxonId` that iNaturalist lists as introduced in
+    // `placeId` (or a place containing it) and that have observations there.
+    void introducedSpeciesCounts(qint64 taxonId, qint64 placeId, int page, int perPage,
+                                 std::function<void(Outcome<SpeciesCountsPage>)> done);
 
     // GET /v1/observations?taxon_id=&place_id=&verifiable=true&per_page=0
     // Just the verifiable-observation count for a taxon in a place (0 = no place

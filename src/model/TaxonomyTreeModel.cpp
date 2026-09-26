@@ -372,8 +372,12 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         if (t.inRegion)
             bits << tr("Recorded in this region");
         if (const auto cov = m_coverage.byTaxon.constFind(t.inatId);
-            cov != m_coverage.byTaxon.constEnd() && !cov->status.isEmpty())
-            bits << cov->status;
+            cov != m_coverage.byTaxon.constEnd()) {
+            if (!cov->status.isEmpty())
+                bits << cov->status;
+            if (cov->introduced)
+                bits << tr("Introduced");
+        }
         return bits.isEmpty() ? QVariant() : bits.join(QStringLiteral(" · "));
     }
     case InatIdRole:

@@ -25,6 +25,7 @@ private slots:
     void foldNameNormalises();
     void foldSearchTextNormalisesHybridMarker();
     void placeRoundTrips();
+    void placeAncestryRoundTripsAndDecidesWithin();
     void taxonUpsertStoresNamesAndIsIdempotent();
     void reUpsertReplacesNamesWithoutDuplicating();
     void taxaByInatIdsReturnsCachedAndSkipsUnknown();
@@ -123,6 +124,59 @@ void TestTaxonomyStore::placeRoundTrips()
     p.displayName = QStringLiteral("State of Victoria");
     QVERIFY(m_store->upsertPlace(p));
     QCOMPARE(m_store->placeByInatId(6744)->displayName, QStringLiteral("State of Victoria"));
+}
+
+void TestTaxonomyStore::placeAncestryRoundTripsAndDecidesWithin()
+{
+    auto place = [](qint64 id, QList<qint64> ancestors, double swLat, double swLng,
+                    double neLat, double neLng) {
+        Place p;
+        p.inatId = id;
+        p.name = QString::number(id);
+        p.ancestorIds = ancestors;
+        p.bboxSwLat = swLat;
+        p.bboxSwLng = swLng;
+        p.bboxNeLat = neLat;
+        p.bboxNeLng = neLng;
+        return p;
+    };
+    const Place victoria = place(7830, {97393, 6744, 7830}, -39.3, 140.9, -33.9, 150.0);
+    const Place grampians = place(52324, {97393, 6744, 7830, 52324}, -37.6, 142.2, -36.9, 142.7);
+    const Place coorong = place(49109, {97393, 6744, 6899, 49109}, -36.3, 138.9, -35.2, 140.5);
+    const Place australia = place(6744, {97393, 6744}, -55.2, 112.9, -9.2, 159.3);
+    Place mountSandy = place(186271, {}, -35.74, 139.29, -35.72, 139.32);   // no ancestry
+    Place bendigoArea = place(9999, {}, -36.9, 144.1, -36.6, 144.4);        // no ancestry
+
+    QVERIFY(TaxonomyStore::placeWithin(victoria, victoria));
+    QVERIFY(TaxonomyStore::placeWithin(grampians, victoria));
+    QVERIFY(!TaxonomyStore::placeWithin(coorong, victoria));
+    QVERIFY(!TaxonomyStore::placeWithin(australia, victoria));   // contains, not within
+    QVERIFY(TaxonomyStore::placeWithin(victoria, australia));
+    // Without ancestry, bounding boxes decide.
+    QVERIFY(!TaxonomyStore::placeWithin(mountSandy, victoria));
+    QVERIFY(TaxonomyStore::placeWithin(bendigoArea, victoria));
+    mountSandy.bboxNeLng.reset();
+    QVERIFY(!TaxonomyStore::placeWithin(mountSandy, australia));   // can't tell: no
+
+    // Round trip, and a later response without ancestry doesn't erase it.
+    QVERIFY(m_store->upsertPlace(grampians));
+    QCOMPARE(m_store->placeByInatId(52324)->ancestorIds, grampians.ancestorIds);
+    Place bare = grampians;
+    bare.ancestorIds.clear();
+    QVERIFY(m_store->upsertPlace(bare));
+    QCOMPARE(m_store->placeByInatId(52324)->ancestorIds, grampians.ancestorIds);
+
+    // Backfill bookkeeping: a tree region without ancestry is listed until
+    // it's fetched, or marked as having none.
+    QVERIFY(m_store->upsertPlace(mountSandy));
+    m_store->ensureProject(QStringLiteral("Mount Sandy"), std::nullopt, 186271,
+                           QStringLiteral("inat"));
+    m_store->ensureProject(QStringLiteral("Grampians"), std::nullopt, 52324,
+                           QStringLiteral("inat"));
+    QCOMPARE(m_store->projectPlacesMissingAncestry(), QList<qint64>{186271});
+    QVERIFY(m_store->markPlaceAncestryUnavailable(186271));
+    QVERIFY(m_store->projectPlacesMissingAncestry().isEmpty());
+    QVERIFY(m_store->placeByInatId(186271)->ancestorIds.isEmpty());
 }
 
 void TestTaxonomyStore::taxonUpsertStoresNamesAndIsIdempotent()

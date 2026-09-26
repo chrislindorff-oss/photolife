@@ -117,6 +117,7 @@ void TestINatParse::placeWithBoundingBox()
 {
     const auto p = parsePlace(obj(R"({
         "id": 6744, "name": "Victoria", "display_name": "Victoria, AU", "admin_level": 10,
+        "ancestor_place_ids": [97393, 6744, 7830],
         "bounding_box_geojson": {"type": "Polygon", "coordinates": [[
             [140.9, -39.2], [140.9, -33.9], [150.0, -33.9], [150.0, -39.2], [140.9, -39.2]
         ]]}
@@ -127,12 +128,14 @@ void TestINatParse::placeWithBoundingBox()
     QVERIFY(p.bboxSwLat.has_value());
     QCOMPARE(p.bboxSwLat.value(), -39.2);
     QCOMPARE(p.bboxNeLng.value(), 150.0);
+    QCOMPARE(p.ancestorIds, (QList<qint64>{97393, 6744, 7830}));
 }
 
 void TestINatParse::placeWithNullAdminLevel()
 {
     const auto p = parsePlace(obj(R"({"id": 7, "name": "Gabo Island", "admin_level": null})"));
     QVERIFY(!p.adminLevel.has_value());
+    QVERIFY(p.ancestorIds.isEmpty());
 }
 
 void TestINatParse::observationCoreFieldsAndExplicitPhotoSizes()

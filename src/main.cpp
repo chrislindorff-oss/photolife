@@ -201,8 +201,10 @@ int runHeadlessChecklist(pl::Application &app, const QString &path, const QStrin
                              exitCode = 1;
                          } else {
                              qInfo().noquote()
-                                 << QStringLiteral("%1 imported | %2 skipped | %3 unresolved")
-                                        .arg(imported).arg(skipped).arg(unresolved);
+                                 << QStringLiteral("%1 imported | %2 skipped | %3 unresolved | "
+                                                   "%4 statuses recorded outside the tree")
+                                        .arg(imported).arg(skipped).arg(unresolved)
+                                        .arg(importer.statusesOutsideProject());
                          }
                          loop.quit();
                      });

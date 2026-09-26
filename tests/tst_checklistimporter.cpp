@@ -50,6 +50,7 @@ private slots:
 
     void importsStatusesAndLinksToProject();
     void skipsRowsOutsideProjectGenera();
+    void recordsStatusOfKnownTaxaOutsideProjectGenera();
     void keepsChecklistSpellingAsSynonym();
 
 private:
@@ -173,6 +174,58 @@ void TestChecklistImporter::skipsRowsOutsideProjectGenera()
     QCOMPARE(spy.at(0).at(2).toInt(), 0);   // imported
     QCOMPARE(spy.at(0).at(3).toInt(), 2);   // skipped
     QCOMPARE(m_transport->received.size(), 0);
+    QCOMPARE(m_importer->statusesOutsideProject(), 0);   // neither taxon is known
+}
+
+void TestChecklistImporter::recordsStatusOfKnownTaxaOutsideProjectGenera()
+{
+    // Known from another tree, but not in this (orchid) one.
+    taxonomy::Taxon euc;
+    euc.inatId = 500;
+    euc.rank = QStringLiteral("species");
+    euc.name = QStringLiteral("Eucalyptus obliqua");
+    m_store->upsertTaxon(euc);
+    taxonomy::Taxon wattle;
+    wattle.inatId = 501;
+    wattle.rank = QStringLiteral("species");
+    wattle.name = QStringLiteral("Acacia baileyana");
+    m_store->upsertTaxon(wattle);
+
+    ChecklistImporter::Request req;
+    req.projectId = m_projectId;
+    req.source = QStringLiteral("VBA 2021");
+    req.placeInatId = 7830;
+    req.entries = {
+        {QStringLiteral("Eucalyptus obliqua"), QStringLiteral("Rare"), QStringLiteral("rare")},
+        {QStringLiteral("Banksia marginata"), QStringLiteral("Vulnerable"),
+         QStringLiteral("vulnerable")},   // unknown: nothing recorded
+        // Origin only, no status: still recorded.
+        {QStringLiteral("Acacia baileyana"), QString(), QString(), QStringLiteral("introduced")},
+    };
+
+    QSignalSpy spy(m_importer.get(), &ChecklistImporter::finished);
+    m_importer->start(req);
+    await(spy);
+
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+    QCOMPARE(spy.at(0).at(2).toInt(), 0);   // nothing added to the tree
+    QCOMPARE(spy.at(0).at(3).toInt(), 3);   // all still skipped for the tree
+    QCOMPARE(m_importer->statusesOutsideProject(), 2);
+    QCOMPARE(scalar(QStringLiteral(
+                 "SELECT COUNT(*) FROM taxon_origin o JOIN taxon t ON t.id = o.taxon_id "
+                 "WHERE t.inat_id = 501 AND o.origin = 'introduced' AND o.source = 'VBA 2021' "
+                 "AND o.place_inat_id = 7830")),
+             1);
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM taxon_origin")), 1);
+    QCOMPARE(m_transport->received.size(), 0);   // no lookups for skipped rows
+    QCOMPARE(scalar(QStringLiteral(
+                 "SELECT COUNT(*) FROM taxon_status ts JOIN taxon t ON t.id = ts.taxon_id "
+                 "WHERE t.inat_id = 500 AND ts.status = 'Rare' AND ts.source = 'VBA 2021'")),
+             1);
+    QCOMPARE(scalar(QStringLiteral(
+                 "SELECT COUNT(*) FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+                 "WHERE t.inat_id = 500")),
+             0);
 }
 
 void TestChecklistImporter::keepsChecklistSpellingAsSynonym()

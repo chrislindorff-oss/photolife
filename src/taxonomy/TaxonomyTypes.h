@@ -16,6 +16,9 @@ struct Place
     QString displayName;
     std::optional<int> adminLevel;
     std::optional<double> bboxSwLat, bboxSwLng, bboxNeLat, bboxNeLng;
+    // iNaturalist's ancestor_place_ids -- the places this one lies within,
+    // broadest first, ending with itself. Empty = not known.
+    QList<qint64> ancestorIds;
 };
 
 // A taxonomy node plus the alternative names known for it. Decoupled from the
@@ -44,6 +47,14 @@ struct StatusRecord
     std::optional<qint64> placeInatId;
     QString status;            // e.g. "Vulnerable", "endangered"
     QString source;            // "inat" | "VBA 2021" | ...
+};
+
+// Whether a taxon is native or introduced in a place (see taxon_origin).
+struct OriginRecord
+{
+    std::optional<qint64> placeInatId;
+    QString origin;            // "introduced" | "native"
+    QString source;            // "VBA 2021" | "iNaturalist" | ...
 };
 
 // Resume point for an interrupted build/refresh's species-pagination phase

@@ -11,6 +11,7 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <functional>
 
 namespace pl::taxonomy {
 namespace {
@@ -108,18 +109,29 @@ QString TaxonomyStore::foldSearchText(const QString &text)
     return foldName(normalized);
 }
 
+QString TaxonomyStore::foldListName(const QString &name)
+{
+    static const QRegularExpression connector(QStringLiteral(
+        "(?<=\\s)(subsp|ssp|var|subvar|f|forma|nothosubsp|nothovar|nothof)\\.?(?=\\s)"));
+    QString folded = foldSearchText(name);
+    folded.replace(connector, QString());
+    return folded.simplified();
+}
+
 bool TaxonomyStore::upsertPlace(const Place &place)
 {
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "INSERT INTO place (inat_id, name, display_name, admin_level, "
-        "  bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, %1) "
+        "  bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, ancestor_ids, fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %1) "
         "ON CONFLICT(inat_id) DO UPDATE SET name = excluded.name, "
         "  display_name = excluded.display_name, admin_level = excluded.admin_level, "
         "  bbox_swlat = excluded.bbox_swlat, bbox_swlng = excluded.bbox_swlng, "
         "  bbox_nelat = excluded.bbox_nelat, bbox_nelng = excluded.bbox_nelng, "
+        // A response without ancestry never erases one fetched earlier.
+        "  ancestor_ids = COALESCE(excluded.ancestor_ids, place.ancestor_ids), "
         "  fetched_at = excluded.fetched_at")
                     .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(qlonglong(place.inatId));
@@ -130,7 +142,50 @@ bool TaxonomyStore::upsertPlace(const Place &place)
     q.addBindValue(opt(place.bboxSwLng));
     q.addBindValue(opt(place.bboxNeLat));
     q.addBindValue(opt(place.bboxNeLng));
+    QStringList ancestry;
+    for (qint64 id : place.ancestorIds)
+        ancestry << QString::number(id);
+    q.addBindValue(ancestry.isEmpty() ? QVariant() : ancestry.join(QLatin1Char('/')));
     return q.exec();
+}
+
+bool TaxonomyStore::placeWithin(const Place &inner, const Place &outer)
+{
+    if (inner.inatId > 0 && inner.inatId == outer.inatId)
+        return true;
+    if (!inner.ancestorIds.isEmpty())
+        return inner.ancestorIds.contains(outer.inatId);
+    // No ancestry: fall back on the bounding boxes. Only approximate -- a
+    // state's box takes in slivers of its neighbours -- hence second choice.
+    if (!inner.bboxSwLat || !inner.bboxSwLng || !inner.bboxNeLat || !inner.bboxNeLng
+        || !outer.bboxSwLat || !outer.bboxSwLng || !outer.bboxNeLat || !outer.bboxNeLng)
+        return false;
+    constexpr double eps = 1e-6;
+    return *inner.bboxSwLat >= *outer.bboxSwLat - eps && *inner.bboxSwLng >= *outer.bboxSwLng - eps
+           && *inner.bboxNeLat <= *outer.bboxNeLat + eps
+           && *inner.bboxNeLng <= *outer.bboxNeLng + eps;
+}
+
+bool TaxonomyStore::markPlaceAncestryUnavailable(qint64 inatId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "UPDATE place SET ancestor_ids = '' WHERE inat_id = ? AND ancestor_ids IS NULL"));
+    q.addBindValue(qlonglong(inatId));
+    return q.exec();
+}
+
+QList<qint64> TaxonomyStore::projectPlacesMissingAncestry() const
+{
+    QList<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    if (!q.exec(QStringLiteral(
+            "SELECT DISTINCT p.place_inat_id FROM project p "
+            "JOIN place pl ON pl.inat_id = p.place_inat_id WHERE pl.ancestor_ids IS NULL")))
+        return ids;
+    while (q.next())
+        ids.append(q.value(0).toLongLong());
+    return ids;
 }
 
 int TaxonomyStore::upsertTaxon(const Taxon &taxon)
@@ -302,6 +357,178 @@ bool TaxonomyStore::addStatus(qint64 taxonInatId, const StatusRecord &status)
     q.addBindValue(status.status);
     q.addBindValue(foldName(status.status));
     q.addBindValue(status.source.isEmpty() ? QVariant() : status.source);
+    return q.exec();
+}
+
+namespace {
+
+// Shared body of replaceStatusesFromSource()/replaceOriginsFromSource().
+// `columns` are the table's value columns after (taxon_id, place_inat_id)
+// and before source; `values` gives their bind values for one row.
+int replaceFromSource(const QString &connectionName, const QString &table,
+                      const QStringList &columns, const QString &source,
+                      const QList<TaxonomyStore::SourcedFact> &rows,
+                      const std::function<QVariantList(const TaxonomyStore::SourcedFact &)> &values)
+{
+    QSqlDatabase db = QSqlDatabase::database(connectionName, false);
+    if (!db.transaction())
+        return -1;
+    QSqlQuery del(db);
+    del.prepare(QStringLiteral("DELETE FROM %1 WHERE source = ?").arg(table));
+    del.addBindValue(source);
+    if (!del.exec()) {
+        db.rollback();
+        return -1;
+    }
+
+    const int perRow = int(columns.size()) + 3;
+    const int rowsPerChunk = std::max(1, kMaxBatchBindParams / perRow);
+    const QString rowPlaceholder =
+        QStringLiteral("(%1)").arg(QStringList(perRow, QStringLiteral("?")).join(QLatin1Char(',')));
+    QSet<QString> seen;   // (taxon, place) once per source -- the unique key
+    int written = 0;
+    for (qsizetype start = 0; start < rows.size(); start += rowsPerChunk) {
+        QList<const TaxonomyStore::SourcedFact *> chunk;
+        for (qsizetype i = start; i < std::min(rows.size(), start + rowsPerChunk); ++i) {
+            const auto &r = rows.at(i);
+            const QString key = QStringLiteral("%1/%2").arg(r.taxonId).arg(r.placeInatId.value_or(0));
+            if (!seen.contains(key)) {
+                seen.insert(key);
+                chunk.append(&r);
+            }
+        }
+        if (chunk.isEmpty())
+            continue;
+        QSqlQuery ins(db);
+        ins.prepare(QStringLiteral("INSERT INTO %1 (taxon_id, place_inat_id, %2, source) VALUES %3")
+                        .arg(table, columns.join(QStringLiteral(", ")),
+                             QStringList(chunk.size(), rowPlaceholder).join(QLatin1Char(','))));
+        for (const auto *r : chunk) {
+            ins.addBindValue(qlonglong(r->taxonId));
+            ins.addBindValue(r->placeInatId ? QVariant(qlonglong(*r->placeInatId)) : QVariant());
+            for (const QVariant &v : values(*r))
+                ins.addBindValue(v);
+            ins.addBindValue(source);
+        }
+        if (!ins.exec()) {
+            db.rollback();
+            return -1;
+        }
+        written += int(chunk.size());
+    }
+    if (!db.commit())
+        return -1;
+    return written;
+}
+
+} // namespace
+
+int TaxonomyStore::replaceStatusesFromSource(const QString &source,
+                                             const QList<SourcedFact> &rows)
+{
+    return replaceFromSource(m_connectionName, QStringLiteral("taxon_status"),
+                             {QStringLiteral("status"), QStringLiteral("status_folded")}, source,
+                             rows, [](const SourcedFact &r) {
+                                 return QVariantList{r.value, foldName(r.value)};
+                             });
+}
+
+int TaxonomyStore::replaceOriginsFromSource(const QString &source, const QList<SourcedFact> &rows)
+{
+    return replaceFromSource(m_connectionName, QStringLiteral("taxon_origin"),
+                             {QStringLiteral("origin")}, source, rows,
+                             [](const SourcedFact &r) { return QVariantList{r.value}; });
+}
+
+QHash<QString, qint64> TaxonomyStore::leafTaxaByFoldedName() const
+{
+    QHash<QString, qint64> index;
+    QSet<QString> accepted;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.setForwardOnly(true);
+    if (!q.exec(QStringLiteral(
+            "SELECT tn.name_folded, t.id, t.rank, tn.kind FROM taxon_name tn "
+            "JOIN taxon t ON t.id = tn.taxon_id")))
+        return index;
+    while (q.next()) {
+        if (!isLeafRank(q.value(2).toString()))
+            continue;
+        const QString name = q.value(0).toString();
+        const bool isAccepted = q.value(3).toString() == QLatin1String("accepted");
+        if (accepted.contains(name))
+            continue;   // an accepted name already claimed this spelling
+        if (isAccepted || !index.contains(name)) {
+            index.insert(name, q.value(1).toLongLong());
+            if (isAccepted)
+                accepted.insert(name);
+        }
+    }
+    return index;
+}
+
+bool TaxonomyStore::addOrigin(qint64 taxonInatId, const OriginRecord &origin)
+{
+    const auto local = taxonLocalId(taxonInatId);
+    if (!local)
+        return false;
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "INSERT INTO taxon_origin (taxon_id, place_inat_id, origin, source) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(taxon_id, place_inat_id, source) DO UPDATE SET origin = excluded.origin"));
+    q.addBindValue(qlonglong(*local));
+    q.addBindValue(opt(origin.placeInatId));
+    q.addBindValue(origin.origin);
+    q.addBindValue(origin.source);
+    return q.exec();
+}
+
+int TaxonomyStore::addIntroduced(qint64 placeInatId, const QString &source,
+                                 const QList<qint64> &introducedInatIds)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    if (!db.transaction())
+        return -1;
+    int written = 0;
+    QSqlQuery ins(db);
+    ins.prepare(QStringLiteral(
+        "INSERT INTO taxon_origin (taxon_id, place_inat_id, origin, source) "
+        "SELECT id, ?, 'introduced', ? FROM taxon WHERE inat_id = ? "
+        "ON CONFLICT(taxon_id, place_inat_id, source) DO UPDATE SET origin = excluded.origin"));
+    for (qint64 id : introducedInatIds) {
+        ins.bindValue(0, qlonglong(placeInatId));
+        ins.bindValue(1, source);
+        ins.bindValue(2, qlonglong(id));
+        if (!ins.exec()) {
+            db.rollback();
+            return -1;
+        }
+        written += ins.numRowsAffected() > 0 ? 1 : 0;
+    }
+    if (!db.commit())
+        return -1;
+    return written;
+}
+
+QList<int> TaxonomyStore::projectsMissingOrigins() const
+{
+    QList<int> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    if (!q.exec(QStringLiteral(
+            "SELECT id FROM project WHERE origins_fetched_at IS NULL "
+            "AND place_inat_id IS NOT NULL AND root_taxon_inat_id IS NOT NULL ORDER BY id")))
+        return ids;
+    while (q.next())
+        ids.append(q.value(0).toInt());
+    return ids;
+}
+
+bool TaxonomyStore::setProjectOriginsFetchedNow(int projectId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("UPDATE project SET origins_fetched_at = %1 WHERE id = ?")
+                  .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
+    q.addBindValue(projectId);
     return q.exec();
 }
 
@@ -781,7 +1008,8 @@ std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
 {
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
-        "SELECT name, display_name, admin_level, bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng "
+        "SELECT name, display_name, admin_level, bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, "
+        "       ancestor_ids "
         "FROM place WHERE inat_id = ?"));
     q.addBindValue(qlonglong(inatId));
     if (!q.exec() || !q.next())
@@ -801,6 +1029,8 @@ std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
         p.bboxNeLat = q.value(5).toDouble();
     if (!q.value(6).isNull())
         p.bboxNeLng = q.value(6).toDouble();
+    for (const QString &part : q.value(7).toString().split(QLatin1Char('/'), Qt::SkipEmptyParts))
+        p.ancestorIds.append(part.toLongLong());
     return p;
 }
 

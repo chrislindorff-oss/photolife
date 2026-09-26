@@ -34,6 +34,12 @@ public:
     // Never touches "x" inside a word, so ordinary names are unaffected.
     static QString foldSearchText(const QString &text);
 
+    // Folds a scientific name from an Australian list (ALA, the APC) the way
+    // iNaturalist writes it: foldSearchText(), minus infraspecific rank
+    // connectors -- "Acacia longifolia subsp. longifolia" -> "acacia
+    // longifolia longifolia", matching iNat's own trinomials.
+    static QString foldListName(const QString &name);
+
     // True for a rank at or below species: species itself, the infraspecific
     // ranks, and the hybrid-formula ranks (genus and intraspecific).
     static bool isLeafRank(const QString &rank);
@@ -45,6 +51,16 @@ public:
     // --- writes -------------------------------------------------------------
 
     bool upsertPlace(const Place &place);
+
+    // True when `inner` is `outer` or lies within it: by iNaturalist's place
+    // ancestry when `inner` has one, else by bounding-box containment.
+    static bool placeWithin(const Place &inner, const Place &outer);
+
+    // Reference-tree regions whose place ancestry hasn't been fetched yet.
+    QList<qint64> projectPlacesMissingAncestry() const;
+    // Records that iNaturalist has no ancestry for this place, so it isn't
+    // asked again (bounding boxes stay the fallback for it).
+    bool markPlaceAncestryUnavailable(qint64 inatId);
 
     // Inserts or updates the taxon (keyed by inat_id) and replaces its
     // taxon_name rows. Returns the local taxon.id, or -1 on failure.
@@ -73,6 +89,42 @@ public:
     QHash<qint64, int> upsertTaxa(const QList<Taxon> &taxa);
 
     bool addStatus(qint64 taxonInatId, const StatusRecord &status);
+
+    // Records (or updates) a taxon's origin in a place, from one source.
+    bool addOrigin(qint64 taxonInatId, const OriginRecord &origin);
+    // Records each of `introducedInatIds` as introduced in `placeInatId`,
+    // from `source` -- one transaction. Only adds: several trees can share a
+    // region, each fetching its own taxa. Ids not in the taxon cache are
+    // skipped. Returns how many were written, or -1.
+    int addIntroduced(qint64 placeInatId, const QString &source,
+                      const QList<qint64> &introducedInatIds);
+
+    // One row for replaceStatusesFromSource()/replaceOriginsFromSource():
+    // `taxonId` is the local taxon.id; `value` the status or origin text.
+    struct SourcedFact
+    {
+        qint64 taxonId = 0;
+        std::optional<qint64> placeInatId;
+        QString value;
+    };
+    // Replaces everything `source` recorded (every region) with `rows`, in
+    // one transaction -- for sources that are re-downloaded whole (ALA
+    // lists, the APC). Chunked multi-row inserts, so large sources stay
+    // cheap on a remote catalogue. Returns rows written, or -1 (nothing
+    // changed).
+    int replaceStatusesFromSource(const QString &source, const QList<SourcedFact> &rows);
+    int replaceOriginsFromSource(const QString &source, const QList<SourcedFact> &rows);
+
+    // Folded name (accepted, synonym or common) -> local taxon.id, for every
+    // cached taxon at species rank or below -- for matching an external
+    // list's names without a lookup per name. An accepted name wins over
+    // another taxon's synonym of the same spelling.
+    QHash<QString, qint64> leafTaxaByFoldedName() const;
+
+    // Reference trees with a region and root taxon whose introduced taxa
+    // haven't been fetched from iNaturalist yet.
+    QList<int> projectsMissingOrigins() const;
+    bool setProjectOriginsFetchedNow(int projectId);
 
     // Adds one alternative name to an existing taxon (kept if already present).
     bool addName(qint64 taxonInatId, const QString &name, const QString &kind);

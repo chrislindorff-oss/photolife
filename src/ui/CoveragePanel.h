@@ -14,7 +14,8 @@ class QFormLayout;
 namespace pl {
 
 // Compact per-project coverage summary: species photographed / total with a
-// progress bar, threatened-taxon coverage broken out by status tier, the most
+// progress bar, threatened-taxon coverage broken out by status tier (left)
+// beside introduced-species coverage (right), the most
 // recent capture date, and how much of the on-disk reference-photo cache this
 // project's tree accounts for.
 class CoveragePanel : public QWidget
@@ -51,6 +52,8 @@ private:
     QLabel *m_headline;
     QProgressBar *m_bar;
     QLabel *m_threatened;
+    QLabel *m_introduced;
+    QLabel *m_introducedDetail;
     QLabel *m_newest;
     QLabel *m_cacheUsage;
     QLabel *m_clearFilterLink;

@@ -1,5 +1,7 @@
 #include "coverage/CoverageCalculator.h"
 
+#include "taxonomy/TaxonomyStore.h"
+
 #include <QHash>
 #include <QList>
 #include <QSet>
@@ -20,6 +22,7 @@ struct Node
     QString name;
     QString commonName;
     QString status;
+    QString origin;   // "introduced" | "native" | "" (unknown)
     int directCaptures = 0;
     QString directNewest;
 };
@@ -73,17 +76,113 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
     if (nodes.isEmpty())
         return coverage;
 
-    // Conservation status (any place; prefer a listed status over a blank one).
+    // Conservation status and origin (native/introduced): only records for
+    // this tree's own region or a region containing it -- a Victorian listing
+    // counts in a Grampians tree but not in a South Australian or
+    // Australia-wide one. A record without a region counts everywhere; a
+    // tree without a region counts only those.
+    //
+    // Where several apply, the most specific region wins (a state's list
+    // over the national EPBC list), then the source:
+    //   status: an ALA list, then an imported checklist;
+    //   origin: the Australian Plant Census, then a checklist, then
+    //           iNaturalist (per region, and blind to unobserved taxa).
     {
+        taxonomy::TaxonomyStore store(connectionName);
+        std::optional<taxonomy::Place> treePlace;
+        {
+            QSqlQuery p(db);
+            p.prepare(QStringLiteral("SELECT place_inat_id FROM project WHERE id = ?"));
+            p.addBindValue(projectId);
+            if (p.exec() && p.next() && !p.value(0).isNull()) {
+                const qint64 id = p.value(0).toLongLong();
+                treePlace = store.placeByInatId(id);
+                if (!treePlace) {
+                    treePlace = taxonomy::Place{};
+                    treePlace->inatId = id;
+                }
+            }
+        }
+
+        // How specific a record's region is for this tree: -1 = doesn't
+        // apply; 0 = no region; else 1 + its depth in the tree's ancestry.
+        QHash<qint64, int> specificity;
+        auto regionScore = [&](const QVariant &recordPlace) -> int {
+            if (recordPlace.isNull())
+                return 0;
+            if (!treePlace)
+                return -1;
+            const qint64 id = recordPlace.toLongLong();
+            auto it = specificity.constFind(id);
+            if (it == specificity.constEnd()) {
+                taxonomy::Place outer;
+                if (const auto cached = store.placeByInatId(id))
+                    outer = *cached;
+                outer.inatId = id;   // the ancestry check needs only the id
+                int score = -1;
+                if (taxonomy::TaxonomyStore::placeWithin(*treePlace, outer)) {
+                    const qsizetype depth = treePlace->ancestorIds.indexOf(id);
+                    score = 1 + int(depth >= 0 ? depth : treePlace->ancestorIds.size());
+                }
+                it = specificity.insert(id, score);
+            }
+            return *it;
+        };
+
+        struct Pick
+        {
+            int region = -1;
+            int source = 0;
+            bool better(int r, int s) const { return r > region || (r == region && s < source); }
+        };
+        QHash<qint64, Pick> statusPick, originPick;
+
         QSqlQuery q(db);
         q.setForwardOnly(true);
         q.exec(QStringLiteral(
-            "SELECT t.inat_id, ts.status FROM taxon_status ts JOIN taxon t ON t.id = ts.taxon_id "
-            "WHERE ts.status <> '' ORDER BY ts.id"));
+            "SELECT t.inat_id, ts.status, ts.place_inat_id, ts.source FROM taxon_status ts "
+            "JOIN taxon t ON t.id = ts.taxon_id WHERE ts.status <> '' ORDER BY ts.id"));
         while (q.next()) {
             const qint64 id = q.value(0).toLongLong();
-            if (auto it = nodes.find(id); it != nodes.end() && it->status.isEmpty())
-                it->status = q.value(1).toString();
+            auto node = nodes.find(id);
+            if (node == nodes.end())
+                continue;
+            const int region = regionScore(q.value(2));
+            if (region < 0)
+                continue;
+            const int source = q.value(3).toString().startsWith(QLatin1String("ALA ")) ? 0 : 1;
+            Pick &pick = statusPick[id];
+            if (pick.better(region, source)) {
+                pick = {region, source};
+                node->status = q.value(1).toString();
+            }
+        }
+
+        QSqlQuery o(db);
+        o.setForwardOnly(true);
+        o.exec(QStringLiteral(
+            "SELECT t.inat_id, o.origin, o.place_inat_id, o.source FROM taxon_origin o "
+            "JOIN taxon t ON t.id = o.taxon_id ORDER BY o.id"));
+        while (o.next()) {
+            const qint64 id = o.value(0).toLongLong();
+            auto node = nodes.find(id);
+            if (node == nodes.end())
+                continue;
+            const int region = regionScore(o.value(2));
+            if (region < 0)
+                continue;
+            const QString src = o.value(3).toString();
+            const int source = src == QLatin1String("APC")           ? 0
+                               : src == QLatin1String("iNaturalist") ? 2
+                                                                     : 1;
+            // Source first here: iNaturalist's list for a small region is no
+            // better than the APC's for the state around it.
+            Pick &pick = originPick[id];
+            if (source < pick.source || pick.region < 0
+                || (source == pick.source && region > pick.region)) {
+                pick = {region, source};
+                node->origin = o.value(1).toString();
+            }
         }
     }
 
@@ -126,6 +225,7 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
         tc.name = n.name;
         tc.commonName = n.commonName;
         tc.status = n.status;
+        tc.introduced = n.origin == QLatin1String("introduced");
         tc.hasOwnPhotos = n.directCaptures > 0;
         tc.captureCount = n.directCaptures;
         tc.newestCapture = n.directNewest;
@@ -139,6 +239,8 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
                 tc.speciesWithPhotos += child.speciesWithPhotos;
                 tc.threatenedTotal += child.threatenedTotal;
                 tc.threatenedWithPhotos += child.threatenedWithPhotos;
+                tc.introducedTotal += child.introducedTotal;
+                tc.introducedWithPhotos += child.introducedWithPhotos;
                 tc.captureCount += child.captureCount;
                 tc.newestCapture = maxDate(tc.newestCapture, child.newestCapture);
                 tc.subtreeHasPhotos = tc.subtreeHasPhotos || child.subtreeHasPhotos;
@@ -163,6 +265,11 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
                 if (tc.subtreeHasPhotos)
                     tier.withPhotos += 1;
             }
+            if (tc.introduced) {
+                tc.introducedTotal += 1;
+                if (tc.subtreeHasPhotos)
+                    tc.introducedWithPhotos += 1;
+            }
         }
 
         coverage.byTaxon.insert(id, tc);
@@ -175,6 +282,8 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
         coverage.speciesWithPhotos += rc.speciesWithPhotos;
         coverage.threatenedTotal += rc.threatenedTotal;
         coverage.threatenedWithPhotos += rc.threatenedWithPhotos;
+        coverage.introducedTotal += rc.introducedTotal;
+        coverage.introducedWithPhotos += rc.introducedWithPhotos;
         coverage.captureCount += rc.captureCount;
         coverage.newestCapture = maxDate(coverage.newestCapture, rc.newestCapture);
     }

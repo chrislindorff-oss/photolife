@@ -178,6 +178,11 @@ net::INatClient &Application::inat()
     return *m_inat;
 }
 
+net::HttpClient &Application::http()
+{
+    return *m_http;
+}
+
 net::GeocodeClient &Application::geocoder()
 {
     return *m_geocoder;

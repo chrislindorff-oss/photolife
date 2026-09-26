@@ -54,6 +54,7 @@ void ChecklistImporter::start(const Request &request)
     m_running = true;
     m_cancelled = false;
     m_index = m_imported = m_skipped = m_unresolved = 0;
+    m_statusesOutsideProject = 0;
     m_known.clear();
     m_missingAncestors.clear();
     m_batches.clear();
@@ -89,15 +90,23 @@ void ChecklistImporter::processNext()
 
         const ChecklistEntry entry = m_request.entries.at(m_index++);
         const match::ParsedName parsed = match::parseName(entry.name);
+        const QString folded = pl::taxonomy::TaxonomyStore::foldName(entry.name);
 
         if (m_request.onlyKnownGenera && !parsed.genus.isEmpty()
             && !m_projectGenera.contains(parsed.genus.toLower())
             && !m_projectGenera.contains(genusToken(entry.name))) {
+            // Not for this tree -- but its status and origin still count
+            // wherever the taxon is known already (no network call; see the
+            // class comment).
+            if (isPlausibleStatus(entry.status) || !entry.origin.isEmpty()) {
+                if (const auto cached = m_store.taxonInatIdByFoldedName(folded)) {
+                    recordFacts(*cached, entry);
+                    ++m_statusesOutsideProject;
+                }
+            }
             ++m_skipped;
             continue;
         }
-
-        const QString folded = pl::taxonomy::TaxonomyStore::foldName(entry.name);
 
         auto finishRow = [this, entry, folded](qint64 taxonInatId, const QString &acceptedName,
                                                const QString &ancestry) {
@@ -106,14 +115,7 @@ void ChecklistImporter::processNext()
             if (pl::taxonomy::TaxonomyStore::foldName(acceptedName) != folded)
                 m_store.addName(taxonInatId, entry.name, QStringLiteral("synonym"));
 
-            if (isPlausibleStatus(entry.status)) {
-                pl::taxonomy::StatusRecord status;
-                status.placeInatId = m_request.placeInatId;
-                status.status = entry.status;
-                status.source = m_request.source.isEmpty() ? QStringLiteral("checklist")
-                                                           : m_request.source;
-                m_store.addStatus(taxonInatId, status);
-            }
+            recordFacts(taxonInatId, entry);
 
             m_store.addProjectTaxon(m_request.projectId, taxonInatId, true, true);
             ++m_imported;
@@ -160,6 +162,26 @@ void ChecklistImporter::processNext()
                 processNext();
             });
         return;   // await the callback
+    }
+}
+
+void ChecklistImporter::recordFacts(qint64 taxonInatId, const ChecklistEntry &entry)
+{
+    const QString source =
+        m_request.source.isEmpty() ? QStringLiteral("checklist") : m_request.source;
+    if (isPlausibleStatus(entry.status)) {
+        pl::taxonomy::StatusRecord status;
+        status.placeInatId = m_request.placeInatId;
+        status.status = entry.status;
+        status.source = source;
+        m_store.addStatus(taxonInatId, status);
+    }
+    if (!entry.origin.isEmpty()) {
+        pl::taxonomy::OriginRecord origin;
+        origin.placeInatId = m_request.placeInatId;
+        origin.origin = entry.origin;
+        origin.source = source;
+        m_store.addOrigin(taxonInatId, origin);
     }
 }
 

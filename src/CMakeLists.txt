@@ -64,6 +64,9 @@ qt_add_library(photolife_core STATIC
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
     taxonomy/InfraspecificFiller.h taxonomy/InfraspecificFiller.cpp
+    taxonomy/OriginFetcher.h taxonomy/OriginFetcher.cpp
+    taxonomy/AlaStatusSync.h taxonomy/AlaStatusSync.cpp
+    taxonomy/ApcOriginSync.h taxonomy/ApcOriginSync.cpp
     taxonomy/ProjectBuilder.h taxonomy/ProjectBuilder.cpp
     taxonomy/ReferencePhotoFetcher.h taxonomy/ReferencePhotoFetcher.cpp
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
@@ -159,6 +162,8 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/013_build_checkpoint.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/014_lightroom_keywords.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/015_decision_name.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/016_place_ancestry.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/017_taxon_origin.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -174,6 +179,8 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/013_build_checkpoint.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/014_lightroom_keywords.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/015_decision_name.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/016_place_ancestry.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/017_taxon_origin.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"
