@@ -33,7 +33,7 @@ void TaxonomyTreeModel::setProject(int projectId)
 void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
 {
     m_coverage = coverage;
-    if (m_photographedOnly || m_threatenedOnly || !m_statusFilter.isEmpty()
+    if (m_photographedOnly || m_threatenedOnly || m_introducedOnly || !m_statusFilter.isEmpty()
         || m_coverageFilter != CoverageFilter::All) {
         // The visible set depends on coverage, so the tree structure changes.
         rebuild();
@@ -69,6 +69,32 @@ void TaxonomyTreeModel::setThreatenedOnly(bool on)
         return;
     m_threatenedOnly = on;
     rebuild();
+}
+
+void TaxonomyTreeModel::setIntroducedOnly(bool on)
+{
+    if (m_introducedOnly == on)
+        return;
+    m_introducedOnly = on;
+    rebuild();
+}
+
+QList<qint64> TaxonomyTreeModel::introducedTaxa() const
+{
+    QList<qint64> out;
+    for (const taxonomy::TreeNode &tn : m_flat) {
+        if (tn.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) == 0
+            && m_coverage.byTaxon.value(tn.inatId).introduced)
+            out << tn.inatId;
+    }
+    return out;
+}
+
+bool TaxonomyTreeModel::matchesIntroducedFilter(const taxonomy::TreeNode &t,
+                                                const coverage::TaxonCoverage &cov) const
+{
+    return m_introducedOnly && cov.introduced
+           && t.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) == 0;
 }
 
 void TaxonomyTreeModel::setStatusFilter(const QString &status)
@@ -138,6 +164,8 @@ void TaxonomyTreeModel::rebuild()
         if (m_photographedOnly && !cov.subtreeHasPhotos)
             return false;
         if (m_threatenedOnly && !cov.subtreeThreatened)
+            return false;
+        if (m_introducedOnly && !cov.subtreeIntroduced)
             return false;
         if (!m_statusFilter.isEmpty() && !cov.subtreeStatuses.contains(m_statusFilter))
             return false;
@@ -351,6 +379,10 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         if (cov == m_coverage.byTaxon.constEnd())
             return {};
         if (t.isLeafRank) {
+            // Introduced species under the introduced filter: an asterisk,
+            // still showing whether they're photographed.
+            if (matchesIntroducedFilter(t, *cov))
+                return cov->subtreeHasPhotos ? QStringLiteral("✔ *") : QStringLiteral("*");
             if (cov->subtreeHasPhotos)
                 return QStringLiteral("✔");
             // A cross, not the usual dot, for the species a threatened
@@ -379,6 +411,9 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         const auto cov = m_coverage.byTaxon.constFind(t.inatId);
         if (cov == m_coverage.byTaxon.constEnd())
             return {};
+        // Under the introduced filter, introduced species are blue.
+        if (matchesIntroducedFilter(t, *cov))
+            return theme.introduced;
         // While a threatened filter is on, the species it's about are green
         // (photographed) or red (not) -- name and coverage mark alike.
         if (matchesStatusFilter(*cov))

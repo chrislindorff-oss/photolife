@@ -53,6 +53,9 @@ CoveragePanel::CoveragePanel(QWidget *parent)
     // Introduced species sit on the right, level with the threatened block.
     m_introduced = new QLabel(this);
     m_introduced->setAlignment(Qt::AlignRight | Qt::AlignTop);
+    m_introduced->setTextFormat(Qt::RichText);
+    connect(m_introduced, &QLabel::linkActivated, this,
+            [this](const QString &) { emit introducedClicked(); });
     m_introducedDetail = new QLabel(this);
     m_introducedDetail->setAlignment(Qt::AlignRight | Qt::AlignTop);
     m_introducedDetail->setEnabled(false);
@@ -103,6 +106,10 @@ void CoveragePanel::clear()
     m_activeTier.clear();
     m_threatenedWithPhotos = 0;
     m_threatenedTotal = 0;
+    m_activeIntroduced = false;
+    m_introducedWithPhotos = 0;
+    m_introducedTotal = 0;
+    m_speciesTotal = 0;
     m_clearFilterLink->setVisible(false);
 }
 
@@ -122,6 +129,9 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
         m_cacheUsage->clear();
         m_threatenedWithPhotos = 0;
         m_threatenedTotal = 0;
+        m_introducedWithPhotos = 0;
+        m_introducedTotal = 0;
+        m_speciesTotal = 0;
         m_clearFilterLink->setVisible(false);
         return;
     }
@@ -153,22 +163,20 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
         m_threatened->setText(tr("No threatened taxa listed."));
     }
 
-    if (coverage.introducedTotal > 0) {
-        m_introduced->setText(tr("%1 of %2 introduced species photographed")
-                                  .arg(coverage.introducedWithPhotos)
-                                  .arg(coverage.introducedTotal));
-        m_introducedDetail->setText(
-            tr("%1% of this tree's species")
-                .arg(int(std::lround(100.0 * coverage.introducedTotal / coverage.speciesTotal))));
-    } else {
-        m_introduced->setText(tr("No introduced species listed."));
-        m_introducedDetail->clear();
-    }
+    m_introducedWithPhotos = coverage.introducedWithPhotos;
+    m_introducedTotal = coverage.introducedTotal;
+    m_speciesTotal = coverage.speciesTotal;
 
     m_newest->setText(coverage.newestCapture.isEmpty()
                           ? tr("No dated captures.")
                           : tr("Most recent capture: %1").arg(coverage.newestCapture));
 
+    applyHighlight();
+}
+
+void CoveragePanel::setActiveIntroducedFilter(bool active)
+{
+    m_activeIntroduced = active;
     applyHighlight();
 }
 
@@ -204,7 +212,24 @@ void CoveragePanel::applyHighlight()
                                    : QStringLiteral("<a href=\"any\">%1</a>").arg(summary));
     }
 
-    m_clearFilterLink->setVisible(m_activeAny || !m_activeTier.isEmpty());
+    if (m_introducedTotal > 0) {
+        const QString summary = tr("%1 of %2 introduced species photographed")
+                                    .arg(m_introducedWithPhotos)
+                                    .arg(m_introducedTotal);
+        m_introduced->setText(
+            m_activeIntroduced
+                ? QStringLiteral("<a href=\"introduced\" style=\"color:%1;\"><b>%2</b></a>")
+                      .arg(theme.introduced.name(), summary)
+                : QStringLiteral("<a href=\"introduced\">%1</a>").arg(summary));
+        m_introducedDetail->setText(
+            tr("%1% of this tree's species")
+                .arg(int(std::lround(100.0 * m_introducedTotal / std::max(1, m_speciesTotal)))));
+    } else if (m_speciesTotal > 0) {
+        m_introduced->setText(tr("No introduced species listed."));
+        m_introducedDetail->clear();
+    }
+
+    m_clearFilterLink->setVisible(m_activeAny || !m_activeTier.isEmpty() || m_activeIntroduced);
 }
 
 void CoveragePanel::setCacheUsage(int cachedCount, int totalWithUrl, qint64 bytes)

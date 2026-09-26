@@ -41,6 +41,7 @@ ThemeColors makeLightColors()
     c.warning         = QColor(0xB0, 0x50, 0x00);
     c.positive        = QColor(0x2E, 0x7D, 0x32);
     c.danger          = QColor(0xC6, 0x28, 0x28);
+    c.introduced      = QColor(0x1E, 0x63, 0xC8);
     return c;
 }
 
@@ -69,6 +70,7 @@ ThemeColors makeDarkColors()
     c.warning         = QColor(0xE0, 0x8A, 0x3D);
     c.positive        = QColor(0x4C, 0xAF, 0x50);
     c.danger          = QColor(0xEF, 0x53, 0x50);
+    c.introduced      = QColor(0x64, 0xB5, 0xF6);   // lightened for contrast on dark bg
     return c;
 }
 

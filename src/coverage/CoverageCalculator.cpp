@@ -245,6 +245,7 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
                 tc.newestCapture = maxDate(tc.newestCapture, child.newestCapture);
                 tc.subtreeHasPhotos = tc.subtreeHasPhotos || child.subtreeHasPhotos;
                 tc.subtreeThreatened = tc.subtreeThreatened || child.subtreeThreatened;
+                tc.subtreeIntroduced = tc.subtreeIntroduced || child.subtreeIntroduced;
                 tc.subtreeStatuses += child.subtreeStatuses;
             }
         }
@@ -272,6 +273,7 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
             if (tc.subtreeHasPhotos)
                 tc.speciesWithPhotos += 1;
             if (tc.introduced) {
+                tc.subtreeIntroduced = true;
                 tc.introducedTotal += 1;
                 if (tc.subtreeHasPhotos)
                     tc.introducedWithPhotos += 1;

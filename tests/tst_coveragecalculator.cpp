@@ -231,6 +231,8 @@ void TestCoverageCalculator::countsIntroducedSpeciesForTheTreesRegion()
     QVERIFY(grampians.byTaxon.value(11).introduced);
     QVERIFY(!grampians.byTaxon.value(12).introduced);
     QCOMPARE(grampians.byTaxon.value(10).introducedTotal, 2);   // rolled up to the genus
+    QVERIFY(grampians.byTaxon.value(10).subtreeIntroduced);    // for the tree filter
+    QVERIFY(!grampians.byTaxon.value(12).subtreeIntroduced);
 
     const auto coorong = coverageIn(49109, QStringLiteral("Coorong tree"));
     QCOMPARE(coorong.introducedTotal, 0);   // Victorian records don't apply in SA

@@ -59,6 +59,14 @@ public:
     void setThreatenedOnly(bool on);
     bool threatenedOnly() const { return m_threatenedOnly; }
 
+    // When on, hides every taxon with no introduced species in its subtree,
+    // and marks the introduced species (blue, "*" in the Coverage column).
+    void setIntroducedOnly(bool on);
+    bool introducedOnly() const { return m_introducedOnly; }
+    // iNat ids of the species introduced in the tree's region, ignoring
+    // active filters (species only, like ProjectCoverage::introducedTotal).
+    QList<qint64> introducedTaxa() const;
+
     // "" = off. Otherwise hides every taxon with no species carrying exactly
     // this status string anywhere in its subtree.
     void setStatusFilter(const QString &status);
@@ -131,6 +139,9 @@ private:
     // A taxon the active threatened filter is about: any listed taxon under
     // "threatened only", or one with exactly the filtered status.
     bool matchesStatusFilter(const pl::coverage::TaxonCoverage &cov) const;
+    // An introduced species while the introduced filter is on.
+    bool matchesIntroducedFilter(const pl::taxonomy::TreeNode &t,
+                                 const pl::coverage::TaxonCoverage &cov) const;
 
     pl::Database &m_db;
     int m_projectId = -1;
@@ -140,6 +151,7 @@ private:
     pl::coverage::ProjectCoverage m_coverage;
     bool m_photographedOnly = false;
     bool m_threatenedOnly = false;
+    bool m_introducedOnly = false;
     QString m_statusFilter;
     CoverageFilter m_coverageFilter = CoverageFilter::All;
     QSet<QString> m_hiddenRanks;

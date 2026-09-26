@@ -208,6 +208,9 @@ private:
     QList<qint64> collectExpandedTaxa(const QModelIndex &parent = {}) const;
     void mutateTreePreservingState(const std::function<void()> &mutate);
     void applyThreatenedFilter(bool anyThreatened, const QString &status);
+    // Tree filter to the tree's introduced species (from the coverage
+    // panel's introduced summary); replaces any threatened filter.
+    void applyIntroducedFilter(bool on);
     void rebuildRankFilterMenu();
     void updateMissingList();
     void showMissingListContextMenu(const QPoint &pos);

@@ -29,6 +29,7 @@ struct TaxonCoverage
     bool hasOwnPhotos = false;    // this exact taxon has >= 1 matched capture
     bool subtreeHasPhotos = false;
     bool subtreeThreatened = false;   // any species in the subtree carries a status
+    bool subtreeIntroduced = false;   // any species in the subtree is introduced here
     QSet<QString> subtreeStatuses;    // exact status strings among species in the subtree
 
     double photographedFraction() const

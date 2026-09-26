@@ -52,6 +52,7 @@ private slots:
     void coverageFilterCombinesWithPhotographedOnly();
     void coverageFilterFollowsCoverageUpdates();
     void threatenedFilterColoursPhotographedGreenAndMissingRed();
+    void introducedFilterShowsIntroducedSpeciesInBlueWithAsterisk();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -572,6 +573,46 @@ void TestTaxonomyTreeModel::threatenedFilterColoursPhotographedGreenAndMissingRe
     QVERIFY(!model.indexForTaxon(900).isValid());   // filtered out
     QCOMPARE(fg(901, 0).value<QColor>(), theme.danger);
     QCOMPARE(mark(901), QStringLiteral("✗"));
+}
+
+void TestTaxonomyTreeModel::introducedFilterShowsIntroducedSpeciesInBlueWithAsterisk()
+{
+    // Diuris pardina (900) is introduced and photographed; Pterostylis
+    // nutans (901) is native.
+    coverage::ProjectCoverage cov = partialCoverage();
+    cov.byTaxon[900].introduced = true;
+    for (qint64 id : {qint64(47217), qint64(800), qint64(900)})
+        cov.byTaxon[id].subtreeIntroduced = true;
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+    QCOMPARE(model.introducedTaxa(), QList<qint64>{qint64(900)});
+    const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
+    auto mark = [&](qint64 id) {
+        return model.data(model.indexForTaxon(id).siblingAtColumn(2), Qt::DisplayRole).toString();
+    };
+
+    // Filter off: no asterisk, no blue.
+    QCOMPARE(mark(900), QStringLiteral("✔"));
+    QVERIFY(!model.data(model.indexForTaxon(900), Qt::ForegroundRole).isValid());
+
+    model.setIntroducedOnly(true);
+    QVERIFY(model.indexForTaxon(900).isValid());
+    QVERIFY(!model.indexForTaxon(901).isValid());   // native: hidden
+    QVERIFY(!model.indexForTaxon(801).isValid());
+    QCOMPARE(mark(900), QStringLiteral("✔ *"));
+    QCOMPARE(model.data(model.indexForTaxon(900), Qt::ForegroundRole).value<QColor>(),
+             theme.introduced);
+    QCOMPARE(model.data(model.indexForTaxon(900).siblingAtColumn(2), Qt::ForegroundRole)
+                 .value<QColor>(),
+             theme.introduced);
+    QVERIFY(!model.data(model.indexForTaxon(800), Qt::ForegroundRole).isValid());   // genus
+
+    // Unphotographed introduced species: just the asterisk.
+    cov.byTaxon[900].subtreeHasPhotos = false;
+    model.setCoverage(cov);
+    QCOMPARE(mark(900), QStringLiteral("*"));
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

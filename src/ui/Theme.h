@@ -55,7 +55,8 @@ struct ThemeColors {
 
     QColor warning;            // Missing Taxa conservation-status rows
     QColor positive;           // Postgres connected / "has photos in subtree"
-    QColor danger;             // Postgres disconnected
+    QColor danger;             // Postgres disconnected / not photographed under a threatened filter
+    QColor introduced;         // introduced species under the introduced filter
 };
 
 // Returns the fixed color set for a variant. The returned reference is to

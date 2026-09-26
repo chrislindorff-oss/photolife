@@ -1093,8 +1093,12 @@ void MainWindow::buildReferenceTreeDock()
             [this](const QString &status) { applyThreatenedFilter(false, status); });
     connect(m_coveragePanel, &CoveragePanel::anyThreatenedClicked, this,
             [this] { applyThreatenedFilter(true, QString()); });
-    connect(m_coveragePanel, &CoveragePanel::clearFilterRequested, this,
-            [this] { applyThreatenedFilter(false, QString()); });
+    connect(m_coveragePanel, &CoveragePanel::introducedClicked, this,
+            [this] { applyIntroducedFilter(!m_treeModel->introducedOnly()); });
+    connect(m_coveragePanel, &CoveragePanel::clearFilterRequested, this, [this] {
+        applyThreatenedFilter(false, QString());
+        applyIntroducedFilter(false);
+    });
 
     auto *split = new QSplitter(Qt::Vertical, panel);
     split->addWidget(m_treeView);
@@ -1229,6 +1233,10 @@ void MainWindow::applyThreatenedFilter(bool anyThreatened, const QString &status
         && m_treeModel->statusFilter() == normalisedStatus)
         return;
 
+    // The introduced filter and the threatened ones replace each other.
+    if ((anyThreatened || !normalisedStatus.isEmpty()) && m_treeModel->introducedOnly())
+        applyIntroducedFilter(false);
+
     // Switching straight from one threatened filter to another: clear first,
     // exactly as "Clear filter" would, then apply the new one as a fresh
     // filter -- otherwise the tree keeps the previous category's expanded
@@ -1257,6 +1265,24 @@ void MainWindow::applyThreatenedFilter(bool anyThreatened, const QString &status
         m_treeView->scrollToTop();
     }
     m_coveragePanel->setActiveStatusFilter(anyThreatened, normalisedStatus);
+    onTreeSelectionChanged();
+}
+
+void MainWindow::applyIntroducedFilter(bool on)
+{
+    if (m_treeModel->introducedOnly() == on)
+        return;
+    // Replaces any threatened filter, cleared first as "Clear filter" would.
+    if (on && (m_treeModel->threatenedOnly() || !m_treeModel->statusFilter().isEmpty()))
+        applyThreatenedFilter(false, QString());
+
+    m_lastSelectedTaxon = 0;   // see applyThreatenedFilter()
+    mutateTreePreservingState([this, on] { m_treeModel->setIntroducedOnly(on); });
+    if (on) {
+        m_treeView->expandAll();
+        m_treeView->scrollToTop();
+    }
+    m_coveragePanel->setActiveIntroducedFilter(on);
     onTreeSelectionChanged();
 }
 
@@ -1305,11 +1331,13 @@ void MainWindow::onTreeSelectionChanged()
     // "the whole tree" -- selecting a specific node always takes priority.
     const bool anyThreatened = m_treeModel->threatenedOnly();
     const QString statusFilter = m_treeModel->statusFilter();
-    const bool useStatusScope = m_selectedTaxon <= 0 && (anyThreatened || !statusFilter.isEmpty());
-    const QList<qint64> statusTaxa = useStatusScope
-        ? (anyThreatened ? m_treeModel->anyThreatenedTaxa()
-                         : m_treeModel->taxaWithStatus(statusFilter))
-        : QList<qint64>();
+    const bool introduced = m_treeModel->introducedOnly();
+    const bool useStatusScope =
+        m_selectedTaxon <= 0 && (anyThreatened || !statusFilter.isEmpty() || introduced);
+    const QList<qint64> statusTaxa = !useStatusScope ? QList<qint64>()
+                                     : introduced    ? m_treeModel->introducedTaxa()
+                                     : anyThreatened ? m_treeModel->anyThreatenedTaxa()
+                                                     : m_treeModel->taxaWithStatus(statusFilter);
 
     // Both "Photos of Tree Selection" and "My Best Shots" are confined to the
     // active reference tree; a taxon scope narrows them further to one branch.

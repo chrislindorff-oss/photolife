@@ -37,12 +37,16 @@ public:
     // Highlights whichever status is the active tree filter (both
     // false/empty = no filter) and shows/hides the "Clear filter" link.
     void setActiveStatusFilter(bool anyThreatened, const QString &tier);
+    // Highlights the introduced summary while its tree filter is on.
+    void setActiveIntroducedFilter(bool active);
 
 signals:
     // Emitted when the user clicks a specific tier's label (e.g. "Endangered").
     void tierClicked(const QString &status);
     // Emitted when the user clicks the overall "N of M threatened" summary.
     void anyThreatenedClicked();
+    // Emitted when the user clicks the "N of M introduced" summary.
+    void introducedClicked();
     // Emitted when the user clicks the "Clear filter" link.
     void clearFilterRequested();
 
@@ -63,6 +67,10 @@ private:
     QString m_activeTier;
     int m_threatenedWithPhotos = 0;
     int m_threatenedTotal = 0;
+    bool m_activeIntroduced = false;
+    int m_introducedWithPhotos = 0;
+    int m_introducedTotal = 0;
+    int m_speciesTotal = 0;
 };
 
 } // namespace pl
