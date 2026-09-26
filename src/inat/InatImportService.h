@@ -38,9 +38,22 @@ struct SavedFile
     qint64 photoId = 0;
 };
 
+// A photo that couldn't be downloaded, even after InatPhotoDownloader's
+// retries, and why.
+struct FailedDownload
+{
+    ImportItem item;
+    QString error;
+};
+
 // Downloads a chosen set of iNat photos into `destFolder` one at a time,
-// writing EXIF into each via ExifWriter. Does NOT add the folder to the
-// library or stamp provenance on the resulting capture rows itself -- both
+// writing EXIF into each via ExifWriter. A photo that still fails after the
+// downloader's retries is skipped and recorded in failures(); the run only
+// gives up (ok = false) after kMaxConsecutiveFailures in a row, which means
+// the connection itself is down rather than one photo being unlucky.
+//
+// Does NOT add the folder to the library or stamp provenance on the
+// resulting capture rows itself -- both
 // need the caller's help: adding the folder to Settings::watchedRoots() and
 // scanning it is MainWindow's job (the same tail addWatchedFolder() already
 // uses), and provenance can only be stamped once that scan actually creates
@@ -65,7 +78,11 @@ public:
     // saved without embedded metadata rather than crashing.
     void setExifWriter(ExifWriterFn writer) { m_exifWriter = std::move(writer); }
 
+    static constexpr int kMaxConsecutiveFailures = 3;
+
     void start(const QList<ImportItem> &items, const QString &destFolder);
+    // The photos skipped by the last (or current) run.
+    QList<FailedDownload> failures() const { return m_failures; }
     bool isRunning() const { return m_running; }
 
     // Stops after the photo currently downloading (an in-flight transfer
@@ -100,6 +117,8 @@ private:
     QList<ImportItem> m_items;
     int m_index = 0;
     QList<SavedFile> m_saved;
+    QList<FailedDownload> m_failures;
+    int m_consecutiveFailures = 0;
     QSet<QString> m_usedFileNames;   // disambiguates same-observation photos this run
 };
 

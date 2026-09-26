@@ -4,6 +4,8 @@
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -14,9 +16,61 @@
 using namespace pl;
 using namespace pl::inat;
 
+namespace {
+
+// A tiny local HTTP server that answers each request with the next scripted
+// status -- 0 means "accept but never answer", to exercise the transfer
+// timeout. Once the script runs out it keeps repeating the last entry.
+class ScriptedServer : public QTcpServer
+{
+public:
+    explicit ScriptedServer(QList<int> script) : m_script(std::move(script))
+    {
+        listen(QHostAddress::LocalHost);
+        connect(this, &QTcpServer::newConnection, this, [this] {
+            while (QTcpSocket *socket = nextPendingConnection()) {
+                connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+                    m_buffers[socket] += socket->readAll();
+                    if (!m_buffers[socket].contains("\r\n\r\n"))
+                        return;
+                    m_buffers.remove(socket);
+                    respond(socket);
+                });
+            }
+        });
+    }
+
+    QUrl url() const
+    {
+        return QUrl(QStringLiteral("http://127.0.0.1:%1/photo.jpg").arg(serverPort()));
+    }
+    int requests() const { return m_requests; }
+
+private:
+    void respond(QTcpSocket *socket)
+    {
+        const int status = m_script.value(m_requests, m_script.last());
+        ++m_requests;
+        if (status == 0)
+            return;   // hang
+        const QByteArray body = status == 200 ? QByteArrayLiteral("served-bytes") : QByteArray();
+        socket->write("HTTP/1.1 " + QByteArray::number(status) + " X\r\nContent-Length: "
+                      + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n"
+                      + body);
+        socket->disconnectFromHost();
+    }
+
+    QList<int> m_script;
+    int m_requests = 0;
+    QHash<QTcpSocket *, QByteArray> m_buffers;
+};
+
+} // namespace
+
 // InatPhotoDownloader uses a real QNetworkAccessManager, but Qt's own
 // file:// scheme handler lets it read local files without any actual network
-// server -- so these tests exercise the real downloader, not a fake one.
+// server -- so these tests exercise the real downloader, not a fake one. The
+// retry tests use ScriptedServer above for failures file:// can't produce.
 class TestInatImportService : public QObject
 {
     Q_OBJECT
@@ -26,7 +80,12 @@ private slots:
     void cleanup();
 
     void downloadsWritesExifAndStampsProvenance();
-    void downloadFailureFailsTheRunWithoutCrashing();
+    void downloadFailureSkipsThePhotoAndContinues();
+    void consecutiveFailuresStopTheRun();
+    void downloaderRetriesTransientFailures();
+    void downloaderGivesUpAfterMaxAttempts();
+    void downloaderDoesNotRetryPermanentFailures();
+    void downloaderRetriesAStalledTransfer();
     void unsetExifWriterStillSavesTheFile();
     void fallsBackToObservationIdWhenNoNamingDataAvailable();
     void disambiguatesFilenameCollisionsWithinARun();
@@ -142,23 +201,143 @@ void TestInatImportService::downloadsWritesExifAndStampsProvenance()
     QCOMPARE(check.value(1).toLongLong(), qint64(2));
 }
 
-void TestInatImportService::downloadFailureFailsTheRunWithoutCrashing()
+void TestInatImportService::downloadFailureSkipsThePhotoAndContinues()
 {
     InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
     InatImportService service(downloader, QStringLiteral("Test Author"));
     service.setExifWriter([](const QString &, const ExifFields &, QString *) { return true; });
 
-    ImportItem item = makeItem(1, 2);
-    item.downloadUrl =
+    ImportItem missing = makeItem(3, 4);
+    missing.downloadUrl =
         QUrl::fromLocalFile(QDir(m_sourceDir->path()).filePath(QStringLiteral("missing.jpg")))
             .toString();
 
     QSignalSpy spy(&service, &InatImportService::finished);
-    service.start({item}, m_destDir->path());
+    service.start({makeItem(1, 2), missing, makeItem(5, 6)}, m_destDir->path());
+    QVERIFY(spy.wait(5000));
+
+    QCOMPARE(spy.at(0).at(0).toBool(), true);
+    const auto saved = spy.at(0).at(2).value<QList<SavedFile>>();
+    QCOMPARE(saved.size(), 2);
+    QCOMPARE(saved.at(0).photoId, qint64(2));
+    QCOMPARE(saved.at(1).photoId, qint64(6));
+    const QList<FailedDownload> failures = service.failures();
+    QCOMPARE(failures.size(), 1);
+    QCOMPARE(failures.first().item.photoId, qint64(4));
+    QVERIFY(!failures.first().error.isEmpty());
+}
+
+void TestInatImportService::consecutiveFailuresStopTheRun()
+{
+    InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
+    InatImportService service(downloader, QStringLiteral("Test Author"));
+
+    QList<ImportItem> items;
+    for (int i = 0; i < InatImportService::kMaxConsecutiveFailures + 1; ++i) {
+        ImportItem item = makeItem(10 + i, 20 + i);
+        item.downloadUrl = QUrl::fromLocalFile(QDir(m_sourceDir->path()).filePath(
+                                                   QStringLiteral("missing%1.jpg").arg(i)))
+                               .toString();
+        items << item;
+    }
+    items << makeItem(1, 2);   // never reached
+
+    QSignalSpy spy(&service, &InatImportService::finished);
+    service.start(items, m_destDir->path());
     QVERIFY(spy.wait(5000));
 
     QCOMPARE(spy.at(0).at(0).toBool(), false);
     QVERIFY(!spy.at(0).at(1).toString().isEmpty());
+    QVERIFY(spy.at(0).at(2).value<QList<SavedFile>>().isEmpty());
+    QCOMPARE(service.failures().size(), InatImportService::kMaxConsecutiveFailures);
+    QVERIFY(!service.isRunning());
+}
+
+void TestInatImportService::downloaderRetriesTransientFailures()
+{
+    ScriptedServer server({503, 429, 200});
+    InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
+    downloader.setRetryPolicy(4, 10);
+
+    const QString dest = QDir(m_destDir->path()).filePath(QStringLiteral("retried.jpg"));
+    bool done = false, ok = false;
+    downloader.download(server.url(), dest, [&](bool success, const QString &) {
+        ok = success;
+        done = true;
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(done, 5000);
+
+    QVERIFY(ok);
+    QCOMPARE(server.requests(), 3);
+    QFile file(dest);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), QByteArrayLiteral("served-bytes"));
+}
+
+void TestInatImportService::downloaderGivesUpAfterMaxAttempts()
+{
+    ScriptedServer server({503});
+    InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
+    downloader.setRetryPolicy(3, 10);
+
+    const QString dest = QDir(m_destDir->path()).filePath(QStringLiteral("never.jpg"));
+    bool done = false, ok = true;
+    QString error;
+    downloader.download(server.url(), dest, [&](bool success, const QString &e) {
+        ok = success;
+        error = e;
+        done = true;
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(done, 5000);
+
+    QVERIFY(!ok);
+    QCOMPARE(server.requests(), 3);
+    QVERIFY2(error.contains(QStringLiteral("after 3 attempt")), qPrintable(error));
+    QVERIFY(!QFile::exists(dest));
+}
+
+void TestInatImportService::downloaderDoesNotRetryPermanentFailures()
+{
+    ScriptedServer server({404, 200});
+    InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
+    downloader.setRetryPolicy(4, 10);
+
+    bool done = false, ok = true;
+    downloader.download(server.url(), QDir(m_destDir->path()).filePath(QStringLiteral("x.jpg")),
+                        [&](bool success, const QString &) {
+                            ok = success;
+                            done = true;
+                        });
+    QTRY_VERIFY_WITH_TIMEOUT(done, 5000);
+
+    QVERIFY(!ok);
+    QCOMPARE(server.requests(), 1);
+
+    QVERIFY(InatPhotoDownloader::isTransient(QNetworkReply::HostNotFoundError, 0));
+    QVERIFY(InatPhotoDownloader::isTransient(QNetworkReply::RemoteHostClosedError, 0));
+    QVERIFY(!InatPhotoDownloader::isTransient(QNetworkReply::ContentNotFoundError, 0));
+    QVERIFY(InatPhotoDownloader::isTransient(QNetworkReply::UnknownServerError, 502));
+    QVERIFY(!InatPhotoDownloader::isTransient(QNetworkReply::ContentAccessDenied, 403));
+}
+
+void TestInatImportService::downloaderRetriesAStalledTransfer()
+{
+    ScriptedServer server({0, 200});   // first request never answered
+    InatPhotoDownloader downloader(QByteArrayLiteral("test/1"));
+    downloader.setRetryPolicy(3, 10);
+    downloader.setTransferTimeoutMs(300);
+
+    bool done = false, ok = false;
+    downloader.download(server.url(),
+                        QDir(m_destDir->path()).filePath(QStringLiteral("stalled.jpg")),
+                        [&](bool success, const QString &) {
+                            ok = success;
+                            done = true;
+                        });
+    QTRY_VERIFY_WITH_TIMEOUT(done, 5000);
+
+    QVERIFY(ok);
+    QCOMPARE(server.requests(), 2);
 }
 
 void TestInatImportService::unsetExifWriterStillSavesTheFile()

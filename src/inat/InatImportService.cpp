@@ -53,6 +53,8 @@ void InatImportService::start(const QList<ImportItem> &items, const QString &des
     m_items = items;
     m_index = 0;
     m_saved.clear();
+    m_failures.clear();
+    m_consecutiveFailures = 0;
     m_usedFileNames.clear();
 
     emit progress(0, m_items.size());
@@ -85,10 +87,18 @@ void InatImportService::importNext()
     m_downloader.download(
         QUrl(item.downloadUrl), destPath, [this, item, destPath](bool ok, const QString &error) {
             if (!ok) {
-                m_running = false;
-                emit finished(false, error, m_saved);
+                m_failures.append({item, error});
+                ++m_index;
+                if (++m_consecutiveFailures >= kMaxConsecutiveFailures) {
+                    m_running = false;
+                    emit finished(false, error, m_saved);
+                    return;
+                }
+                emit progress(m_index, m_items.size());
+                importNext();
                 return;
             }
+            m_consecutiveFailures = 0;
 
             ExifFields fields;
             fields.author = m_authorName;

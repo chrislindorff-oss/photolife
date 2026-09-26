@@ -308,6 +308,7 @@ private:
     inat::InatImportService *m_inatImportService = nullptr;
     bool m_inatPipelineActive = false;
     bool m_inatPipelineCancelled = false;
+    QList<inat::ImportItem> m_inatPendingItems;   // the running download's selection
     QString m_inatPendingDestFolder;   // set while an import's post-scan steps are still pending
     bool m_rescanQueued = false;       // see requestScan()
     QList<std::function<void()>> m_afterQueuedScan;

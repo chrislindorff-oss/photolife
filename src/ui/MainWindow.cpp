@@ -3167,6 +3167,7 @@ void MainWindow::downloadSelectedInatPhotos(const QList<inat::ImportItem> &items
     }
 
     m_inatPendingDestFolder = destFolder;
+    m_inatPendingItems = items;
     m_inatView->downloadPage()->setDownloadEnabled(false);
     statusBar()->showMessage(tr("Downloading %n photo(s)…", nullptr, items.size()));
 
@@ -3185,18 +3186,54 @@ void MainWindow::onInatImportFinished(bool ok, const QString &error, QList<inat:
     m_inatView->downloadPage()->setDownloadEnabled(true);
     const bool cancelled = !ok && error == QLatin1String("cancelled");
 
+    // Leave whatever didn't arrive (skipped after retries, or never reached)
+    // selected, so trying again is just Download Selected… once more.
+    QSet<qint64> savedPhotoIds;
+    for (const inat::SavedFile &s : std::as_const(saved))
+        savedPhotoIds.insert(s.photoId);
+    QSet<qint64> notDownloaded;
+    for (const inat::ImportItem &item : std::as_const(m_inatPendingItems)) {
+        if (!savedPhotoIds.contains(item.photoId))
+            notDownloaded.insert(item.photoId);
+    }
+    m_inatView->downloadPage()->selectPhotos(notDownloaded);
+
+    const QList<inat::FailedDownload> failures = m_inatImportService->failures();
+    if (!cancelled && !notDownloaded.isEmpty()) {
+        QMessageBox box(QMessageBox::Warning, tr("Download from iNaturalist"),
+                        ok ? tr("%n photo(s) couldn't be downloaded, even after retrying.", nullptr,
+                                int(failures.size()))
+                           : tr("Downloading stopped: %1 photos in a row couldn't be downloaded, "
+                                "so the connection may be down.\n\nLast error: %2")
+                                 .arg(inat::InatImportService::kMaxConsecutiveFailures)
+                                 .arg(error),
+                        QMessageBox::Ok, this);
+        box.setInformativeText(
+            tr("%n photo(s) weren't downloaded. They're still selected on the Download My "
+               "Observations tab — click Download Selected… to try them again.",
+               nullptr, int(notDownloaded.size()))
+            + (saved.isEmpty() ? QString()
+                               : QStringLiteral("\n\n")
+                                     + tr("The %n photo(s) that did download are being added "
+                                          "to your library.",
+                                          nullptr, int(saved.size()))));
+        QStringList details;
+        for (const inat::FailedDownload &f : failures)
+            details << QStringLiteral("%1 (photo %2): %3")
+                           .arg(f.item.taxonName)
+                           .arg(f.item.photoId)
+                           .arg(f.error);
+        box.setDetailedText(details.join(QLatin1Char('\n')));
+        box.exec();
+    }
+
     if (saved.isEmpty()) {
         finishInatPipeline(cancelled ? tr("Download cancelled — no photos were downloaded.")
-                           : ok      ? tr("Nothing was downloaded.")
-                                     : tr("Downloading photos failed: %1").arg(error));
+                           : ok && failures.isEmpty()
+                               ? tr("Nothing was downloaded.")
+                               : tr("No photos could be downloaded from iNaturalist."));
         return;
     }
-    if (!ok && !cancelled)
-        QMessageBox::warning(this, tr("Download from iNaturalist"),
-                             tr("Downloading stopped after %n photo(s): %1\n\nThe photos "
-                                "already downloaded will still be added to your library.",
-                                nullptr, int(saved.size()))
-                                 .arg(error));
 
     statusBar()->showMessage(
         tr("Downloaded %n photo(s) — adding \"%1\" to the library…", nullptr, saved.size())
