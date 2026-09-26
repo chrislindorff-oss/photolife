@@ -44,7 +44,7 @@ private slots:
     void filterToggleKeepsExpansionAndSelection();
     void findTaxaMatchesNameAndCommonName();
     void hiddenRanksReparentChildrenToNearestVisibleAncestor();
-    void statusFilterHidesNonMatchingSubtreesAndFindsSpeciesOnly();
+    void statusFilterHidesNonMatchingSubtreesAndFindsListedTaxa();
     void visibleTaxonIdsReflectsActiveFilters();
     void coverageFilterCompleteKeepsAncestorsAsContext();
     void coverageFilterIncompleteHidesCompleteBranches();
@@ -342,10 +342,10 @@ void TestTaxonomyTreeModel::hiddenRanksReparentChildrenToNearestVisibleAncestor(
     QCOMPARE(model.rowCount(model.index(0, 0)), 2);
 }
 
-void TestTaxonomyTreeModel::statusFilterHidesNonMatchingSubtreesAndFindsSpeciesOnly()
+void TestTaxonomyTreeModel::statusFilterHidesNonMatchingSubtreesAndFindsListedTaxa()
 {
     // An infraspecific taxon under Diuris pardina (900) carrying its own
-    // status, to prove taxaWithStatus()/anyThreatenedTaxa() stay species-only.
+    // status: taxaWithStatus()/anyThreatenedTaxa() include it.
     m_store->upsertTaxon(taxon(950, 900, QStringLiteral("variety"), 5,
                                QStringLiteral("Diuris pardina var. x")));
     m_store->addProjectTaxon(m_projectId, 950, false, false);
@@ -358,15 +358,15 @@ void TestTaxonomyTreeModel::statusFilterHidesNonMatchingSubtreesAndFindsSpeciesO
     cov.byTaxon[800].subtreeStatuses = {QStringLiteral("Endangered")};
     cov.byTaxon[47217].subtreeThreatened = true;
     cov.byTaxon[47217].subtreeStatuses = {QStringLiteral("Endangered")};
-    cov.byTaxon[950].status = QStringLiteral("Vulnerable");   // infraspecific, not rolled up
+    cov.byTaxon[950].status = QStringLiteral("Vulnerable");   // infraspecific
 
     model::TaxonomyTreeModel model(*m_db);
     model.setProject(m_projectId);
     model.setCoverage(cov);
 
     QCOMPARE(model.taxaWithStatus(QStringLiteral("Endangered")), QList<qint64>{qint64(900)});
-    QCOMPARE(model.taxaWithStatus(QStringLiteral("Vulnerable")), QList<qint64>{});   // species-only
-    QCOMPARE(model.anyThreatenedTaxa(), QList<qint64>{qint64(900)});
+    QCOMPARE(model.taxaWithStatus(QStringLiteral("Vulnerable")), QList<qint64>{qint64(950)});
+    QCOMPARE(model.anyThreatenedTaxa(), (QList<qint64>{qint64(900), qint64(950)}));
 
     model.setStatusFilter(QStringLiteral("Endangered"));
     QCOMPARE(model.rowCount(), 1);          // family survives

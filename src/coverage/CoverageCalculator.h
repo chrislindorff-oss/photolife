@@ -18,7 +18,7 @@ struct TaxonCoverage
 
     int speciesTotal = 0;         // rank=="species" nodes in the subtree
     int speciesWithPhotos = 0;    // ...that have a photo somewhere in their own subtree
-    int threatenedTotal = 0;      // species with a non-empty status
+    int threatenedTotal = 0;      // species and lower taxa with a non-empty status
     int threatenedWithPhotos = 0;
     int introducedTotal = 0;      // species introduced in the tree's region
     int introducedWithPhotos = 0;

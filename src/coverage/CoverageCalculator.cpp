@@ -249,22 +249,28 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
             }
         }
 
+        // A listed subspecies, variety or form is a threatened taxon in its
+        // own right -- the conservation lists assess them separately, and
+        // often list only the subspecies -- so threatened counts cover every
+        // leaf rank, not just species. (A species and its listed subspecies
+        // are then two threatened taxa.)
+        if (!n.status.isEmpty() && taxonomy::TaxonomyStore::isLeafRank(n.rank)) {
+            tc.threatenedTotal += 1;
+            tc.subtreeThreatened = true;
+            tc.subtreeStatuses.insert(n.status);
+            if (tc.subtreeHasPhotos)
+                tc.threatenedWithPhotos += 1;
+
+            ProjectCoverage::Tier &tier = coverage.byStatus[n.status];
+            tier.total += 1;
+            if (tc.subtreeHasPhotos)
+                tier.withPhotos += 1;
+        }
+
         if (isSpeciesUnit(n.rank)) {
             tc.speciesTotal += 1;
             if (tc.subtreeHasPhotos)
                 tc.speciesWithPhotos += 1;
-            if (!n.status.isEmpty()) {
-                tc.threatenedTotal += 1;
-                tc.subtreeThreatened = true;
-                tc.subtreeStatuses.insert(n.status);
-                if (tc.subtreeHasPhotos)
-                    tc.threatenedWithPhotos += 1;
-
-                ProjectCoverage::Tier &tier = coverage.byStatus[n.status];
-                tier.total += 1;
-                if (tc.subtreeHasPhotos)
-                    tier.withPhotos += 1;
-            }
             if (tc.introduced) {
                 tc.introducedTotal += 1;
                 if (tc.subtreeHasPhotos)

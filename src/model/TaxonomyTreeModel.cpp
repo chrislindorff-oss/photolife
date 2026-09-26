@@ -262,7 +262,7 @@ QList<qint64> TaxonomyTreeModel::taxaWithStatus(const QString &status) const
     if (status.isEmpty())
         return out;
     for (const taxonomy::TreeNode &tn : m_flat) {
-        if (tn.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) != 0)
+        if (!tn.isLeafRank)
             continue;
         if (m_coverage.byTaxon.value(tn.inatId).status == status)
             out << tn.inatId;
@@ -274,7 +274,7 @@ QList<qint64> TaxonomyTreeModel::anyThreatenedTaxa() const
 {
     QList<qint64> out;
     for (const taxonomy::TreeNode &tn : m_flat) {
-        if (tn.rank.compare(QLatin1String("species"), Qt::CaseInsensitive) != 0)
+        if (!tn.isLeafRank)
             continue;
         if (!m_coverage.byTaxon.value(tn.inatId).status.isEmpty())
             out << tn.inatId;

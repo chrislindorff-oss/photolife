@@ -72,13 +72,13 @@ public:
     void setCoverageFilter(CoverageFilter filter);
     CoverageFilter coverageFilter() const { return m_coverageFilter; }
 
-    // iNat ids of species (rank == "species" exactly, matching how
-    // ProjectCoverage::byStatus/threatenedTotal are tallied) currently
-    // carrying this exact status, ignoring active filters -- scans the whole
-    // project like findTaxa() does.
+    // iNat ids of species and lower taxa (subspecies, varieties ... --
+    // matching how ProjectCoverage::byStatus/threatenedTotal are tallied)
+    // currently carrying this exact status, ignoring active filters -- scans
+    // the whole project like findTaxa() does.
     QList<qint64> taxaWithStatus(const QString &status) const;
 
-    // Same, but any non-empty status (species-only, matching threatenedTotal).
+    // Same, but any non-empty status (species and lower, like threatenedTotal).
     QList<qint64> anyThreatenedTaxa() const;
 
     // The distinct ranks present in the current project's tree, coarsest first

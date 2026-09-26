@@ -150,7 +150,7 @@ void CoveragePanel::setCoverage(const coverage::ProjectCoverage &coverage)
             m_tiers->addRow(label, new QLabel(tr("%1 of %2").arg(t.withPhotos).arg(t.total), this));
         }
     } else {
-        m_threatened->setText(tr("No threatened species listed."));
+        m_threatened->setText(tr("No threatened taxa listed."));
     }
 
     if (coverage.introducedTotal > 0) {
@@ -195,7 +195,7 @@ void CoveragePanel::applyHighlight()
 
     if (m_threatenedTotal > 0) {
         const QString summary =
-            tr("%1 of %2 threatened species photographed")
+            tr("%1 of %2 threatened taxa photographed")
                 .arg(m_threatenedWithPhotos)
                 .arg(m_threatenedTotal);
         m_threatened->setText(m_activeAny

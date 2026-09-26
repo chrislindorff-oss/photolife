@@ -341,8 +341,7 @@ void TestCoverageCalculator::rollsUpSubtreeStatusForFiltering()
              QStringLiteral("Endangered"));
     addTaxon(20, 1, QStringLiteral("genus"), QStringLiteral("Thelymitra"));
     addTaxon(21, 20, QStringLiteral("species"), QStringLiteral("Thelymitra ixioides"));
-    // An infraspecific taxon can carry its own status without being tallied
-    // into byStatus/threatenedTotal (that rollup is species-only).
+    // A listed variety is a threatened taxon in its own right.
     addTaxon(22, 21, QStringLiteral("variety"), QStringLiteral("Thelymitra ixioides var. x"),
              QStringLiteral("Vulnerable"));
 
@@ -355,14 +354,16 @@ void TestCoverageCalculator::rollsUpSubtreeStatusForFiltering()
     QVERIFY(cov.byTaxon.value(10).subtreeStatuses.contains(QStringLiteral("Endangered")));
     QVERIFY(cov.byTaxon.value(1).subtreeStatuses.contains(QStringLiteral("Endangered")));
 
-    // The variety's own status is recorded...
+    // The variety's own status counts: in the totals, its tier, and its
+    // ancestors' subtree rollup (so the threatened filter shows it).
     QCOMPARE(cov.byTaxon.value(22).status, QStringLiteral("Vulnerable"));
-    // ...but since it isn't a species, it doesn't count toward the species
-    // tally, and its ancestors' subtree rollup stays clear of it.
-    QCOMPARE(cov.threatenedTotal, 1);
-    QVERIFY(!cov.byStatus.contains(QStringLiteral("Vulnerable")));
-    QVERIFY(!cov.byTaxon.value(20).subtreeThreatened);
-    QVERIFY(!cov.byTaxon.value(21).subtreeThreatened);
+    QCOMPARE(cov.threatenedTotal, 2);
+    QCOMPARE(cov.byStatus.value(QStringLiteral("Vulnerable")).total, 1);
+    QCOMPARE(cov.byTaxon.value(21).threatenedTotal, 1);   // its species, itself unlisted
+    QVERIFY(cov.byTaxon.value(20).subtreeThreatened);
+    QVERIFY(cov.byTaxon.value(21).subtreeStatuses.contains(QStringLiteral("Vulnerable")));
+    // The species count is unchanged: still species only.
+    QCOMPARE(cov.speciesTotal, 3);
 }
 
 void TestCoverageCalculator::infraspeciesPhotosCountForTheirSpecies()
