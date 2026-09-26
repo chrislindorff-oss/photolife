@@ -1229,6 +1229,16 @@ void MainWindow::applyThreatenedFilter(bool anyThreatened, const QString &status
         && m_treeModel->statusFilter() == normalisedStatus)
         return;
 
+    // Switching straight from one threatened filter to another: clear first,
+    // exactly as "Clear filter" would, then apply the new one as a fresh
+    // filter -- otherwise the tree keeps the previous category's expanded
+    // branches and the new category's taxa stay folded away.
+    if (wasActive && (anyThreatened || !normalisedStatus.isEmpty())) {
+        applyThreatenedFilter(false, QString());
+        applyThreatenedFilter(anyThreatened, normalisedStatus);
+        return;
+    }
+
     // mutateTreePreservingState() normally re-selects m_lastSelectedTaxon when
     // nothing is currently selected; that must not happen here, since "no
     // node selected" is exactly the trigger for the aggregate-scope path in
@@ -1240,9 +1250,12 @@ void MainWindow::applyThreatenedFilter(bool anyThreatened, const QString &status
     });
 
     const bool nowActive = anyThreatened || !normalisedStatus.isEmpty();
-    if (nowActive && !wasActive)
-        m_treeView->expandAll();   // the pruned tree is small; unlike
-                                    // photographedOnly, a full expand is cheap
+    if (nowActive) {
+        // Reveal every taxon in the category: the pruned tree is small, so
+        // unlike photographedOnly a full expand is cheap.
+        m_treeView->expandAll();
+        m_treeView->scrollToTop();
+    }
     m_coveragePanel->setActiveStatusFilter(anyThreatened, normalisedStatus);
     onTreeSelectionChanged();
 }
