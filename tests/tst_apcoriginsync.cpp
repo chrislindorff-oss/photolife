@@ -36,6 +36,7 @@ private slots:
     void parsesDistributionQualifiers();
     void readsAcceptedNamesAndSynonyms();
     void recordsOriginsForCachedTaxa();
+    void cancelDuringDownloadKeepsNoPartialFile();
 };
 
 void TestApcOriginSync::parsesDistributionQualifiers()
@@ -105,9 +106,14 @@ void TestApcOriginSync::recordsOriginsForCachedTaxa()
     ApcOriginSync sync(store, dir.filePath(QStringLiteral("cache")), QByteArrayLiteral("test"));
     sync.setDownloadUrl(QUrl::fromLocalFile(source));
     QSignalSpy spy(&sync, &ApcOriginSync::finished);
+    QSignalSpy progress(&sync, &ApcOriginSync::progress);
     sync.start();
     QVERIFY(spy.wait(10000));
     QVERIFY2(spy.at(0).at(0).toBool(), qPrintable(spy.at(0).at(1).toString()));
+    // downloading, reading, saving -- with rising percentages
+    QCOMPARE(progress.size(), 3);
+    QVERIFY(progress.at(0).at(1).toInt() < progress.at(1).at(1).toInt());
+    QVERIFY(progress.at(1).at(1).toInt() < progress.at(2).at(1).toInt());
     QCOMPARE(spy.at(0).at(2).toInt(), 3);
     QVERIFY(QFile::exists(sync.csvPath()));   // kept for re-matching
 
@@ -134,6 +140,32 @@ void TestApcOriginSync::recordsOriginsForCachedTaxa()
     QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
     QVERIFY(q.exec(QStringLiteral("SELECT COUNT(*) FROM taxon_origin")) && q.next());
     QCOMPARE(q.value(0).toInt(), 8);
+}
+
+void TestApcOriginSync::cancelDuringDownloadKeepsNoPartialFile()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString source = dir.filePath(QStringLiteral("export.csv"));
+    {
+        QFile f(source);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(kCsv);
+    }
+    Database db;
+    QVERIFY(db.open(QStringLiteral(":memory:")));
+    TaxonomyStore store(db.connectionName());
+
+    ApcOriginSync sync(store, dir.filePath(QStringLiteral("cache")), QByteArrayLiteral("test"));
+    sync.setDownloadUrl(QUrl::fromLocalFile(source));
+    QSignalSpy spy(&sync, &ApcOriginSync::finished);
+    sync.start();
+    sync.cancel();
+    QVERIFY(spy.wait(10000));
+    QVERIFY(!spy.at(0).at(0).toBool());
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("cancelled"));
+    QVERIFY(!QFile::exists(sync.csvPath()));
+    QVERIFY(!sync.isRunning());
 }
 
 QTEST_GUILESS_MAIN(TestApcOriginSync)

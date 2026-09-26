@@ -41,6 +41,9 @@ public:
 
     void setBaseUrl(const QString &url) { m_baseUrl = url; }
     void start();
+    // Stops after the request in flight; lists already saved stay saved.
+    // finished() then reports ok = false with error "cancelled".
+    void cancel() { m_cancelled = true; }
     bool isRunning() const { return m_running; }
 
     // The iNaturalist place for an ALA list's region ("Victoria",
@@ -48,6 +51,8 @@ public:
     static std::optional<qint64> placeForRegion(const QString &region);
 
 signals:
+    // Starting list `index` (0-based) of `count`.
+    void progress(int index, int count, const QString &listName);
     // `matched` statuses recorded across all lists.
     void finished(bool ok, const QString &error, int lists, int matched);
 
@@ -68,6 +73,8 @@ private:
     TaxonomyStore &m_store;
     QString m_baseUrl;
     bool m_running = false;
+    bool m_cancelled = false;
+    bool checkCancelled();
     QList<List> m_lists;
     int m_listIndex = 0;
     int m_offset = 0;

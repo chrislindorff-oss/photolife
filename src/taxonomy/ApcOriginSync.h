@@ -10,6 +10,7 @@
 
 class QIODevice;
 class QNetworkAccessManager;
+class QNetworkReply;
 
 namespace pl::taxonomy {
 
@@ -43,6 +44,10 @@ public:
     // Downloads the CSV if it's missing, stale or `forceDownload`, then
     // matches it against the cached taxa.
     void start(bool forceDownload = false);
+    // Aborts a download in progress (the file on disk is kept as it was) or
+    // discards a parse in progress; finished() then reports ok = false with
+    // error "cancelled".
+    void cancel();
     bool isRunning() const { return m_running; }
     QString csvPath() const;
 
@@ -57,7 +62,10 @@ public:
     static QHash<QString, QString> readTaxonCsv(QIODevice &device);
 
 signals:
-    void progress(const QString &phase);
+    // `percent`: a rough share of the whole run done (download ~85%).
+    void progress(const QString &phase, int percent);
+    // While downloading; `total` is -1 when the server doesn't say.
+    void downloadProgress(qint64 received, qint64 total);
     // `matched` taxa given an origin.
     void finished(bool ok, const QString &error, int matched);
 
@@ -72,6 +80,8 @@ private:
     QUrl m_url;
     QNetworkAccessManager *m_nam = nullptr;
     bool m_running = false;
+    bool m_cancelled = false;
+    QNetworkReply *m_reply = nullptr;   // the download in flight, if any
 };
 
 } // namespace pl::taxonomy

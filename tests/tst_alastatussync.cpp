@@ -59,6 +59,7 @@ private slots:
 
     void recordsAuthoritativeStateListsForCachedTaxa();
     void mapsRegionsToINaturalistPlaces();
+    void cancelStopsTheRun();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -138,10 +139,15 @@ void TestAlaStatusSync::recordsAuthoritativeStateListsForCachedTaxa()
     AlaStatusSync sync(*m_http, *m_store);
     sync.setBaseUrl(QStringLiteral("https://api.test/specieslist/ws"));
     QSignalSpy spy(&sync, &AlaStatusSync::finished);
+    QSignalSpy progress(&sync, &AlaStatusSync::progress);
     sync.start();
     QVERIFY(spy.wait(10000));
 
     QVERIFY2(spy.at(0).at(0).toBool(), qPrintable(spy.at(0).at(1).toString()));
+    QCOMPARE(progress.size(), 1);   // one list
+    QCOMPARE(progress.at(0).at(0).toInt(), 0);
+    QCOMPARE(progress.at(0).at(1).toInt(), 1);
+    QCOMPARE(progress.at(0).at(2).toString(), QStringLiteral("Victoria : Conservation Status"));
     QCOMPARE(spy.at(0).at(2).toInt(), 1);   // only the authoritative, mapped list
     QCOMPARE(spy.at(0).at(3).toInt(), 3);
     QCOMPARE(m_transport->received.size(), 3);   // lists + two pages
@@ -181,6 +187,27 @@ void TestAlaStatusSync::mapsRegionsToINaturalistPlaces()
              qint64(6827));
     QVERIFY(!AlaStatusSync::placeForRegion(QStringLiteral("NZ")));
     QVERIFY(!AlaStatusSync::placeForRegion(QString()));
+}
+
+void TestAlaStatusSync::cancelStopsTheRun()
+{
+    auto owned = std::make_unique<FakeTransport>();
+    owned->responder = [](const Transport::Request &, int) { return FakeTransport::ok(lists()); };
+    m_transport = owned.get();
+    m_http = std::make_unique<HttpClient>(std::move(owned), nullptr);
+    m_http->setMinRequestIntervalMs(0);
+
+    AlaStatusSync sync(*m_http, *m_store);
+    sync.setBaseUrl(QStringLiteral("https://api.test/specieslist/ws"));
+    QSignalSpy spy(&sync, &AlaStatusSync::finished);
+    sync.start();
+    sync.cancel();
+    QVERIFY(spy.wait(5000));
+    QVERIFY(!spy.at(0).at(0).toBool());
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("cancelled"));
+    QVERIFY(!sync.isRunning());
+    QCOMPARE(m_transport->received.size(), 1);   // no list items were fetched
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM taxon_status")), 0);
 }
 
 QTEST_GUILESS_MAIN(TestAlaStatusSync)

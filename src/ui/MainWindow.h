@@ -161,6 +161,10 @@ private:
     // after a tree gains taxa -- re-matched against what's already fetched.
     void syncAustralianSources(bool force, bool rematchOnly);
     bool hasAustralianTree() const;
+    // Reference Tree menu: re-downloads both, in a progress window.
+    void updateAustralianSourcesNow();
+    void updateSourceSyncProgress();
+    void sourceSyncPartFinished();
     void newReferenceTree();
     void refreshReferenceTree();
     void addTaxonToReferenceTree();
@@ -321,7 +325,19 @@ private:
     taxonomy::OriginFetcher *m_originFetcher = nullptr;
     taxonomy::AlaStatusSync *m_alaSync = nullptr;
     taxonomy::ApcOriginSync *m_apcSync = nullptr;
-    bool m_reportSourceSync = false;   // the user asked: report the outcome
+    // The progress window for a user-requested update (updateAustralianSourcesNow).
+    struct SourceSyncProgress
+    {
+        bool active = false;   // the window is up
+        bool alaDone = false;
+        bool apcDone = false;
+        int alaIndex = 0;
+        int alaCount = 0;
+        double apcFraction = 0.0;
+        QString alaLine;
+        QString apcLine;
+    };
+    SourceSyncProgress m_sourceSync;
     checklist::ChecklistImporter *m_checklistImporter = nullptr;
     geo::LocalityFetcher *m_localityFetcher = nullptr;
     QAction *m_fetchLocalitiesAction = nullptr;

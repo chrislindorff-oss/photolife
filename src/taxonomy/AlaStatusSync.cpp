@@ -65,6 +65,7 @@ void AlaStatusSync::start()
     if (m_running)
         return;
     m_running = true;
+    m_cancelled = false;
     m_lists.clear();
     m_listIndex = 0;
     m_matched = 0;
@@ -75,6 +76,8 @@ void AlaStatusSync::start()
     q.addQueryItem(QStringLiteral("max"), QStringLiteral("100"));
     url.setQuery(q);
     m_http.get(url, [this](net::HttpResponse resp) {
+        if (checkCancelled())
+            return;
         QString error;
         const QJsonDocument doc = parseJson(resp, &error);
         if (!error.isEmpty()) {
@@ -113,7 +116,16 @@ void AlaStatusSync::fetchNextList()
     }
     m_offset = 0;
     m_items.clear();
+    emit progress(m_listIndex, int(m_lists.size()), m_lists.at(m_listIndex).name);
     fetchPage();
+}
+
+bool AlaStatusSync::checkCancelled()
+{
+    if (!m_cancelled)
+        return false;
+    fail(QStringLiteral("cancelled"));
+    return true;
 }
 
 void AlaStatusSync::fetchPage()
@@ -126,6 +138,8 @@ void AlaStatusSync::fetchPage()
     q.addQueryItem(QStringLiteral("includeKVP"), QStringLiteral("true"));
     url.setQuery(q);
     m_http.get(url, [this](net::HttpResponse resp) {
+        if (checkCancelled())
+            return;
         QString error;
         const QJsonDocument doc = parseJson(resp, &error);
         if (!error.isEmpty()) {

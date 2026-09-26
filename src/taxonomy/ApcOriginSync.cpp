@@ -184,6 +184,7 @@ void ApcOriginSync::start(bool forceDownload)
     if (m_running)
         return;
     m_running = true;
+    m_cancelled = false;
     const QFileInfo info(csvPath());
     const bool stale = !info.exists() || info.size() == 0
                        || info.lastModified().daysTo(QDateTime::currentDateTime()) > kMaxAgeDays;
@@ -191,6 +192,15 @@ void ApcOriginSync::start(bool forceDownload)
         download();
     else
         parseAndStore();
+}
+
+void ApcOriginSync::cancel()
+{
+    if (!m_running)
+        return;
+    m_cancelled = true;
+    if (m_reply)
+        m_reply->abort();   // finished() then fires with OperationCanceledError
 }
 
 void ApcOriginSync::download()
@@ -201,7 +211,7 @@ void ApcOriginSync::download()
         fail(QStringLiteral("could not write %1").arg(csvPath()));
         return;
     }
-    emit progress(tr("Downloading the Australian Plant Census…"));
+    emit progress(tr("downloading…"), 0);
 
     QNetworkRequest req(m_url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
@@ -210,10 +220,18 @@ void ApcOriginSync::download()
     if (!m_userAgent.isEmpty())
         req.setHeader(QNetworkRequest::UserAgentHeader, m_userAgent);
     QNetworkReply *reply = m_nam->get(req);
+    m_reply = reply;
     connect(reply, &QNetworkReply::readyRead, this,
             [reply, file] { file->write(reply->readAll()); });
+    connect(reply, &QNetworkReply::downloadProgress, this, &ApcOriginSync::downloadProgress);
     connect(reply, &QNetworkReply::finished, this, [this, reply, file] {
         reply->deleteLater();
+        m_reply = nullptr;
+        if (m_cancelled) {
+            file->cancelWriting();
+            fail(QStringLiteral("cancelled"));
+            return;
+        }
         file->write(reply->readAll());
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (reply->error() != QNetworkReply::NoError || (status != 0 && status != 200)) {
@@ -231,10 +249,14 @@ void ApcOriginSync::download()
 
 void ApcOriginSync::parseAndStore()
 {
-    emit progress(tr("Reading the Australian Plant Census…"));
+    emit progress(tr("reading the census…"), 85);
     auto *watcher = new QFutureWatcher<QHash<QString, QString>>(this);
     connect(watcher, &QFutureWatcher<QHash<QString, QString>>::finished, this, [this, watcher] {
         watcher->deleteLater();
+        if (m_cancelled) {
+            fail(QStringLiteral("cancelled"));
+            return;
+        }
         const QHash<QString, QString> byName = watcher->result();
         if (byName.isEmpty()) {
             fail(QStringLiteral("the Australian Plant Census file had no usable rows"));
@@ -253,6 +275,9 @@ void ApcOriginSync::parseAndStore()
                 matched.insert(it.value());
             }
         }
+        emit progress(tr("saving native/introduced status for %n taxa…", nullptr,
+                         int(matched.size())),
+                      95);
         if (m_store.replaceOriginsFromSource(kSource, rows) < 0) {
             fail(QStringLiteral("could not save the Australian Plant Census origins"));
             return;
