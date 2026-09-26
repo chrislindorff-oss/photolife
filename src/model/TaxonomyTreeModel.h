@@ -33,7 +33,13 @@ public:
         HasPhotosRole,
         StatusRole,
         NameRole,       // accepted scientific name only (no common-name suffix)
+        ContextOnlyRole,   // shown only as the path to a coverage-filter match
     };
+
+    // Filters the visible-rank taxa by whether their coverage is complete:
+    // every species below photographed ("X / X"), or, for a species or
+    // lower-rank taxon with no species beneath it, the taxon photographed.
+    enum class CoverageFilter { All, Complete, Incomplete };
 
     explicit TaxonomyTreeModel(pl::Database &db, QObject *parent = nullptr);
     ~TaxonomyTreeModel() override;
@@ -57,6 +63,14 @@ public:
     // this status string anywhere in its subtree.
     void setStatusFilter(const QString &status);
     QString statusFilter() const { return m_statusFilter; }
+
+    // Keeps only visible-rank taxa matching the filter (see CoverageFilter),
+    // plus the ancestors needed to reach them. Those ancestors don't match
+    // themselves -- a complete genus in an incomplete family -- so they are
+    // flagged ContextOnlyRole and drawn muted. Taxa of hidden ranks never
+    // count as matches.
+    void setCoverageFilter(CoverageFilter filter);
+    CoverageFilter coverageFilter() const { return m_coverageFilter; }
 
     // iNat ids of species (rank == "species" exactly, matching how
     // ProjectCoverage::byStatus/threatenedTotal are tallied) currently
@@ -107,11 +121,13 @@ private:
         pl::taxonomy::TreeNode data;
         Node *parent = nullptr;
         std::vector<std::unique_ptr<Node>> children;
+        bool contextOnly = false;
     };
 
     Node *nodeFor(const QModelIndex &index) const;
     void rebuild();
     void emitCoverageDataChanged(const QModelIndex &parent);
+    bool isCoverageComplete(qint64 inatId) const;
 
     pl::Database &m_db;
     int m_projectId = -1;
@@ -122,6 +138,7 @@ private:
     bool m_photographedOnly = false;
     bool m_threatenedOnly = false;
     QString m_statusFilter;
+    CoverageFilter m_coverageFilter = CoverageFilter::All;
     QSet<QString> m_hiddenRanks;
 };
 

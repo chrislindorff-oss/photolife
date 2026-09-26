@@ -822,6 +822,27 @@ void MainWindow::buildReferenceTreeDock()
         onTreeSelectionChanged();
     });
 
+    m_coverageFilterCombo = new QComboBox(panel);
+    m_coverageFilterCombo->addItem(tr("All coverage"),
+                                   int(model::TaxonomyTreeModel::CoverageFilter::All));
+    m_coverageFilterCombo->addItem(tr("Fully covered"),
+                                   int(model::TaxonomyTreeModel::CoverageFilter::Complete));
+    m_coverageFilterCombo->addItem(tr("Not fully covered"),
+                                   int(model::TaxonomyTreeModel::CoverageFilter::Incomplete));
+    m_coverageFilterCombo->setToolTip(
+        tr("Show only the taxa whose Coverage is complete (X / X, or ✔ for a species) or "
+           "incomplete, among the ranks you've chosen to show. Greyed rows aren't a match "
+           "themselves — they're just the path to one."));
+    connect(m_coverageFilterCombo, &QComboBox::currentIndexChanged, this, [this](int i) {
+        const auto filter = model::TaxonomyTreeModel::CoverageFilter(
+            m_coverageFilterCombo->itemData(i).toInt());
+        const bool wasCollapsed = collectExpandedTaxa().isEmpty();
+        mutateTreePreservingState([this, filter] { m_treeModel->setCoverageFilter(filter); });
+        if (filter != model::TaxonomyTreeModel::CoverageFilter::All && wasCollapsed)
+            m_treeView->expandToDepth(6);   // one-shot reveal of the matches
+        onTreeSelectionChanged();
+    });
+
     m_rankFilterButton = new QToolButton(panel);
     m_rankFilterButton->setText(tr("Ranks…"));
     m_rankFilterButton->setToolTip(tr("Choose which taxonomic ranks to show in the tree"));
@@ -864,7 +885,11 @@ void MainWindow::buildReferenceTreeDock()
 
     layout->addWidget(m_projectCombo);
     layout->addWidget(m_treeSearch);
-    layout->addWidget(m_photographedOnly);
+    auto *filterRow = new QHBoxLayout;
+    filterRow->addWidget(m_photographedOnly);
+    filterRow->addStretch(1);
+    filterRow->addWidget(m_coverageFilterCombo);
+    layout->addLayout(filterRow);
     layout->addWidget(m_rankFilterButton);
     layout->addWidget(split, 1);
     dock->setWidget(panel);

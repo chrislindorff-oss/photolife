@@ -45,6 +45,11 @@ private slots:
     void hiddenRanksReparentChildrenToNearestVisibleAncestor();
     void statusFilterHidesNonMatchingSubtreesAndFindsSpeciesOnly();
     void visibleTaxonIdsReflectsActiveFilters();
+    void coverageFilterCompleteKeepsAncestorsAsContext();
+    void coverageFilterIncompleteHidesCompleteBranches();
+    void coverageFilterIgnoresHiddenRanks();
+    void coverageFilterCombinesWithPhotographedOnly();
+    void coverageFilterFollowsCoverageUpdates();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -53,6 +58,39 @@ private:
 
     void seedProject();
 };
+
+namespace {
+
+// Diuris (1 / 1) is fully covered, Pterostylis (0 / 1) isn't, so the family
+// is at 1 / 2.
+coverage::ProjectCoverage partialCoverage()
+{
+    coverage::ProjectCoverage cov;
+    auto set = [&](qint64 id, int total, int with) {
+        auto &c = cov.byTaxon[id];
+        c.speciesTotal = total;
+        c.speciesWithPhotos = with;
+        c.subtreeHasPhotos = with > 0;
+    };
+    set(47217, 2, 1);
+    set(800, 1, 1);
+    set(900, 1, 1);
+    set(801, 1, 0);
+    set(901, 1, 0);
+    return cov;
+}
+
+QString nameAt(const QAbstractItemModel &m, const QModelIndex &idx)
+{
+    return m.data(idx, model::TaxonomyTreeModel::NameRole).toString();
+}
+
+bool contextAt(const QAbstractItemModel &m, const QModelIndex &idx)
+{
+    return m.data(idx, model::TaxonomyTreeModel::ContextOnlyRole).toBool();
+}
+
+} // namespace
 
 void TestTaxonomyTreeModel::init()
 {
@@ -376,6 +414,113 @@ void TestTaxonomyTreeModel::visibleTaxonIdsReflectsActiveFilters()
 
     model.setHiddenRanks({QStringLiteral("genus")});
     QCOMPARE(ids(), (QSet<qint64>{47217, 900, 901}));   // both genera collapsed out of the tree
+}
+
+void TestTaxonomyTreeModel::coverageFilterCompleteKeepsAncestorsAsContext()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::Fatal);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::Complete);
+
+    QCOMPARE(model.rowCount(), 1);
+    const QModelIndex family = model.index(0, 0);
+    QCOMPARE(nameAt(model, family), QStringLiteral("Orchidaceae"));
+    QVERIFY(contextAt(model, family));   // 1 / 2: only the path to Diuris
+    QVERIFY(model.data(family, Qt::ForegroundRole).isValid());   // drawn muted
+
+    QCOMPARE(model.rowCount(family), 1);
+    const QModelIndex diuris = model.index(0, 0, family);
+    QCOMPARE(nameAt(model, diuris), QStringLiteral("Diuris"));
+    QVERIFY(!contextAt(model, diuris));
+    QVERIFY(!model.data(diuris, Qt::ForegroundRole).isValid());
+    QCOMPARE(model.rowCount(diuris), 1);   // Diuris pardina, photographed
+    QVERIFY(!contextAt(model, model.index(0, 0, diuris)));
+
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::All);
+    QCOMPARE(model.rowCount(model.index(0, 0)), 2);
+    QVERIFY(!contextAt(model, model.index(0, 0)));
+}
+
+void TestTaxonomyTreeModel::coverageFilterIncompleteHidesCompleteBranches()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::Incomplete);
+
+    QCOMPARE(model.rowCount(), 1);
+    const QModelIndex family = model.index(0, 0);
+    QVERIFY(!contextAt(model, family));   // 1 / 2 is itself incomplete
+    QCOMPARE(model.rowCount(family), 1);
+    const QModelIndex pterostylis = model.index(0, 0, family);
+    QCOMPARE(nameAt(model, pterostylis), QStringLiteral("Pterostylis"));
+    QCOMPARE(model.rowCount(pterostylis), 1);
+    QCOMPARE(nameAt(model, model.index(0, 0, pterostylis)), QStringLiteral("Pterostylis nutans"));
+    QVERIFY(!model.indexForTaxon(800).isValid());   // Diuris is complete
+}
+
+void TestTaxonomyTreeModel::coverageFilterIgnoresHiddenRanks()
+{
+    // Diuris now has a second, unphotographed species (not in the tree), so
+    // it's incomplete even though its one listed species is photographed.
+    coverage::ProjectCoverage cov = partialCoverage();
+    cov.byTaxon[800].speciesTotal = 2;
+    cov.byTaxon[47217].speciesTotal = 3;
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::Complete);
+
+    // With species shown, the photographed Diuris pardina matches, with
+    // Diuris and the family as its path.
+    QVERIFY(model.indexForTaxon(900).isValid());
+    QVERIFY(contextAt(model, model.indexForTaxon(800)));
+
+    // With species hidden, only family and genus rows are filtered: neither
+    // is complete, so nothing is left -- not an empty context-only Diuris.
+    model.setHiddenRanks({QStringLiteral("species")});
+    QCOMPARE(model.rowCount(), 0);
+
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::Incomplete);
+    QCOMPARE(model.rowCount(), 1);
+    QCOMPARE(model.rowCount(model.index(0, 0)), 2);   // both genera are incomplete
+}
+
+void TestTaxonomyTreeModel::coverageFilterCombinesWithPhotographedOnly()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    model.setPhotographedOnly(true);
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::Incomplete);
+
+    // Partly covered only: the family (1 / 2). Pterostylis has no photos;
+    // Diuris is complete.
+    QCOMPARE(model.rowCount(), 1);
+    QCOMPARE(nameAt(model, model.index(0, 0)), QStringLiteral("Orchidaceae"));
+    QCOMPARE(model.rowCount(model.index(0, 0)), 0);
+}
+
+void TestTaxonomyTreeModel::coverageFilterFollowsCoverageUpdates()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    model.setCoverageFilter(model::TaxonomyTreeModel::CoverageFilter::Incomplete);
+    QVERIFY(model.indexForTaxon(901).isValid());
+
+    // Pterostylis nutans gets photographed: everything is now complete.
+    coverage::ProjectCoverage cov = partialCoverage();
+    for (qint64 id : {qint64(801), qint64(901)}) {
+        cov.byTaxon[id].speciesWithPhotos = 1;
+        cov.byTaxon[id].subtreeHasPhotos = true;
+    }
+    cov.byTaxon[47217].speciesWithPhotos = 2;
+    model.setCoverage(cov);
+    QCOMPARE(model.rowCount(), 0);
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

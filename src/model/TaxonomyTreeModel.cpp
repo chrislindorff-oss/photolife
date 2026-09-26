@@ -33,7 +33,8 @@ void TaxonomyTreeModel::setProject(int projectId)
 void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
 {
     m_coverage = coverage;
-    if (m_photographedOnly || m_threatenedOnly || !m_statusFilter.isEmpty()) {
+    if (m_photographedOnly || m_threatenedOnly || !m_statusFilter.isEmpty()
+        || m_coverageFilter != CoverageFilter::All) {
         // The visible set depends on coverage, so the tree structure changes.
         rebuild();
         return;
@@ -78,6 +79,22 @@ void TaxonomyTreeModel::setStatusFilter(const QString &status)
     rebuild();
 }
 
+void TaxonomyTreeModel::setCoverageFilter(CoverageFilter filter)
+{
+    if (m_coverageFilter == filter)
+        return;
+    m_coverageFilter = filter;
+    rebuild();
+}
+
+bool TaxonomyTreeModel::isCoverageComplete(qint64 inatId) const
+{
+    const auto &cov = m_coverage.byTaxon.value(inatId);
+    if (cov.speciesTotal > 0)
+        return cov.speciesWithPhotos == cov.speciesTotal;
+    return cov.subtreeHasPhotos;
+}
+
 QStringList TaxonomyTreeModel::availableRanks() const
 {
     QStringList ranks;
@@ -118,6 +135,28 @@ void TaxonomyTreeModel::rebuild()
         return true;
     };
 
+    // The coverage filter isn't monotone up the tree the way the flags above
+    // are -- a complete genus can sit in an incomplete family -- so work out
+    // its matches first, then keep their ancestors as context. m_flat is
+    // parents-first, so walking it backwards reaches every child before its
+    // parent.
+    const bool coverageFiltered = m_coverageFilter != CoverageFilter::All;
+    QSet<qint64> matches, wanted;
+    if (coverageFiltered) {
+        const bool wantComplete = m_coverageFilter == CoverageFilter::Complete;
+        for (auto it = m_flat.crbegin(); it != m_flat.crend(); ++it) {
+            const taxonomy::TreeNode &tn = *it;
+            if (!keep(tn.inatId))
+                continue;
+            if (!m_hiddenRanks.contains(tn.rank)
+                && isCoverageComplete(tn.inatId) == wantComplete)
+                matches.insert(tn.inatId);
+            if ((matches.contains(tn.inatId) || wanted.contains(tn.inatId)) && tn.parentInatId)
+                wanted.insert(*tn.parentInatId);
+        }
+        wanted.unite(matches);
+    }
+
     // m_flat is ordered parents-before-children (by rank_level), so a single
     // pass can resolve each kept taxon's display parent as we go. A taxon whose
     // own rank is hidden isn't materialized as a Node; instead its resolved
@@ -128,6 +167,8 @@ void TaxonomyTreeModel::rebuild()
 
     for (const taxonomy::TreeNode &tn : m_flat) {
         if (!keep(tn.inatId))
+            continue;
+        if (coverageFiltered && !wanted.contains(tn.inatId))
             continue;
 
         Node *base = m_root.get();
@@ -142,6 +183,7 @@ void TaxonomyTreeModel::rebuild()
         auto node = std::make_unique<Node>();
         node->data = tn;
         node->parent = base;
+        node->contextOnly = coverageFiltered && !matches.contains(tn.inatId);
         m_byId.insert(tn.inatId, node.get());
         resolvedParent.insert(tn.inatId, node.get());
         base->children.push_back(std::move(node));
@@ -315,6 +357,8 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         }
         return {};
     case Qt::ForegroundRole: {
+        if (node->contextOnly)
+            return pl::themeColors(pl::currentThemeVariant()).mutedText;
         if (index.column() != 2 || !t.isLeafRank)
             return {};
         const auto cov = m_coverage.byTaxon.constFind(t.inatId);
@@ -336,6 +380,8 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         return t.inatId;
     case NameRole:
         return t.name;
+    case ContextOnlyRole:
+        return node->contextOnly;
     case RankRole:
         return t.rank;
     case InRegionRole:

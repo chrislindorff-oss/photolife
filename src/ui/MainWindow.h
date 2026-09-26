@@ -299,6 +299,7 @@ private:
     QList<qint64> m_treeSearchHits;   // current search matches, best first
     int m_treeSearchPos = 0;          // which hit is focused (Enter cycles)
     QCheckBox *m_photographedOnly = nullptr;
+    QComboBox *m_coverageFilterCombo = nullptr;   // all / fully covered / not fully covered
     QToolButton *m_rankFilterButton = nullptr;
     QMenu *m_rankFilterMenu = nullptr;
     QHash<QString, QCheckBox *> m_rankCheckboxes;   // rank -> its "show this rank" checkbox
