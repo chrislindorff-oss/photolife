@@ -128,6 +128,9 @@ private:
     void rebuild();
     void emitCoverageDataChanged(const QModelIndex &parent);
     bool isCoverageComplete(qint64 inatId) const;
+    // A taxon the active threatened filter is about: any listed taxon under
+    // "threatened only", or one with exactly the filtered status.
+    bool matchesStatusFilter(const pl::coverage::TaxonCoverage &cov) const;
 
     pl::Database &m_db;
     int m_projectId = -1;

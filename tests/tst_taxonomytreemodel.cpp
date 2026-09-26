@@ -7,6 +7,7 @@
 #include "db/Database.h"
 #include "model/TaxonomyTreeModel.h"
 #include "taxonomy/TaxonomyStore.h"
+#include "ui/Theme.h"
 
 using namespace pl;
 using namespace pl::taxonomy;
@@ -50,6 +51,7 @@ private slots:
     void coverageFilterIgnoresHiddenRanks();
     void coverageFilterCombinesWithPhotographedOnly();
     void coverageFilterFollowsCoverageUpdates();
+    void threatenedFilterColoursPhotographedGreenAndMissingRed();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -521,6 +523,55 @@ void TestTaxonomyTreeModel::coverageFilterFollowsCoverageUpdates()
     cov.byTaxon[47217].speciesWithPhotos = 2;
     model.setCoverage(cov);
     QCOMPARE(model.rowCount(), 0);
+}
+
+void TestTaxonomyTreeModel::threatenedFilterColoursPhotographedGreenAndMissingRed()
+{
+    // Diuris pardina (900): Endangered, photographed. Pterostylis nutans
+    // (901): Vulnerable, not photographed.
+    coverage::ProjectCoverage cov = partialCoverage();
+    cov.byTaxon[900].status = QStringLiteral("Endangered");
+    cov.byTaxon[901].status = QStringLiteral("Vulnerable");
+    for (qint64 id : {qint64(47217), qint64(800), qint64(801), qint64(900), qint64(901)})
+        cov.byTaxon[id].subtreeThreatened = true;
+    cov.byTaxon[47217].subtreeStatuses = {QStringLiteral("Endangered"), QStringLiteral("Vulnerable")};
+    cov.byTaxon[800].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[900].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[801].subtreeStatuses = {QStringLiteral("Vulnerable")};
+    cov.byTaxon[901].subtreeStatuses = {QStringLiteral("Vulnerable")};
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+    const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
+    auto fg = [&](qint64 id, int column) {
+        const QModelIndex idx = model.indexForTaxon(id);
+        return model.data(idx.siblingAtColumn(column), Qt::ForegroundRole);
+    };
+    auto mark = [&](qint64 id) {
+        return model.data(model.indexForTaxon(id).siblingAtColumn(2), Qt::DisplayRole).toString();
+    };
+
+    // No filter: as before -- names uncoloured, a muted dot for missing.
+    QVERIFY(!fg(901, 0).isValid());
+    QCOMPARE(mark(901), QStringLiteral("·"));
+    QCOMPARE(fg(901, 2).value<QColor>(), theme.mutedText);
+
+    model.setThreatenedOnly(true);
+    QCOMPARE(fg(900, 0).value<QColor>(), theme.positive);
+    QCOMPARE(fg(900, 2).value<QColor>(), theme.positive);
+    QCOMPARE(mark(900), QStringLiteral("✔"));
+    QCOMPARE(fg(901, 0).value<QColor>(), theme.danger);
+    QCOMPARE(fg(901, 2).value<QColor>(), theme.danger);
+    QCOMPARE(mark(901), QStringLiteral("✗"));
+    QVERIFY(!fg(800, 0).isValid());   // higher ranks keep their usual colour
+
+    // One tier: only its species are coloured.
+    model.setThreatenedOnly(false);
+    model.setStatusFilter(QStringLiteral("Vulnerable"));
+    QVERIFY(!model.indexForTaxon(900).isValid());   // filtered out
+    QCOMPARE(fg(901, 0).value<QColor>(), theme.danger);
+    QCOMPARE(mark(901), QStringLiteral("✗"));
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

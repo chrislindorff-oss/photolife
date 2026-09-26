@@ -87,6 +87,15 @@ void TaxonomyTreeModel::setCoverageFilter(CoverageFilter filter)
     rebuild();
 }
 
+bool TaxonomyTreeModel::matchesStatusFilter(const pl::coverage::TaxonCoverage &cov) const
+{
+    if (cov.status.isEmpty())
+        return false;
+    if (!m_statusFilter.isEmpty())
+        return cov.status == m_statusFilter;
+    return m_threatenedOnly;
+}
+
 bool TaxonomyTreeModel::isCoverageComplete(qint64 inatId) const
 {
     const auto &cov = m_coverage.byTaxon.value(inatId);
@@ -341,8 +350,13 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         const auto cov = m_coverage.byTaxon.constFind(t.inatId);
         if (cov == m_coverage.byTaxon.constEnd())
             return {};
-        if (t.isLeafRank)
-            return cov->subtreeHasPhotos ? QStringLiteral("✔") : QStringLiteral("·");
+        if (t.isLeafRank) {
+            if (cov->subtreeHasPhotos)
+                return QStringLiteral("✔");
+            // A cross, not the usual dot, for the species a threatened
+            // filter is about -- "not photographed" is the point there.
+            return matchesStatusFilter(*cov) ? QStringLiteral("✗") : QStringLiteral("·");
+        }
         if (cov->speciesTotal > 0)
             return QStringLiteral("%1 / %2").arg(cov->speciesWithPhotos).arg(cov->speciesTotal);
         return {};
@@ -357,14 +371,20 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         }
         return {};
     case Qt::ForegroundRole: {
+        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
         if (node->contextOnly)
-            return pl::themeColors(pl::currentThemeVariant()).mutedText;
-        if (index.column() != 2 || !t.isLeafRank)
+            return theme.mutedText;
+        if (!t.isLeafRank || index.column() == 1)
             return {};
         const auto cov = m_coverage.byTaxon.constFind(t.inatId);
         if (cov == m_coverage.byTaxon.constEnd())
             return {};
-        const pl::ThemeColors &theme = pl::themeColors(pl::currentThemeVariant());
+        // While a threatened filter is on, the species it's about are green
+        // (photographed) or red (not) -- name and coverage mark alike.
+        if (matchesStatusFilter(*cov))
+            return cov->subtreeHasPhotos ? theme.positive : theme.danger;
+        if (index.column() != 2)
+            return {};
         return cov->subtreeHasPhotos ? theme.positive : theme.mutedText;
     }
     case Qt::ToolTipRole: {
