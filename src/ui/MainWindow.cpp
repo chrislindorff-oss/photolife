@@ -53,6 +53,7 @@
 #include "ui/PlaceConfirmDialog.h"
 #include "ui/ReferencePhotoDialog.h"
 #include "ui/ReviewPane.h"
+#include "ui/StaleMatchDialog.h"
 #include "ui/TaxonConfirmDialog.h"
 #include "ui/TaxonPickerDialog.h"
 #include "ui/Theme.h"
@@ -98,6 +99,7 @@
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeView>
@@ -239,6 +241,13 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 m_reviewPane->reload();
                 updateReviewTabText();
                 updateBestShotsTabText();
+                // Asked once this handler (and any download pipeline's
+                // progress window) has finished.
+                if (!s.staleDecisions.isEmpty()) {
+                    QTimer::singleShot(0, this, [this, stale = s.staleDecisions] {
+                        resolveStaleDecisions(stale);
+                    });
+                }
                 const QString group = std::exchange(m_groupMatchName, QString());
                 const bool download = std::exchange(m_matchingDownload, false);
                 if (download) {
@@ -1971,6 +1980,37 @@ void MainWindow::startMatch()
     m_groupMatchName.clear();
     m_matchingDownload = false;
     m_app.matchService().start();
+}
+
+void MainWindow::resolveStaleDecisions(const QList<match::StaleDecision> &stale)
+{
+    StaleMatchDialog dialog(stale, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    match::MatchReviewer reviewer(m_app.database().connectionName());
+    int moved = 0, kept = 0;
+    for (const match::StaleDecision &s : dialog.toReassociate()) {
+        if (reviewer.confirm(s.captureId, s.suggestedInatId, false))
+            ++moved;
+    }
+    for (const match::StaleDecision &s : dialog.toKeep()) {
+        if (reviewer.keepDecision(s.captureId))
+            ++kept;
+    }
+
+    m_taxonModel->reload();
+    m_model->reload();
+    m_bestShotModel->reload();
+    m_reviewPane->reload();
+    updateEmptyState();
+    refreshCoverage();
+    updateReviewTabText();
+    updateBestShotsTabText();
+    statusBar()->showMessage(tr("Re-associated %1 renamed photo(s); kept %2 as identified.")
+                                 .arg(moved)
+                                 .arg(kept),
+                             8000);
 }
 
 void MainWindow::startGroupMatch(qint64 inatId, const QString &name)

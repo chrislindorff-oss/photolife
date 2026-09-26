@@ -142,6 +142,11 @@ int runHeadlessMatch(pl::Application &app)
                                         .arg(s.unmatched)
                                         .arg(s.cancelled ? QStringLiteral(" (cancelled)")
                                                          : QString());
+                             for (const pl::match::StaleDecision &d : s.staleDecisions)
+                                 qInfo().noquote()
+                                     << QStringLiteral("renamed since identified: \"%1\" — "
+                                                       "identified as %2, name now says %3")
+                                            .arg(d.baseName, d.decidedName, d.suggestedName);
                          }
                          loop.quit();
                      });

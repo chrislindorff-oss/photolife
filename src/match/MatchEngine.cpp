@@ -330,7 +330,13 @@ MatchEngine::Stats MatchEngine::matchGroup(const QSet<qint64> &groupTaxonIds,
             "   OR EXISTS (SELECT 1 FROM capture_match m LEFT JOIN taxon t ON t.id = m.taxon_id "
             "              WHERE m.capture_id = c.id AND m.decided_by = 'engine' "
             "                AND (m.status = 'pending' "
-            "                     OR (m.status = 'auto' AND t.rank_level > 10)))"))) {
+            "                     OR (m.status = 'auto' AND t.rank_level > 10))) "
+            // User decisions whose file was renamed since -- only checked,
+            // see checkUserDecision().
+            "   OR EXISTS (SELECT 1 FROM capture_match m "
+            "              WHERE m.capture_id = c.id AND m.decided_by = 'user' "
+            "                AND (m.decided_name_text IS NULL "
+            "                     OR m.decided_name_text <> COALESCE(c.name_text, '')))"))) {
         Stats stats;
         stats.error = q.lastError().text();
         return stats;
@@ -355,6 +361,111 @@ MatchEngine::Stats MatchEngine::matchCaptures(const QList<qint64> &captureIds,
         return stats;
     }
     return run(captureIds, {}, cancel, progress);
+}
+
+bool MatchEngine::isAtOrBelow(qint64 taxonId, qint64 ancestorId) const
+{
+    if (taxonId == ancestorId)
+        return true;
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT t.ancestry, t.parent_inat_id, a.inat_id FROM taxon t, taxon a "
+        "WHERE t.id = ? AND a.id = ?"));
+    q.addBindValue(qlonglong(taxonId));
+    q.addBindValue(qlonglong(ancestorId));
+    if (!q.exec() || !q.next())
+        return false;
+    const qint64 ancestorInat = q.value(2).toLongLong();
+    if (const QString ancestry = q.value(0).toString(); !ancestry.isEmpty())
+        return ancestry.split(QLatin1Char('/')).contains(QString::number(ancestorInat));
+
+    // No ancestry string cached: walk the parent links instead.
+    QSqlQuery up(db);
+    up.prepare(QStringLiteral("SELECT parent_inat_id FROM taxon WHERE inat_id = ?"));
+    qint64 parent = q.value(1).isNull() ? 0 : q.value(1).toLongLong();
+    for (int depth = 0; parent > 0 && depth < 64; ++depth) {
+        if (parent == ancestorInat)
+            return true;
+        up.bindValue(0, qlonglong(parent));
+        if (!up.exec() || !up.next() || up.value(0).isNull())
+            return false;
+        parent = up.value(0).toLongLong();
+    }
+    return false;
+}
+
+void MatchEngine::checkUserDecision(qint64 captureId, const QSet<qint64> &group,
+                                    Stats &stats) const
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT m.id, m.taxon_id, m.status, m.decided_name_text, c.name_text, c.base_name, "
+        "       t.name "
+        "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
+        "LEFT JOIN taxon t ON t.id = m.taxon_id "
+        "WHERE m.capture_id = ? AND m.decided_by = 'user' LIMIT 1"));
+    q.addBindValue(qlonglong(captureId));
+    if (!q.exec() || !q.next())
+        return;
+    const qint64 matchId = q.value(0).toLongLong();
+    const qint64 decidedTaxon = q.value(1).isNull() ? 0 : q.value(1).toLongLong();
+    const QString nameText = q.value(4).toString();
+    // Nothing to contradict for a rejection or "not a taxon"; nor when the
+    // name is the one the user decided with.
+    if (decidedTaxon <= 0 || q.value(2).toString() == QLatin1String("rejected"))
+        return;
+    // A recorded name that differs means the file was certainly renamed; no
+    // recorded name means the decision predates recording it.
+    const bool renamed = !q.value(3).isNull();
+    if (renamed && q.value(3).toString() == nameText)
+        return;
+    const QString baseName = q.value(5).toString();
+    const QString decidedName = q.value(6).toString();
+
+    const MatchOutcome outcome = evaluateCapture(captureId, group);
+    const bool agrees = !outcome.hasTaxon() ? false
+                        : isAtOrBelow(decidedTaxon, outcome.taxonId);
+    if (agrees) {
+        // The (new) name is consistent with the decision -- e.g. renamed to
+        // the same species, or to just its genus. Record it so the check
+        // isn't repeated every run.
+        QSqlQuery upd(db);
+        upd.prepare(QStringLiteral("UPDATE capture_match SET decided_name_text = ? WHERE id = ?"));
+        upd.addBindValue(nameText);
+        upd.addBindValue(qlonglong(matchId));
+        upd.exec();
+        return;
+    }
+    // After a definite rename, any taxon the new name points to is worth
+    // raising (a renamed file in an unrenamed folder only reaches "pending").
+    // For an older decision with no recorded name, only a confident reading
+    // is -- the user may well have overruled the filename on purpose. Either
+    // way nothing is recorded, so it's checked again next time (e.g. after a
+    // tree adding the new name's taxon is built).
+    if (!outcome.hasTaxon() || (!renamed && outcome.status != QLatin1String("auto")))
+        return;
+    // Likewise, without a definite rename a name that's merely more specific
+    // than the decision (a section within the genus the user chose, a
+    // species within their family) isn't a contradiction.
+    if (!renamed && isAtOrBelow(outcome.taxonId, decidedTaxon))
+        return;
+    if (!group.isEmpty() && !group.contains(outcome.taxonId))
+        return;
+
+    QSqlQuery t(db);
+    t.prepare(QStringLiteral("SELECT inat_id, name FROM taxon WHERE id = ?"));
+    t.addBindValue(qlonglong(outcome.taxonId));
+    if (!t.exec() || !t.next())
+        return;
+    StaleDecision stale;
+    stale.captureId = captureId;
+    stale.baseName = baseName;
+    stale.decidedName = decidedName;
+    stale.suggestedInatId = t.value(0).toLongLong();
+    stale.suggestedName = t.value(1).toString();
+    stats.staleDecisions.append(stale);
 }
 
 MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<qint64> &group,
@@ -385,12 +496,14 @@ MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<
             break;
         }
 
-        // A capture the user has already decided is left untouched.
+        // A capture the user has already decided is left untouched -- only
+        // checked for a rename that now contradicts the decision.
         QSqlQuery userRow(db);
         userRow.prepare(QStringLiteral(
             "SELECT 1 FROM capture_match WHERE capture_id = ? AND decided_by = 'user' LIMIT 1"));
         userRow.addBindValue(qlonglong(id));
         if (userRow.exec() && userRow.next()) {
+            checkUserDecision(id, group, stats);
             ++done;
             continue;
         }

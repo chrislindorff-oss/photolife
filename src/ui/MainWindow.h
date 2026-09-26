@@ -55,6 +55,7 @@ class ReferencePhotoFetcher;
 }
 namespace match {
 class MatchEngine;
+struct StaleDecision;
 }
 namespace checklist {
 class ChecklistImporter;
@@ -218,6 +219,9 @@ private:
     // Match Library Against This Group: re-checks unresolved photos (see
     // MatchEngine::matchGroup) against the tree's taxa at/below `inatId`.
     void startGroupMatch(qint64 inatId, const QString &name);
+    // After a match run: asks what to do about photos identified by the user
+    // whose file names now point to a different taxon (see StaleMatchDialog).
+    void resolveStaleDecisions(const QList<match::StaleDecision> &stale);
     // Reassigns the photos selected in `grid` (or, with nothing selected and
     // after confirming, every photo `model` shows) to a taxon the user picks.
     void reassignPhotos(QListView *grid, model::CaptureListModel *model);

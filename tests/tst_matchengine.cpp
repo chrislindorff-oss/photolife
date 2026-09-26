@@ -7,6 +7,7 @@
 
 #include "db/Database.h"
 #include "match/MatchEngine.h"
+#include "match/MatchReviewer.h"
 #include "scan/CatalogueWriter.h"
 #include "scan/FileScanner.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -44,6 +45,9 @@ private slots:
     void groupMatchPrefersTheGroupForAmbiguousNames();
     void groupMatchLeavesUserDecisionsAlone();
     void matchCapturesTouchesOnlyThoseCaptures();
+    void renamedUserDecisionIsReportedNotOverridden();
+    void unrecordedAgreeingDecisionGetsItsNameRecorded();
+    void groupMatchReportsRenamedDecisionInsideTheGroup();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -54,6 +58,8 @@ private:
     QSqlQuery matchRow(const QString &baseNameLike);
     qint64 localId(qint64 inatId);
     QSet<qint64> caladeniaGroup();
+    qint64 captureId(const QString &baseNameLike);
+    void renameCapture(qint64 id, const QString &nameText);
 };
 
 void TestMatchEngine::init()
@@ -352,6 +358,122 @@ void TestMatchEngine::matchCapturesTouchesOnlyThoseCaptures()
     QCOMPARE(q.value(0).toInt(), 1);   // no other capture was matched
     QCOMPARE(matchRow(QStringLiteral("Thelymitra ixioides%")).value(4).toString(),
              QStringLiteral("auto"));
+}
+
+qint64 TestMatchEngine::captureId(const QString &baseNameLike)
+{
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.prepare(QStringLiteral("SELECT id FROM capture WHERE base_name LIKE ?"));
+    q.addBindValue(baseNameLike);
+    q.exec();
+    q.next();
+    return q.value(0).toLongLong();
+}
+
+// What a rescan does to a renamed file's capture (see CatalogueWriter).
+void TestMatchEngine::renameCapture(qint64 id, const QString &nameText)
+{
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    q.prepare(QStringLiteral("UPDATE capture SET name_text = ? WHERE id = ?"));
+    q.addBindValue(nameText);
+    q.addBindValue(id);
+    QVERIFY(q.exec());
+}
+
+void TestMatchEngine::renamedUserDecisionIsReportedNotOverridden()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    // The Thelymitra photo, back when its file was named for Caladenia
+    // carnea and the user confirmed it as that.
+    const qint64 id = captureId(QStringLiteral("Thelymitra ixioides%"));
+    renameCapture(id, QStringLiteral("Caladenia carnea"));
+    MatchReviewer reviewer(m_db->connectionName());
+    QVERIFY(reviewer.confirm(id, 101, false));
+    QVERIFY(engine.matchAll().staleDecisions.isEmpty());   // name unchanged since
+
+    // Renamed to Thelymitra ixioides, in a matching folder.
+    renameCapture(id, QStringLiteral("Thelymitra ixioides"));
+    auto stats = engine.matchAll();
+    QVERIFY2(stats.ok(), qPrintable(stats.error));
+    QCOMPARE(stats.staleDecisions.size(), 1);
+    const StaleDecision stale = stats.staleDecisions.first();
+    QCOMPARE(stale.captureId, id);
+    QCOMPARE(stale.decidedName, QStringLiteral("Caladenia carnea"));
+    QCOMPARE(stale.suggestedInatId, qint64(111));
+    QCOMPARE(stale.suggestedName, QStringLiteral("Thelymitra ixioides"));
+
+    // Reported, never applied: the user's decision is untouched.
+    auto row = matchRow(QStringLiteral("Thelymitra ixioides%"));
+    QCOMPARE(row.value(0).toLongLong(), localId(101));
+    QCOMPARE(row.value(4).toString(), QStringLiteral("confirmed"));
+
+    // Keeping it records the new name, so the same rename isn't asked about
+    // again...
+    QVERIFY(reviewer.keepDecision(id));
+    QVERIFY(engine.matchAll().staleDecisions.isEmpty());
+    QCOMPARE(matchRow(QStringLiteral("Thelymitra ixioides%")).value(0).toLongLong(),
+             localId(101));
+
+    // ...and re-associating makes the new name's taxon the decision.
+    QVERIFY(reviewer.confirm(id, 111, false));
+    QVERIFY(engine.matchAll().staleDecisions.isEmpty());
+    QCOMPARE(matchRow(QStringLiteral("Thelymitra ixioides%")).value(0).toLongLong(),
+             localId(111));
+}
+
+void TestMatchEngine::unrecordedAgreeingDecisionGetsItsNameRecorded()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    // A decision from before names were recorded (decided_name_text NULL).
+    QSqlQuery upd(QSqlDatabase::database(m_db->connectionName(), false));
+    QVERIFY(upd.exec(QStringLiteral(
+        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed' "
+        "WHERE capture_id = (SELECT c.id FROM capture c WHERE c.base_name LIKE 'Caladenia carnea%')")));
+
+    QVERIFY(engine.matchAll().staleDecisions.isEmpty());
+
+    // An older decision the filename is merely more specific than (the user
+    // chose the genus) isn't a contradiction either.
+    QSqlQuery genus(QSqlDatabase::database(m_db->connectionName(), false));
+    genus.prepare(QStringLiteral(
+        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed', taxon_id = ? "
+        "WHERE capture_id = (SELECT c.id FROM capture c "
+        "                    WHERE c.base_name LIKE 'Thelymitra ixioides%')"));
+    genus.addBindValue(localId(110));
+    QVERIFY(genus.exec());
+    QVERIFY(engine.matchAll().staleDecisions.isEmpty());
+
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    QVERIFY(q.exec(QStringLiteral(
+        "SELECT m.decided_name_text, c.name_text FROM capture_match m "
+        "JOIN capture c ON c.id = m.capture_id WHERE c.base_name LIKE 'Caladenia carnea%'")));
+    QVERIFY(q.next());
+    QVERIFY(!q.value(0).isNull());
+    QCOMPARE(q.value(0).toString(), q.value(1).toString());
+}
+
+void TestMatchEngine::groupMatchReportsRenamedDecisionInsideTheGroup()
+{
+    MatchEngine engine(m_db->connectionName());
+    engine.matchAll();
+
+    // Confirmed as Thelymitra under an old name, then renamed to match its
+    // Caladenia carnea folder.
+    const qint64 id = captureId(QStringLiteral("Caladenia carnea%"));
+    renameCapture(id, QStringLiteral("Thelymitra ixioides"));
+    MatchReviewer reviewer(m_db->connectionName());
+    QVERIFY(reviewer.confirm(id, 111, false));
+    renameCapture(id, QStringLiteral("Caladenia carnea"));
+
+    const auto stats = engine.matchGroup(caladeniaGroup());
+    QVERIFY2(stats.ok(), qPrintable(stats.error));
+    QCOMPARE(stats.staleDecisions.size(), 1);
+    QCOMPARE(stats.staleDecisions.first().suggestedInatId, qint64(101));
+    QCOMPARE(matchRow(QStringLiteral("Caladenia carnea%")).value(0).toLongLong(), localId(111));
 }
 
 QTEST_GUILESS_MAIN(TestMatchEngine)

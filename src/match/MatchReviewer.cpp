@@ -85,14 +85,16 @@ bool MatchReviewer::writeDecision(qint64 captureId, qint64 taxonInatId, const QS
     QSqlQuery ins(db);
     ins.prepare(QStringLiteral(
         "INSERT INTO capture_match (capture_id, taxon_id, matched_rank, method, confidence, "
-        "status, qualifier, decided_by, decided_at) "
-        "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), ?, 'manual', 1.0, ?, ?, 'user', %1)")
+        "status, qualifier, decided_by, decided_at, decided_name_text) "
+        "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), ?, 'manual', 1.0, ?, ?, 'user', %1, "
+        "        (SELECT name_text FROM capture WHERE id = ?))")
                     .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     ins.addBindValue(qlonglong(captureId));
     ins.addBindValue(taxonInatId > 0 ? QVariant(qlonglong(taxonInatId)) : QVariant());
     ins.addBindValue(matchedRank.isEmpty() ? QVariant() : matchedRank);
     ins.addBindValue(status);
     ins.addBindValue(qualifier.isEmpty() ? QVariant() : qualifier);
+    ins.addBindValue(qlonglong(captureId));
     if (!ins.exec()) {
         const QString error = ins.lastError().text();
         db.rollback();
@@ -101,6 +103,21 @@ bool MatchReviewer::writeDecision(qint64 captureId, qint64 taxonInatId, const QS
 
     if (!db.commit())
         return fail(db.lastError().text());
+    return true;
+}
+
+bool MatchReviewer::keepDecision(qint64 captureId)
+{
+    m_error.clear();
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "UPDATE capture_match SET decided_name_text = "
+        "  (SELECT name_text FROM capture WHERE id = ?) "
+        "WHERE capture_id = ? AND decided_by = 'user'"));
+    q.addBindValue(qlonglong(captureId));
+    q.addBindValue(qlonglong(captureId));
+    if (!q.exec())
+        return fail(q.lastError().text());
     return true;
 }
 

@@ -33,6 +33,11 @@ public:
     // Re-open a decided capture so the engine will reconsider it.
     bool resetToPending(qint64 captureId);
 
+    // For a decision MatchEngine reported as possibly stale (the file was
+    // renamed since): keep it as it is, and record the current name so the
+    // same rename isn't reported again.
+    bool keepDecision(qint64 captureId);
+
     // Apply one taxon to every capture in a folder (optionally its subtree).
     // `onlyPending` leaves already-decided captures alone. Returns the count.
     int applyTaxonToFolder(int folderId, qint64 taxonInatId, bool recursive,

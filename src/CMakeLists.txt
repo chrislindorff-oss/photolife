@@ -89,6 +89,7 @@ qt_add_library(photolife_core STATIC
     ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp
     ui/ReferencePhotoDialog.h ui/ReferencePhotoDialog.cpp
     ui/ReviewPane.h         ui/ReviewPane.cpp
+    ui/StaleMatchDialog.h   ui/StaleMatchDialog.cpp
     ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp
     ui/TaxonPickerDialog.h  ui/TaxonPickerDialog.cpp
     ui/Theme.h              ui/Theme.cpp
@@ -157,6 +158,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/012_prune_taxa.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/013_build_checkpoint.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/014_lightroom_keywords.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/015_decision_name.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -171,6 +173,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/012_prune_taxa.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/013_build_checkpoint.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/014_lightroom_keywords.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/015_decision_name.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

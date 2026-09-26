@@ -24,6 +24,20 @@ struct MatchOutcome
     bool hasTaxon() const { return taxonId > 0; }
 };
 
+// A decision the user made about a capture that its current filename now
+// contradicts: the file was renamed since (or was decided before names were
+// recorded), and the new name confidently resolves to a different taxon.
+// The engine never overrides a user decision itself -- it reports these for
+// the user to settle (MatchReviewer::confirm() or keepDecision()).
+struct StaleDecision
+{
+    qint64 captureId = 0;
+    QString baseName;          // the file's current name, without extension
+    QString decidedName;       // the taxon the user chose
+    qint64 suggestedInatId = 0;
+    QString suggestedName;     // the taxon the current name resolves to
+};
+
 // Ties captures to taxa using the folder classification (match::classifyFolders),
 // the file-name grammar, and the taxonomy cache (match::TaxonResolver).
 // Read model: evaluateCapture() decides without writing; matchAll() classifies
@@ -42,6 +56,7 @@ public:
         int pending = 0;
         int unmatched = 0;   // pending with no taxon
         int outsideGroup = 0;   // matchGroup() only: evaluated, but left unchanged
+        QList<StaleDecision> staleDecisions;
         bool cancelled = false;
         QString error;
 
@@ -64,7 +79,8 @@ public:
     // rank -- preferring taxa in `groupTaxonIds` (local taxon ids; see
     // ResolveHints::preferTaxonIds). A result is written only when its taxon
     // is in the group; everything else is left exactly as it was. User
-    // decisions and species-level auto matches are never touched.
+    // decisions and species-level auto matches are never touched, though a
+    // renamed user-decided capture is still checked for staleDecisions.
     Stats matchGroup(const QSet<qint64> &groupTaxonIds, const CancelFn &cancel = {},
                      const ProgressFn &progress = {});
 
@@ -76,10 +92,19 @@ public:
 
 private:
     // Shared body of matchAll()/matchGroup(): evaluates and writes each
-    // capture (skipping user-decided ones). A non-empty `group` both steers
-    // resolution and filters which results are written.
+    // capture (skipping user-decided ones, apart from checkUserDecision()).
+    // A non-empty `group` both steers resolution and filters which results
+    // are written.
     Stats run(const QList<qint64> &captureIds, const QSet<qint64> &group, const CancelFn &cancel,
               const ProgressFn &progress);
+
+    // For a user-decided capture: if its name changed since the decision
+    // (or was never recorded), re-evaluates it and either reports a
+    // StaleDecision or, when the name still agrees, records the name so it
+    // isn't re-checked. Never changes the decision itself.
+    void checkUserDecision(qint64 captureId, const QSet<qint64> &group, Stats &stats) const;
+    // True when local taxon `taxonId` is `ancestorId` or lies beneath it.
+    bool isAtOrBelow(qint64 taxonId, qint64 ancestorId) const;
 
     QString m_connectionName;
     double m_autoThreshold = 0.90;
