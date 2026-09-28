@@ -70,8 +70,10 @@ struct ProjectCoverage
 ProjectCoverage computeCoverage(const QString &connectionName, int projectId);
 
 // Chooses a cover capture for every project taxon that has photos anywhere in
-// its subtree (best match confidence, then newest capture) and rewrites the
-// project's `representative` rows. Returns how many were written.
+// its subtree (best match confidence, then newest capture) and brings the
+// project's `representative` rows up to date, writing only the ones that
+// changed. Returns how many rows it deleted or inserted (0 when nothing
+// changed).
 int pickRepresentatives(const QString &connectionName, int projectId);
 
 struct RepresentativeImage

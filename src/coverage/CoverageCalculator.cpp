@@ -137,11 +137,17 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
         };
         QHash<qint64, Pick> statusPick, originPick;
 
+        // Only this tree's taxa: the tables cover every tree, and on a remote
+        // catalogue every row fetched costs transfer time.
         QSqlQuery q(db);
         q.setForwardOnly(true);
-        q.exec(QStringLiteral(
+        q.prepare(QStringLiteral(
             "SELECT t.inat_id, ts.status, ts.place_inat_id, ts.source FROM taxon_status ts "
-            "JOIN taxon t ON t.id = ts.taxon_id WHERE ts.status <> '' ORDER BY ts.id"));
+            "JOIN taxon t ON t.id = ts.taxon_id "
+            "JOIN project_taxon pt ON pt.taxon_id = ts.taxon_id AND pt.project_id = ? "
+            "WHERE ts.status <> '' ORDER BY ts.id"));
+        q.addBindValue(projectId);
+        q.exec();
         while (q.next()) {
             const qint64 id = q.value(0).toLongLong();
             auto node = nodes.find(id);
@@ -160,9 +166,13 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
 
         QSqlQuery o(db);
         o.setForwardOnly(true);
-        o.exec(QStringLiteral(
+        o.prepare(QStringLiteral(
             "SELECT t.inat_id, o.origin, o.place_inat_id, o.source FROM taxon_origin o "
-            "JOIN taxon t ON t.id = o.taxon_id ORDER BY o.id"));
+            "JOIN taxon t ON t.id = o.taxon_id "
+            "JOIN project_taxon pt ON pt.taxon_id = o.taxon_id AND pt.project_id = ? "
+            "ORDER BY o.id"));
+        o.addBindValue(projectId);
+        o.exec();
         while (o.next()) {
             const qint64 id = o.value(0).toLongLong();
             auto node = nodes.find(id);
@@ -190,11 +200,14 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
     {
         QSqlQuery q(db);
         q.setForwardOnly(true);
-        q.exec(QStringLiteral(
+        q.prepare(QStringLiteral(
             "SELECT t.inat_id, COUNT(*), MAX(c.captured_on) "
             "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
             "JOIN taxon t ON t.id = m.taxon_id "
+            "JOIN project_taxon pt ON pt.taxon_id = m.taxon_id AND pt.project_id = ? "
             "WHERE m.status IN ('auto', 'confirmed') GROUP BY t.inat_id"));
+        q.addBindValue(projectId);
+        q.exec();
         while (q.next()) {
             const qint64 id = q.value(0).toLongLong();
             if (auto it = nodes.find(id); it != nodes.end()) {
@@ -320,13 +333,14 @@ int pickRepresentatives(const QString &connectionName, int projectId)
     };
 
     QHash<qint64, std::optional<qint64>> parentOf;   // inat_id -> parent inat_id
+    QHash<qint64, qint64> localIdOf;                  // inat_id -> taxon.id
     QHash<qint64, Best> direct;
 
     {
         QSqlQuery q(db);
         q.setForwardOnly(true);
         q.prepare(QStringLiteral(
-            "SELECT t.inat_id, t.parent_inat_id FROM project_taxon pt "
+            "SELECT t.inat_id, t.parent_inat_id, t.id FROM project_taxon pt "
             "JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
         q.addBindValue(projectId);
         if (!q.exec())
@@ -335,6 +349,7 @@ int pickRepresentatives(const QString &connectionName, int projectId)
             const qint64 id = q.value(0).toLongLong();
             parentOf.insert(id, q.value(1).isNull() ? std::optional<qint64>()
                                                     : std::optional<qint64>(q.value(1).toLongLong()));
+            localIdOf.insert(id, q.value(2).toLongLong());
         }
     }
     if (parentOf.isEmpty())
@@ -343,11 +358,14 @@ int pickRepresentatives(const QString &connectionName, int projectId)
     {
         QSqlQuery q(db);
         q.setForwardOnly(true);
-        q.exec(QStringLiteral(
+        q.prepare(QStringLiteral(
             "SELECT t.inat_id, m.capture_id, m.confidence, c.captured_on "
             "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
             "JOIN taxon t ON t.id = m.taxon_id "
+            "JOIN project_taxon pt ON pt.taxon_id = m.taxon_id AND pt.project_id = ? "
             "WHERE m.status IN ('auto', 'confirmed')"));
+        q.addBindValue(projectId);
+        q.exec();
         while (q.next()) {
             const qint64 id = q.value(0).toLongLong();
             if (!parentOf.contains(id))
@@ -387,27 +405,77 @@ int pickRepresentatives(const QString &connectionName, int projectId)
     for (qint64 r : roots)
         roll(r);
 
+    // Write only what changed. This runs on every coverage refresh, and the
+    // answer is nearly always what's stored already -- rewriting it row by
+    // row costs a round trip per taxon on a remote catalogue.
+    QHash<qint64, qint64> wanted;   // taxon.id -> capture id
+    for (auto it = rollup.constBegin(); it != rollup.constEnd(); ++it)
+        wanted.insert(localIdOf.value(it.key()), it.value().captureId);
+
+    QHash<qint64, qint64> stored;
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        q.prepare(QStringLiteral(
+            "SELECT taxon_id, capture_id FROM representative WHERE project_id = ?"));
+        q.addBindValue(projectId);
+        if (!q.exec())
+            return 0;
+        while (q.next())
+            stored.insert(q.value(0).toLongLong(), q.value(1).toLongLong());
+    }
+
+    QList<qint64> removals;                        // taxon ids to clear
+    QList<std::pair<qint64, qint64>> additions;    // (taxon id, capture id)
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
+        if (wanted.value(it.key(), -1) != it.value())
+            removals.append(it.key());
+    }
+    for (auto it = wanted.constBegin(); it != wanted.constEnd(); ++it) {
+        if (stored.value(it.key(), -1) != it.value())
+            additions.append({it.key(), it.value()});
+    }
+    if (removals.isEmpty() && additions.isEmpty())
+        return 0;
+
+    // Chunked well under SQLite's classic 999 bind-parameter limit.
+    constexpr qsizetype kChunk = 300;
     if (!db.transaction())
         return 0;
-    QSqlQuery del(db);
-    del.prepare(QStringLiteral("DELETE FROM representative WHERE project_id = ?"));
-    del.addBindValue(projectId);
-    del.exec();
-
-    int written = 0;
-    for (auto it = rollup.constBegin(); it != rollup.constEnd(); ++it) {
-        QSqlQuery ins(db);
-        ins.prepare(QStringLiteral(
-            "INSERT INTO representative (project_id, taxon_id, capture_id) "
-            "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), ?)"));
-        ins.addBindValue(projectId);
-        ins.addBindValue(qlonglong(it.key()));
-        ins.addBindValue(qlonglong(it.value().captureId));
-        if (ins.exec())
-            ++written;
+    for (qsizetype i = 0; i < removals.size(); i += kChunk) {
+        const QList<qint64> chunk = removals.mid(i, kChunk);
+        QSqlQuery del(db);
+        del.prepare(QStringLiteral("DELETE FROM representative WHERE project_id = ? "
+                                   "AND taxon_id IN (%1)")
+                        .arg(QStringList(chunk.size(), QStringLiteral("?")).join(QLatin1Char(','))));
+        del.addBindValue(projectId);
+        for (qint64 id : chunk)
+            del.addBindValue(qlonglong(id));
+        if (!del.exec()) {
+            db.rollback();
+            return 0;
+        }
     }
-    db.commit();
-    return written;
+    for (qsizetype i = 0; i < additions.size(); i += kChunk) {
+        const auto chunk = additions.mid(i, kChunk);
+        QSqlQuery ins(db);
+        ins.prepare(QStringLiteral("INSERT INTO representative (project_id, taxon_id, capture_id) "
+                                   "VALUES %1")
+                        .arg(QStringList(chunk.size(), QStringLiteral("(?,?,?)"))
+                                 .join(QLatin1Char(','))));
+        for (const auto &[taxonId, captureId] : chunk) {
+            ins.addBindValue(projectId);
+            ins.addBindValue(qlonglong(taxonId));
+            ins.addBindValue(qlonglong(captureId));
+        }
+        if (!ins.exec()) {
+            db.rollback();
+            return 0;
+        }
+    }
+    if (!db.commit())
+        return 0;
+    return int(removals.size() + additions.size());
 }
 
 RepresentativeImage representativeFor(const QString &connectionName, int projectId,

@@ -30,6 +30,7 @@
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
+#include "sync/SyncActivityLog.h"
 #include "taxonomy/InfraspecificFiller.h"
 #include "taxonomy/OriginFetcher.h"
 #include "taxonomy/AlaStatusSync.h"
@@ -38,6 +39,9 @@
 #include "taxonomy/ReferencePhotoFetcher.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
+#include "treefile/TreeFile.h"
+#include "treefile/TreeImporter.h"
+#include "util/PathSanitize.h"
 #include "ui/AliasEditorDialog.h"
 #include "ui/CatalogueConnectDialog.h"
 #include "ui/CatalogueSettingsDialog.h"
@@ -51,11 +55,13 @@
 #include "ui/InatDownloadPage.h"
 #include "ui/InatToolsView.h"
 #include "ui/LibraryFoldersDialog.h"
+#include "ui/ManageCataloguesDialog.h"
 #include "ui/MapView.h"
 #include "ui/NewProjectDialog.h"
 #include "ui/PlaceConfirmDialog.h"
 #include "ui/ReferencePhotoDialog.h"
 #include "ui/ReviewPane.h"
+#include "ui/ServerDialogs.h"
 #include "ui/StaleMatchDialog.h"
 #include "ui/TaxonConfirmDialog.h"
 #include "ui/TaxonPickerDialog.h"
@@ -103,6 +109,7 @@
 #include <QStatusBar>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -172,6 +179,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         new taxonomy::ReferencePhotoFetcher(m_app.inat(), m_app.taxonomyStore(), this);
     m_checklistImporter =
         new checklist::ChecklistImporter(m_app.inat(), m_app.taxonomyStore(), this);
+    m_treeImporter = new treefile::TreeImporter(m_app.inat(), m_app.taxonomyStore(), this);
     m_originFetcher =
         new taxonomy::OriginFetcher(m_app.inat(), m_app.taxonomyStore(), this);
     connect(m_originFetcher, &taxonomy::OriginFetcher::projectFinished, this,
@@ -396,7 +404,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                     return;
                 }
                 statusBar()->showMessage(tr("Reference tree ready."), 6000);
-                fetchMissingPlaceAncestry();
+                fetchMissingPlaceDetails();
                 m_originFetcher->enqueue({projectId});
                 syncAustralianSources(false, true);   // match the new taxa
                 reloadProjectList();
@@ -428,8 +436,8 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                              : tr("No new subspecies or varieties found."),
                     6000);
                 if (added > 0) {
-                    m_treeModel->setProject(currentProjectId());
-                    m_treeView->expandToDepth(1);
+                    mutateTreePreservingState(
+                        [this] { m_treeModel->setProject(currentProjectId()); });
                     refreshCoverage();
                 }
             });
@@ -540,6 +548,38 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 refreshCoverage();
             });
 
+    connect(m_treeImporter, &treefile::TreeImporter::progress, this,
+            [this](int done, int total) {
+                updateTaskProgress(tr("Importing reference tree…"), done, total);
+            });
+    connect(m_treeImporter, &treefile::TreeImporter::finished, this,
+            [this](bool ok, const QString &error, int projectId, int imported, int lookedUp,
+                   int unresolved) {
+                m_importTreeAction->setEnabled(true);
+                endTaskProgress();
+                if (!ok) {
+                    statusBar()->showMessage(tr("Reference tree import failed: %1").arg(error),
+                                             10000);
+                    return;
+                }
+                QString message = tr("Reference tree imported — %n taxa", nullptr, imported);
+                if (lookedUp > 0)
+                    message += tr(", %n looked up on iNaturalist", nullptr, lookedUp);
+                if (unresolved > 0)
+                    message += tr(", %n not found", nullptr, unresolved);
+                statusBar()->showMessage(message + QLatin1Char('.'), 10000);
+                // As after a tree build: place ancestry, origins, Australian
+                // statuses for the new taxa, then show it.
+                fetchMissingPlaceDetails();
+                m_originFetcher->enqueue({projectId});
+                syncAustralianSources(false, true);
+                reloadProjectList();
+                const int idx = m_projectCombo->findData(projectId);
+                if (idx >= 0)
+                    m_projectCombo->setCurrentIndex(idx);
+                refreshCoverage();
+            });
+
     auto &lightroomImporter = m_app.lightroomImporter();
     connect(&lightroomImporter, &lightroom::LightroomImporter::progress, this,
             [this](int done, int total) {
@@ -580,11 +620,21 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     m_model->reload();
     updateEmptyState();
     reloadProjectList();
-    fetchMissingPlaceAncestry();
+    fetchMissingPlaceDetails();
     // Introduced taxa per tree region, from iNaturalist -- quietly, in the
     // background; a checklist's origins fill in (and override) as imported.
-    m_originFetcher->enqueue(m_app.taxonomyStore().projectsMissingOrigins());
+    if (m_app.catalogueEditable())
+        m_originFetcher->enqueue(m_app.taxonomyStore().projectsMissingOrigins());
     syncAustralianSources(false, false);
+
+    // The first tree's refresh (queued by reloadProjectList()) runs now,
+    // before the window is shown -- not on the first event-loop turn after
+    // show(), where a slow refresh stalls Qt's restore of the saved window
+    // layout and the main-window layout later crashes (null raise()).
+    if (m_coverageRefreshQueued)
+        refreshCoverageNow();
+    buildCatalogueCorner();
+    setupSync();
 }
 
 bool MainWindow::hasAustralianTree() const
@@ -612,6 +662,8 @@ bool MainWindow::hasAustralianTree() const
 
 void MainWindow::updateAustralianSourcesNow()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_sourceSync.active)
         return;
     m_sourceSync = {};
@@ -657,6 +709,8 @@ void MainWindow::sourceSyncPartFinished()
 
 void MainWindow::syncAustralianSources(bool force, bool rematchOnly)
 {
+    if (!m_app.catalogueEditable())
+        return;   // a read-only shared copy: its editor keeps these current
     // ALA's state/national conservation lists and the APC's per-state plant
     // origins only mean anything for trees in Australia -- and the APC file
     // is ~100 MB, so don't fetch either for anyone without one.
@@ -674,23 +728,35 @@ void MainWindow::syncAustralianSources(bool force, bool rematchOnly)
 
 MainWindow::~MainWindow() = default;
 
-void MainWindow::fetchMissingPlaceAncestry()
+void MainWindow::fetchMissingPlaceDetails()
 {
     // Which regions lie within which decides where a region's conservation
-    // statuses count (see computeCoverage). Trees built before that was
-    // recorded, or from a place search that didn't return it, get it here --
-    // quietly, in the background; bounding boxes stand in until it arrives.
-    const QList<qint64> ids = m_app.taxonomyStore().projectPlacesMissingAncestry();
+    // statuses count (see computeCoverage), and a region's outline is drawn
+    // on the map and bounds its locality filter. Trees built before those
+    // were recorded, or from a place search that didn't return them, get
+    // them here -- quietly, in the background; bounding boxes stand in until
+    // they arrive.
+    if (!m_app.catalogueEditable())
+        return;   // a read-only shared copy: its editor fetches these
+    auto &store = m_app.taxonomyStore();
+    QList<qint64> ids = store.projectPlacesMissingAncestry();
+    for (qint64 id : store.projectPlacesMissingGeometry()) {
+        if (!ids.contains(id))
+            ids.append(id);
+    }
     for (qsizetype i = 0; i < ids.size(); i += 30) {
         m_app.inat().fetchPlaces(ids.mid(i, 30), [this](net::Outcome<QList<taxonomy::Place>> out) {
             if (!out.ok())
                 return;   // offline: try again next launch
+            auto &store = m_app.taxonomyStore();
             bool changed = false;
             for (const taxonomy::Place &p : std::as_const(out.value)) {
+                // Keeps whichever of the two was already known.
+                changed = store.upsertPlace(p) || changed;
                 if (p.ancestorIds.isEmpty())
-                    m_app.taxonomyStore().markPlaceAncestryUnavailable(p.inatId);
-                else if (m_app.taxonomyStore().upsertPlace(p))
-                    changed = true;
+                    store.markPlaceAncestryUnavailable(p.inatId);
+                if (p.geometryGeoJson.isEmpty())
+                    store.markPlaceGeometryUnavailable(p.inatId);
             }
             if (changed)
                 refreshCoverage();
@@ -706,6 +772,7 @@ void MainWindow::buildMenus()
     QMenu *matchingMenu = menuBar()->addMenu(tr("&Matching"));
     QMenu *inatMenu = menuBar()->addMenu(tr("i&Naturalist Tools"));
     m_viewMenu = menuBar()->addMenu(tr("&View"));
+    m_serverMenu = menuBar()->addMenu(tr("&Server"));
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
 
     buildFileMenu(fileMenu);
@@ -715,6 +782,7 @@ void MainWindow::buildMenus()
     buildMatchingMenu(matchingMenu);  // reuses m_matchAction + m_viewReviewAction
     buildInatMenu(inatMenu);          // after buildViewMenu(): switches via m_viewInatAction
     buildHelpMenu(helpMenu);
+    buildServerMenu(m_serverMenu);
     buildToolBar();                   // last: reuses actions from every menu above + m_filterCombo
 
     // A local SQLite file doesn't have a meaningful "connected" state, so
@@ -754,7 +822,20 @@ void MainWindow::buildMenus()
 
 void MainWindow::buildFileMenu(QMenu *fileMenu)
 {
-    fileMenu->addAction(tr("&Catalogue Settings…"), this, &MainWindow::showCatalogueSettings);
+    // Catalogues: the Local one and any Server ones -- completely separate.
+    QMenu *switchMenu = fileMenu->addMenu(tr("Switch &Catalogue"));
+    connect(switchMenu, &QMenu::aboutToShow, this, [this, switchMenu] {
+        switchMenu->clear();
+        const QString active = m_app.settings().activeProfile().id;
+        for (const Settings::CatalogueProfile &p : m_app.settings().profiles()) {
+            QAction *a = switchMenu->addAction(p.server ? tr("Server: %1").arg(p.name) : p.name);
+            a->setCheckable(true);
+            a->setChecked(p.id == active);
+            connect(a, &QAction::triggered, this, [this, id = p.id] { switchToCatalogue(id); });
+        }
+    });
+    fileMenu->addAction(tr("&Manage Catalogues…"), this, &MainWindow::showCatalogueSettings);
+
 
     fileMenu->addSeparator();
     QAction *quit = fileMenu->addAction(tr("E&xit"), this, &QWidget::close);
@@ -799,6 +880,9 @@ void MainWindow::buildReferenceTreeMenu(QMenu *treeMenu)
                                           this, &MainWindow::newReferenceTree);
     m_deleteTreeAction = treeMenu->addAction(tr("&Delete Reference Tree…"),
                                              this, &MainWindow::deleteReferenceTree);
+    m_importTreeAction = treeMenu->addAction(tr("I&mport Reference Tree…"),
+                                             this, &MainWindow::importReferenceTree);
+    treeMenu->addAction(tr("E&xport Reference Tree…"), this, &MainWindow::exportReferenceTree);
 
     treeMenu->addSeparator();
     m_refreshTreeAction = treeMenu->addAction(tr("Re&fresh Reference Tree"),
@@ -885,6 +969,16 @@ void MainWindow::buildViewMenu()
     }
 
     m_viewMenu->addSeparator();
+    QAction *showLocality = m_viewMenu->addAction(tr("Show Tree &Locality on Map"));
+    showLocality->setCheckable(true);
+    showLocality->setChecked(m_app.settings().showMapLocality());
+    showLocality->setToolTip(tr("Outline the active reference tree's region on the map."));
+    connect(showLocality, &QAction::toggled, this, [this](bool on) {
+        m_app.settings().setShowMapLocality(on);
+        if (m_mapView)
+            m_mapView->setShowLocality(on);
+    });
+
     m_darkModeAction = m_viewMenu->addAction(tr("&Dark Mode"));
     m_darkModeAction->setCheckable(true);
     m_darkModeAction->setObjectName(QStringLiteral("darkModeAction"));
@@ -904,6 +998,8 @@ void MainWindow::buildMatchingMenu(QMenu *matchingMenu)
     // sync (checked state, QActionGroup exclusivity) since they're one object.
     matchingMenu->addAction(m_viewReviewAction);
     matchingMenu->addAction(tr("&Learned Names…"), this, [this] {
+        if (!ensureCanEdit())
+            return;
         AliasEditorDialog dialog(m_app.database(), this);
         connect(&dialog, &AliasEditorDialog::aliasesChanged, this, [this] {
             statusBar()->showMessage(
@@ -1018,6 +1114,10 @@ void MainWindow::buildReferenceTreeDock()
     layout->setContentsMargins(6, 6, 6, 6);
 
     m_projectCombo = new QComboBox(panel);
+    m_projectCombo->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_projectCombo->setToolTip(tr("The reference tree shown. Right-click for Rename and more."));
+    connect(m_projectCombo, &QWidget::customContextMenuRequested, this,
+            &MainWindow::showTreeSelectorMenu);
     connect(m_projectCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_treeModel->setProject(index >= 0 ? m_projectCombo->itemData(index).toInt() : -1);
         m_treeView->expandToDepth(1);
@@ -1147,21 +1247,62 @@ int MainWindow::currentProjectId() const
 
 void MainWindow::refreshCoverage()
 {
+    if (m_coverageRefreshQueued)
+        return;
+    m_coverageRefreshQueued = true;
+    QTimer::singleShot(0, this, [this] {
+        if (m_coverageRefreshQueued)   // not already run by refreshCoverageNow()
+            refreshCoverageNow();
+    });
+}
+
+void MainWindow::refreshCoverageNow()
+{
+    m_coverageRefreshQueued = false;
+    // Phase timings, logged when the whole refresh is slow -- on a remote
+    // catalogue they show which step the network time goes to.
+    QElapsedTimer total, phase;
+    total.start();
+    phase.start();
+    QStringList timings;
+    auto lap = [&](const char *name) {
+        timings << QStringLiteral("%1 %2").arg(QLatin1String(name)).arg(phase.restart());
+    };
+    auto logIfSlow = [&](int pid) {
+        const qint64 ms = total.elapsed();
+        if (ms >= 250)
+            qInfo().noquote() << QStringLiteral("refreshCoverage(tree %1) %2 ms: %3")
+                                     .arg(pid)
+                                     .arg(ms)
+                                     .arg(timings.join(QStringLiteral(", ")));
+    };
+
     const int pid = currentProjectId();
     if (m_refPhotoModel)
         m_refPhotoModel->setProject(pid);
+    lap("refPhotos");
     if (m_mapView)
-        m_mapView->setActiveLocality(pid > 0 ? m_app.taxonomyStore().projectLocalityBox(pid)
-                                              : std::nullopt);
+        m_mapView->setActiveLocality(
+            pid > 0 ? m_app.taxonomyStore().projectLocalityBox(pid) : std::nullopt,
+            pid > 0 ? m_app.taxonomyStore().projectLocalityShape(pid) : std::nullopt);
+    lap("locality");
     reloadUntreedTaxa();
+    lap("untreed");
     if (pid <= 0 || !m_app.database().isOpen()) {
         m_coveragePanel->clear();
         mutateTreePreservingState([this] { m_treeModel->setCoverage({}); });
         onTreeSelectionChanged();
+        lap("tree");
+        logIfSlow(pid);
         return;
     }
     m_coverage = coverage::computeCoverage(m_app.database().connectionName(), pid);
-    coverage::pickRepresentatives(m_app.database().connectionName(), pid);
+    lap("coverage");
+    // Stored only where the catalogue may change; a read-only shared copy
+    // has the ones its editor stored.
+    if (m_app.catalogueEditable())
+        coverage::pickRepresentatives(m_app.database().connectionName(), pid);
+    lap("representatives");
     m_coveragePanel->setCoverage(m_coverage);
 
     QStringList photoUrls;
@@ -1171,10 +1312,14 @@ void MainWindow::refreshCoverage()
     }
     const auto usage = m_app.photoCache().diskUsage(photoUrls);
     m_coveragePanel->setCacheUsage(usage.count, photoUrls.size(), usage.bytes);
+    lap("leafPhotos");
 
     mutateTreePreservingState([this] { m_treeModel->setCoverage(m_coverage); });
     updateMissingList();
     onTreeSelectionChanged();
+    lap("tree");
+    logIfSlow(pid);
+    scheduleChangesCount();   // most edits end in a refresh: recount what's unsent
 }
 
 QList<qint64> MainWindow::collectExpandedTaxa(const QModelIndex &parent) const
@@ -1554,6 +1699,8 @@ void MainWindow::updateMissingList()
 
 void MainWindow::reassignPhotos(QListView *grid, model::CaptureListModel *model)
 {
+    if (!ensureCanEdit())
+        return;
     QList<int> captureIds;
     const QModelIndexList selected = grid->selectionModel()->selectedIndexes();
     if (!selected.isEmpty()) {
@@ -1690,7 +1837,7 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
         m_viewer = new ImageViewer(this);
         connect(m_viewer, &ImageViewer::bestShotToggleRequested, this,
                 [this](qint64 captureId, bool nominate) {
-                    if (captureId <= 0)
+                    if (captureId <= 0 || !ensureCanEdit())
                         return;
                     catalogue::BestShotStore store(m_app.database().connectionName());
                     if (store.setBestShots({int(captureId)}, nominate) < 0) {
@@ -1811,6 +1958,8 @@ void MainWindow::endTaskProgress()
 
 void MainWindow::refreshReferenceTree()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_builder->isRunning() || m_addingTaxon)
         return;
     const int pid = currentProjectId();
@@ -1849,6 +1998,8 @@ void MainWindow::refreshReferenceTree()
 
 void MainWindow::addTaxonToReferenceTree()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_builder->isRunning() || m_addingTaxon)
         return;
     const int pid = currentProjectId();
@@ -1928,8 +2079,55 @@ void MainWindow::addTaxonToTree(int pid, qint64 inatId, const QString &name)
     });
 }
 
+void MainWindow::showTreeSelectorMenu(const QPoint &pos)
+{
+    if (currentProjectId() <= 0)
+        return;
+    QMenu menu(this);
+    menu.addAction(tr("&Rename…"), this, &MainWindow::renameReferenceTree);
+    menu.addSeparator();
+    menu.addAction(m_refreshTreeAction);
+    menu.addAction(tr("E&xport Reference Tree…"), this, &MainWindow::exportReferenceTree);
+    menu.addSeparator();
+    menu.addAction(m_deleteTreeAction);
+    menu.exec(m_projectCombo->mapToGlobal(pos));
+}
+
+void MainWindow::renameReferenceTree()
+{
+    const int pid = currentProjectId();
+    if (pid <= 0 || !ensureCanEdit())
+        return;
+    auto &store = m_app.taxonomyStore();
+    const QString current = store.projectName(pid);
+    QString name = current;
+    while (true) {
+        bool ok = false;
+        name = QInputDialog::getText(this, tr("Rename Reference Tree"), tr("New name:"),
+                                     QLineEdit::Normal, name, &ok)
+                   .trimmed();
+        if (!ok || name.isEmpty() || name == current)
+            return;
+        if (!store.projectIdByName(name))
+            break;
+        QMessageBox::information(this, tr("Rename Reference Tree"),
+                                 tr("A reference tree called \"%1\" already exists. Choose "
+                                    "another name.")
+                                     .arg(name));
+    }
+    if (!store.renameProject(pid, name)) {
+        QMessageBox::warning(this, tr("Rename Reference Tree"),
+                             tr("Could not rename \"%1\".").arg(current));
+        return;
+    }
+    reloadProjectList();   // keeps this tree selected (by id)
+    statusBar()->showMessage(tr("Renamed \"%1\" to \"%2\".").arg(current, name), 6000);
+}
+
 void MainWindow::deleteReferenceTree()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_builder->isRunning() || m_addingTaxon)
         return;
     const int pid = currentProjectId();
@@ -1967,6 +2165,8 @@ void MainWindow::fetchInfraspecificTaxa()
 
 void MainWindow::startInfraspecificFetch(qint64 scopeInatId, const QString &scopeName)
 {
+    if (!ensureCanEdit())
+        return;
     if (m_infraFiller->isRunning())
         return;
     const int pid = currentProjectId();
@@ -2072,6 +2272,8 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
 
 void MainWindow::pruneTaxonFromTree(qint64 inatId, const QString &name)
 {
+    if (!ensureCanEdit())
+        return;
     if (m_addingTaxon)
         return;
     const int pid = currentProjectId();
@@ -2140,6 +2342,8 @@ void MainWindow::viewReferencePhoto(qint64 inatId)
 
 void MainWindow::importChecklist()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_checklistImporter->isRunning())
         return;
     const int pid = currentProjectId();
@@ -2190,8 +2394,116 @@ void MainWindow::importChecklist()
     m_checklistImporter->start(request);
 }
 
+void MainWindow::exportReferenceTree()
+{
+    const int pid = currentProjectId();
+    if (pid <= 0) {
+        QMessageBox::information(this, tr("Export Reference Tree"),
+                                 tr("Select a reference tree to export first."));
+        return;
+    }
+    if (!ensureCatalogueReachable())
+        return;
+
+    const QString treeName = m_projectCombo->currentText();
+    const QString xlsxFilter = tr("Excel workbook (*.xlsx)");
+    const QString csvFilter = tr("CSV file (*.csv)");
+    QString selectedFilter = xlsxFilter;
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("Export Reference Tree"),
+        QDir(QDir::homePath()).filePath(util::sanitizeFilenameComponent(treeName)
+                                        + QStringLiteral(".xlsx")),
+        xlsxFilter + QStringLiteral(";;") + csvFilter, &selectedFilter);
+    if (path.isEmpty())
+        return;
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    if (suffix != QLatin1String("xlsx") && suffix != QLatin1String("csv"))
+        path += selectedFilter == csvFilter ? QStringLiteral(".csv") : QStringLiteral(".xlsx");
+
+    const coverage::ProjectCoverage coverage =
+        coverage::computeCoverage(m_app.database().connectionName(), pid);
+    const treefile::TreeFile file =
+        treefile::exportProject(m_app.taxonomyStore(), pid, treeName, &coverage);
+    QString error;
+    if (!treefile::writeTreeFile(path, file, &error)) {
+        QMessageBox::warning(this, tr("Export Reference Tree"),
+                             tr("Could not export the tree: %1").arg(error));
+        return;
+    }
+    statusBar()->showMessage(tr("Exported %n taxa to %1.", nullptr, int(file.rows.size()))
+                                 .arg(QFileInfo(path).fileName()),
+                             8000);
+}
+
+void MainWindow::importReferenceTree()
+{
+    if (!ensureCanEdit())
+        return;
+    if (m_treeImporter->isRunning())
+        return;
+    if (!ensureCatalogueReachable())
+        return;
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Import Reference Tree"), QDir::homePath(),
+        tr("Reference trees (*.xlsx *.csv);;Excel workbooks (*.xlsx);;CSV files (*.csv);;"
+           "All files (*)"));
+    if (path.isEmpty())
+        return;
+
+    QString error;
+    const auto file = treefile::readTreeFile(path, &error);
+    if (!file) {
+        QMessageBox::warning(this, tr("Import Reference Tree"),
+                             tr("Could not read %1: %2").arg(QFileInfo(path).fileName(), error));
+        return;
+    }
+
+    int withoutId = 0;
+    for (const auto &row : file->rows) {
+        if (!row.inatId)
+            ++withoutId;
+    }
+    QString summary = tr("%n taxa in this file.", nullptr, int(file->rows.size()));
+    if (withoutId > 0)
+        summary += QLatin1Char(' ')
+                   + tr("%n without an iNaturalist ID will be looked up online.", nullptr,
+                        withoutId);
+
+    QString name = file->name.isEmpty() ? QFileInfo(path).completeBaseName() : file->name;
+    while (true) {
+        bool ok = false;
+        name = QInputDialog::getText(this, tr("Import Reference Tree"),
+                                     summary + QStringLiteral("\n\n")
+                                         + tr("Name for the new reference tree:"),
+                                     QLineEdit::Normal, name, &ok)
+                   .trimmed();
+        if (!ok || name.isEmpty())
+            return;
+        if (!m_app.taxonomyStore().projectIdByName(name))
+            break;
+        QMessageBox::information(this, tr("Import Reference Tree"),
+                                 tr("A reference tree called \"%1\" already exists. "
+                                    "Choose another name.")
+                                     .arg(name));
+        name += tr(" (imported)");
+    }
+
+    treefile::TreeImporter::Request request;
+    request.treeName = name;
+    request.file = *file;
+    request.defaultSource = QFileInfo(path).completeBaseName();
+
+    m_importTreeAction->setEnabled(false);
+    statusBar()->showMessage(tr("Importing reference tree \"%1\"…").arg(name));
+    beginTaskProgress(tr("Importing Reference Tree"), [this] { m_treeImporter->cancel(); });
+    m_treeImporter->start(request);
+}
+
 void MainWindow::importLightroom()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_app.lightroomImporter().isRunning())
         return;
     if (currentProjectId() <= 0) {
@@ -2260,6 +2572,8 @@ void MainWindow::reloadProjectList()
 
 void MainWindow::startMatch()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_app.matchService().isRunning() || m_matchAfterScanPending)
         return;
     if (m_model->captureCount() == 0 && m_app.settings().watchedRoots().isEmpty()) {
@@ -2371,6 +2685,8 @@ void MainWindow::resolveStaleDecisions(const QList<match::StaleDecision> &stale)
 
 void MainWindow::startGroupMatch(qint64 inatId, const QString &name)
 {
+    if (!ensureCanEdit())
+        return;
     if (m_app.matchService().isRunning() || m_matchAfterScanPending)
         return;
     const int pid = currentProjectId();
@@ -2393,6 +2709,8 @@ void MainWindow::startGroupMatch(qint64 inatId, const QString &name)
 
 void MainWindow::newReferenceTree()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_builder->isRunning())
         return;
     if (!ensureCatalogueReachable())
@@ -2549,6 +2867,8 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
 
 void MainWindow::setBestShotForSelection(QListView *grid, bool nominate)
 {
+    if (!ensureCanEdit())
+        return;
     QList<int> ids;
     int skipped = 0;
     const QModelIndexList selected = grid->selectionModel()->selectedIndexes();
@@ -2707,6 +3027,8 @@ void MainWindow::fetchCoordinatesFromInat(const QModelIndex &idx)
 
 void MainWindow::removeMissingCaptures()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_app.scanService().isRunning()) {
         QMessageBox::information(this, tr("Remove Missing Photos"),
                                 tr("Wait for the current scan to finish first."));
@@ -2823,6 +3145,8 @@ void MainWindow::removeMissingCaptures()
 
 void MainWindow::fixRawGeolocation()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_app.scanService().isRunning()) {
         QMessageBox::information(this, tr("Fix RAW Photo Locations"),
                                  tr("Wait for the current scan to finish first."));
@@ -2857,6 +3181,8 @@ void MainWindow::fixRawGeolocation()
 
 void MainWindow::fetchPhotoLocalities()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_localityFetcher->isRunning())
         return;
 
@@ -3016,6 +3342,7 @@ QWidget *MainWindow::buildBrowsePage()
 QWidget *MainWindow::buildMapPage()
 {
     m_mapView = new MapView(*m_taxonModel, m_app.tileCache(), this);
+    m_mapView->setShowLocality(m_app.settings().showMapLocality());
     connect(m_mapView, &MapView::captureActivated, this,
             [this](const QModelIndex &i) { openViewer(m_taxonModel, i); });
     return m_mapView;
@@ -3343,6 +3670,8 @@ void MainWindow::showUntreedListContextMenu(const QPoint &pos)
 
 void MainWindow::addUntreedTaxonToTree(QTreeWidgetItem *item, int projectId)
 {
+    if (!ensureCanEdit())
+        return;
     if (!item || projectId <= 0)
         return;
     const qint64 inatId = item->data(0, Qt::UserRole).toLongLong();
@@ -3438,6 +3767,8 @@ void MainWindow::maybeFetchReferencePhotos()
 
 void MainWindow::fetchReferencePhotos()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_refPhotoFetcher && m_refPhotoFetcher->isRunning())
         return;
 
@@ -3540,6 +3871,8 @@ void MainWindow::showUnexpectedExportFiles(const collection::ExportSummary &summ
 
 void MainWindow::downloadSelectedInatPhotos(const QList<inat::ImportItem> &items)
 {
+    if (!ensureCanEdit())
+        return;
     if (m_inatImportService->isRunning() || items.isEmpty())
         return;
 
@@ -3777,6 +4110,8 @@ void MainWindow::updateEmptyState()
 
 void MainWindow::addWatchedFolder()
 {
+    if (!ensureCanEdit())
+        return;
     const QString dir = QFileDialog::getExistingDirectory(
         this, tr("Add Folder to Library"),
         QDir::homePath(), QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
@@ -3785,6 +4120,22 @@ void MainWindow::addWatchedFolder()
 
     QStringList roots = m_app.settings().watchedRoots();
     const QString clean = QDir::cleanPath(dir);
+    // A server catalogue's photos must be in its shared library folder, or
+    // collaborators can't open them.
+    if (m_app.settings().syncEnabled()) {
+        const QString root = QDir::cleanPath(m_app.settings().libraryRoot());
+        bool outside = false;
+        sync::PathMapping(root).toServer(clean, &outside);
+        if (outside
+            && QMessageBox::warning(
+                   this, tr("Add Folder to Library"),
+                   tr("\"%1\" isn't inside this catalogue's photo library folder (%2), so your "
+                      "collaborators won't be able to open its photos.\n\nAdd it anyway?")
+                       .arg(QDir::toNativeSeparators(clean), QDir::toNativeSeparators(root)),
+                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                   != QMessageBox::Yes)
+            return;
+    }
     if (!roots.contains(clean)) {
         roots.append(clean);
         m_app.settings().setWatchedRoots(roots);
@@ -3802,10 +4153,13 @@ void MainWindow::addWatchedFolder()
     if (m_app.scanService().isRunning())
         return;
     m_app.scanService().start({clean});
+    beginScanProgress(tr("Adding \"%1\" to the Library").arg(QFileInfo(clean).fileName()));
 }
 
 void MainWindow::manageLibraryFolders()
 {
+    if (!ensureCanEdit())
+        return;
     if (m_app.scanService().isRunning()) {
         QMessageBox::information(this, tr("Manage Library Folders"),
                                  tr("Wait for the current scan to finish first."));
@@ -3830,6 +4184,8 @@ void MainWindow::manageLibraryFolders()
 
 void MainWindow::startScan()
 {
+    if (!ensureCanEdit())
+        return;
     const QStringList roots = m_app.settings().watchedRoots();
     if (roots.isEmpty()) {
         QMessageBox::information(this, tr("Rescan Library"),
@@ -3840,10 +4196,25 @@ void MainWindow::startScan()
         return;
 
     m_app.scanService().start(roots);
+    beginScanProgress(tr("Rescanning the Library"));
+}
+
+void MainWindow::beginScanProgress(const QString &title)
+{
+    if (m_taskProgress)
+        return;   // another task's window is up; the status bar still reports
+    m_scanProgressActive = true;
+    beginTaskProgress(title, [this] {
+        m_app.scanService().cancel();
+        updateTaskProgress(tr("Stopping…"), 0, 0);
+    });
+    updateTaskProgress(tr("Looking for photos…"), 0, 0);
 }
 
 void MainWindow::requestScan(std::function<void()> afterScan)
 {
+    if (!m_app.catalogueEditable())
+        return;   // e.g. the folder watcher, on a read-only shared copy
     if (afterScan)
         m_afterQueuedScan.append(std::move(afterScan));
     if (m_app.scanService().isRunning()) {
@@ -3888,6 +4259,15 @@ void MainWindow::onScanProgress(const scan::ScanProgress &progress)
         updateTaskProgress(tr("Checking the library for changes — %1 photos checked…")
                                .arg(progress.filesSeen),
                            0, 0);
+    // Finding files first, then writing them into the catalogue.
+    if (m_scanProgressActive)
+        updateTaskProgress(progress.capturesSeen > 0
+                               ? tr("Adding photos to the catalogue — %L1 processed…")
+                                     .arg(progress.capturesSeen)
+                               : tr("Looking for photos — %L1 folders, %L2 photos found…")
+                                     .arg(progress.foldersSeen)
+                                     .arg(progress.filesSeen),
+                           0, 0);
     // foldersSeen/filesSeen are running totals for this whole scan (every
     // root being scanned this run, not just currentDir) -- word it that way
     // so it doesn't read as "this folder alone has thousands of photos" when
@@ -3901,6 +4281,9 @@ void MainWindow::onScanProgress(const scan::ScanProgress &progress)
 void MainWindow::onScanFinished(const scan::ScanSummary &summary)
 {
     setScanUiRunning(false);
+    if (std::exchange(m_scanProgressActive, false))
+        endTaskProgress();
+    scheduleChangesCount();
     m_lastScanCompleted = summary.ok() && !summary.cancelled;
     m_model->reload();
     updateEmptyState();
@@ -3942,6 +4325,37 @@ void MainWindow::restoreLayout()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // Editing a shared catalogue: offer to send the changes and hand the
+    // edit lock back before going.
+    if (m_app.settings().syncEnabled() && m_app.settings().syncEditing() && !m_closeConfirmed) {
+        if (m_closeAfterSync) {   // already finishing; wait for it
+            event->ignore();
+            return;
+        }
+        const int pending = m_app.syncService().pendingChanges(m_app.database().connectionName());
+        QMessageBox box(QMessageBox::Question, tr("Finish Editing?"),
+                        pending > 0 ? tr("You have %n change(s) not yet sent to the shared "
+                                         "catalogue.", nullptr, pending)
+                                    : tr("You're still editing the shared catalogue, so nobody "
+                                         "else can edit it."),
+                        QMessageBox::NoButton, this);
+        box.setInformativeText(tr("Finish Editing sends your changes and lets others edit."));
+        QPushButton *finish = box.addButton(tr("Finish Editing"), QMessageBox::AcceptRole);
+        QPushButton *keep = box.addButton(tr("Keep Editing Later"), QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(finish);
+        box.exec();
+        if (box.clickedButton() == finish) {
+            m_closeAfterSync = true;
+            runSync(sync::SyncService::Op::FinishEditing, true);
+            event->ignore();
+            return;
+        }
+        if (box.clickedButton() != keep) {
+            event->ignore();
+            return;
+        }
+    }
     m_app.scanService().cancel();
     m_app.settings().setMainWindowGeometry(saveGeometry());
     m_app.settings().setMainWindowState(saveState());
@@ -4005,56 +4419,1038 @@ void MainWindow::showStorageUsage()
 
 void MainWindow::showCatalogueSettings()
 {
-    const CatalogueDescriptor before = m_app.settings().catalogueDescriptor();
+    ManageCataloguesDialog dialog(m_app.settings(), this);
+    connect(&dialog, &ManageCataloguesDialog::openRequested, this, [this, &dialog](const QString &id) {
+        dialog.accept();
+        // After the dialog has closed.
+        QTimer::singleShot(0, this, [this, id] { switchToCatalogue(id); });
+    });
+    dialog.exec();
+}
+
+void MainWindow::editServerSettings()
+{
+    auto &settings = m_app.settings();
+    if (!settings.syncEnabled())
+        return;
+    const Settings::CatalogueProfile before = settings.activeProfile();
     CatalogueSettingsDialog dialog(before, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
+    const Settings::CatalogueProfile after = dialog.profile();
+    if (settings.syncEditing()
+        && (after.pg.pgHost != before.pg.pgHost || after.pg.pgDbName != before.pg.pgDbName)) {
+        QMessageBox::warning(this, tr("Server Settings"),
+                             tr("Finish Editing before pointing this catalogue at another server."));
+        return;
+    }
+    settings.saveServerProfile(after);
+    m_app.configureSync();
+    const CatalogueDescriptor server = settings.syncServerDescriptor();
+    m_serverView.server = tr("%1 on %2").arg(server.pgDbName, server.pgHost);
+    m_serverView.me = m_app.syncService().config().identity;
+    updateSyncStatus();
+    updateCatalogueCorner();
+    statusBar()->showMessage(tr("Server settings saved."), 6000);
+}
 
-    const CatalogueDescriptor after = dialog.descriptor();
-    m_app.settings().setCatalogueDescriptor(after);
+void MainWindow::buildCatalogueCorner()
+{
+    m_catalogueCorner = new QWidget(this);
+    auto *layout = new QHBoxLayout(m_catalogueCorner);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
 
-    // Backend-aware: only the fields relevant to whichever backend is now
-    // active matter -- dialog.descriptor() leaves the *other* tab's fields
-    // at their struct defaults, so comparing every field unconditionally
-    // would spuriously look "changed" on a same-backend no-op save.
-    const bool changed = after.backend != before.backend
-        || (after.backend == CatalogueDescriptor::Backend::Postgres
-                ? (after.pgHost != before.pgHost || after.pgPort != before.pgPort
-                   || after.pgDbName != before.pgDbName || after.pgUser != before.pgUser
-                   || after.pgPassword != before.pgPassword || after.pgSslMode != before.pgSslMode)
-                : after.sqlitePath != before.sqlitePath);
-    if (!changed)
+    m_catalogueSwitcher = new QToolButton(m_catalogueCorner);
+    m_catalogueSwitcher->setAutoRaise(true);
+    m_catalogueSwitcher->setPopupMode(QToolButton::InstantPopup);
+    m_catalogueSwitcher->setToolTip(tr("Which catalogue is open. Click to switch catalogue."));
+    auto *menu = new QMenu(m_catalogueSwitcher);
+    connect(menu, &QMenu::aboutToShow, this, [this, menu] {
+        menu->clear();
+        const QString active = m_app.settings().activeProfile().id;
+        for (const Settings::CatalogueProfile &p : m_app.settings().profiles()) {
+            QAction *a = menu->addAction(p.server ? tr("Server: %1").arg(p.name) : p.name);
+            a->setCheckable(true);
+            a->setChecked(p.id == active);
+            connect(a, &QAction::triggered, this, [this, id = p.id] { switchToCatalogue(id); });
+        }
+        menu->addSeparator();
+        menu->addAction(tr("Manage Catalogues…"), this, &MainWindow::showCatalogueSettings);
+    });
+    m_catalogueSwitcher->setMenu(menu);
+    layout->addWidget(m_catalogueSwitcher);
+
+    if (!m_app.settings().syncEnabled()) {
+        m_localBadge = new QLabel(m_catalogueCorner);
+        m_localBadge->setToolTip(tr("Your own catalogue on this computer — not shared, never "
+                                    "synced."));
+        layout->addWidget(m_localBadge);
+        setWindowTitle(tr("%1 — Local catalogue").arg(QString::fromLatin1(kAppName)));
+    }
+    menuBar()->setCornerWidget(m_catalogueCorner, Qt::TopRightCorner);
+    updateCatalogueCorner();
+}
+
+void MainWindow::updateCatalogueCorner()
+{
+    if (!m_catalogueCorner)
+        return;
+    const Settings::CatalogueProfile p = m_app.settings().activeProfile();
+    m_catalogueSwitcher->setText(p.server ? tr("Server: %1").arg(p.name) : tr("Local catalogue"));
+    if (m_localBadge) {
+        const QColor c = themeColors(currentThemeVariant()).secondaryAccent;
+        m_localBadge->setText(QStringLiteral("⬤  ") + tr("LOCAL CATALOGUE"));
+        m_localBadge->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-weight: 600; border: 1px solid %1; border-radius: 9px; "
+            "padding: 1px 10px; margin-right: 6px; }")
+                                        .arg(c.name()));
+    }
+    m_catalogueCorner->adjustSize();
+}
+
+void MainWindow::switchToCatalogue(const QString &id)
+{
+    auto &settings = m_app.settings();
+    if (id == settings.activeProfile().id || !settings.profile(id))
+        return;
+    // Leaving a server catalogue you're editing: offer to finish first.
+    if (settings.syncEnabled() && settings.syncEditing()) {
+        const int pending = m_app.syncService().pendingChanges(m_app.database().connectionName());
+        QMessageBox box(QMessageBox::Question, tr("Switch Catalogue"),
+                        tr("You're editing \"%1\".").arg(settings.activeProfile().name),
+                        QMessageBox::NoButton, this);
+        box.setInformativeText(
+            (pending > 0 ? tr("%n change(s) haven't been sent yet. ", nullptr, pending) : QString())
+            + tr("Finish Editing sends them and lets others edit; or switch now and carry on "
+                 "editing when you come back (others stay read-only meanwhile)."));
+        QPushButton *finish = box.addButton(tr("Finish Editing, Then Switch"), QMessageBox::AcceptRole);
+        QPushButton *keep = box.addButton(tr("Switch, Keep Editing Later"), QMessageBox::DestructiveRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(finish);
+        box.exec();
+        if (box.clickedButton() == finish) {
+            m_switchAfterSync = id;
+            runSync(sync::SyncService::Op::FinishEditing, true);
+            return;
+        }
+        if (box.clickedButton() != keep)
+            return;
+    }
+    settings.setActiveProfile(id);
+    relaunch();
+}
+
+// --- shared catalogue (sync mode) ------------------------------------------
+
+namespace {
+
+using Op = sync::SyncService::Op;
+
+QString describeLockTime(const QString &iso)
+{
+    QDateTime t = QDateTime::fromString(iso, Qt::ISODateWithMs);
+    if (!t.isValid())
+        t = QDateTime::fromString(iso, Qt::ISODate);
+    return t.isValid() ? describeTime(t) : QString();
+}
+
+QString syncOpTitle(Op op)
+{
+    switch (op) {
+    case Op::Check:
+        return QObject::tr("Checking the shared catalogue");
+    case Op::Pull:
+        return QObject::tr("Getting the latest catalogue");
+    case Op::StartEditing:
+        return QObject::tr("Starting to edit");
+    case Op::BreakLock:
+        return QObject::tr("Taking over editing");
+    case Op::Push:
+        return QObject::tr("Sending your changes");
+    case Op::FinishEditing:
+        return QObject::tr("Finishing editing");
+    case Op::Publish:
+    case Op::PublishFromFile:
+        return QObject::tr("Publishing the catalogue");
+    case Op::Changes:
+        return QObject::tr("Counting your changes");
+    case Op::TestConnection:
+        return QObject::tr("Testing the connection");
+    case Op::Discard:
+    case Op::DiscardAndRelease:
+        return QObject::tr("Discarding your changes");
+    case Op::RestoreBackup:
+        return QObject::tr("Restoring a backup");
+    }
+    return {};
+}
+
+// The activity log's name for an operation.
+QString syncOpName(Op op)
+{
+    switch (op) {
+    case Op::Check:
+        return QObject::tr("Check server");
+    case Op::Pull:
+        return QObject::tr("Get latest");
+    case Op::StartEditing:
+        return QObject::tr("Start editing");
+    case Op::BreakLock:
+        return QObject::tr("Take over editing");
+    case Op::Push:
+        return QObject::tr("Sync");
+    case Op::FinishEditing:
+        return QObject::tr("Finish editing");
+    case Op::Publish:
+        return QObject::tr("Publish");
+    case Op::PublishFromFile:
+        return QObject::tr("Publish a copy of the Local catalogue");
+    case Op::Changes:
+        return QObject::tr("Count changes");
+    case Op::TestConnection:
+        return QObject::tr("Test connection");
+    case Op::Discard:
+        return QObject::tr("Discard changes");
+    case Op::DiscardAndRelease:
+        return QObject::tr("Discard changes and stop editing");
+    case Op::RestoreBackup:
+        return QObject::tr("Restore backup");
+    }
+    return {};
+}
+
+bool isLocalOp(Op op)
+{
+    return op == Op::Changes || op == Op::Discard || op == Op::RestoreBackup;
+}
+
+} // namespace
+
+void MainWindow::buildServerMenu(QMenu *menu)
+{
+    menu->setToolTipsVisible(true);
+    m_serverStatusAction = menu->addAction(tr("Server &Status…"), this, &MainWindow::showServerStatus);
+    menu->addSeparator();
+    m_startEditingAction = menu->addAction(tr("&Start Editing"), this, [this] { startEditing(); });
+    m_syncNowAction = menu->addAction(tr("S&ync Now"), this, &MainWindow::syncNow);
+    m_syncNowAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
+    m_finishEditingAction = menu->addAction(tr("&Finish Editing (Send && Release)"), this,
+                                            &MainWindow::finishEditing);
+    m_discardAction = menu->addAction(tr("&Discard My Changes…"), this, &MainWindow::discardChanges);
+    menu->addSeparator();
+    m_reviewChangesAction = menu->addAction(tr("&Review Changes…"), this, &MainWindow::showReviewChanges);
+    menu->addAction(tr("Activity &Log…"), this, &MainWindow::showActivityLog);
+    m_testConnectionAction = menu->addAction(tr("&Test Connection"), this, &MainWindow::testConnection);
+    menu->addSeparator();
+    m_breakLockAction = menu->addAction(tr("Take &Over Editing…"), this, &MainWindow::offerBreakLock);
+    m_restoreBackupAction = menu->addAction(tr("Restore a &Backup…"), this, &MainWindow::restoreBackup);
+    menu->addSeparator();
+    menu->addAction(tr("Server Se&ttings…"), this, &MainWindow::editServerSettings);
+    menu->addAction(tr("Switch to &Local Catalogue"), this, &MainWindow::switchToLocalCatalogue);
+    menu->addAction(tr("&Manage Catalogues…"), this, &MainWindow::showCatalogueSettings);
+}
+
+void MainWindow::setupSync()
+{
+    const bool enabled = m_app.settings().syncEnabled();
+    m_serverMenu->menuAction()->setVisible(enabled);
+    if (!enabled)
         return;
 
-    // Nothing today can re-point an already-open Database/ScanService/
-    // MatchService at a new descriptor (see Settings::catalogueDescriptor()),
-    // so take effect via a full relaunch instead of asking the user to do it
-    // manually -- a fresh process just re-reads the now-updated settings.
+    auto &service = m_app.syncService();
+    const CatalogueDescriptor server = m_app.settings().syncServerDescriptor();
+    m_serverView.me = service.config().identity;
+    m_serverView.server = tr("%1 on %2").arg(server.pgDbName, server.pgHost);
+    m_serverView.libraryRoot = m_app.settings().libraryRoot();
+    {
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        if (q.exec(QStringLiteral("SELECT version FROM catalogue_sync WHERE id = 1")) && q.next())
+            m_serverView.localVersion = q.value(0).toLongLong();
+    }
+
+    m_serverBar = new ServerBar(m_serverMenu, m_catalogueCorner);
+    m_catalogueCorner->layout()->addWidget(m_serverBar);
+    connect(m_serverBar, &ServerBar::statusRequested, this, &MainWindow::showServerStatus);
+    connect(m_serverBar, &ServerBar::startEditingRequested, this, [this] { startEditing(); });
+    connect(m_serverBar, &ServerBar::getLatestRequested, this, [this] { runSync(Op::Check, true); });
+    connect(m_serverBar, &ServerBar::syncRequested, this, &MainWindow::syncNow);
+    connect(m_serverBar, &ServerBar::finishEditingRequested, this, &MainWindow::finishEditing);
+    connect(m_serverBar, &ServerBar::reviewChangesRequested, this, &MainWindow::showReviewChanges);
+    connect(m_serverBar, &ServerBar::takeOverRequested, this, &MainWindow::offerBreakLock);
+    connect(m_serverBar, &ServerBar::retryRequested, this, [this] { runSync(Op::Check, true); });
+
+    connect(&service, &sync::SyncService::progress, this,
+            [this](const QString &phase, int done, int total) {
+                m_serverView.runningPhase = phase;
+                if (m_serverBar)
+                    m_serverBar->setView(m_serverView);
+                if (m_syncUserInitiated)
+                    updateTaskProgress(phase, done, total);
+            });
+    connect(&service, &sync::SyncService::finished, this, &MainWindow::onSyncFinished);
+
+    // Keep an eye on the server: who's editing, whether there's a newer
+    // version, whether it's reachable.
+    m_syncCheckTimer = new QTimer(this);
+    connect(m_syncCheckTimer, &QTimer::timeout, this, [this] {
+        if (!m_app.syncService().isRunning())
+            runSync(Op::Check, false);
+    });
+    m_syncCheckTimer->start(m_app.settings().syncEditing() ? 2 * 60 * 1000 : 5 * 60 * 1000);
+    // ...and recount your changes a moment after edits (local, quick).
+    m_changesTimer = new QTimer(this);
+    m_changesTimer->setSingleShot(true);
+    m_changesTimer->setInterval(2000);
+    connect(m_changesTimer, &QTimer::timeout, this, [this] {
+        if (m_app.syncService().isRunning())
+            m_changesTimer->start();   // try again shortly
+        else
+            runSync(Op::Changes, false);
+    });
+    // A server catalogue opened for the first time has an empty working copy:
+    // offer to download (or start) it. Otherwise just look at the server.
+    if (!QFile::exists(sync::SyncService::basePath(m_app.settings().databasePath())))
+        QTimer::singleShot(0, this, &MainWindow::setUpSharedCatalogue);
+    else
+        QTimer::singleShot(0, this, [this] { runSync(Op::Check, false); });
+
+    connect(m_reviewPane, &ReviewPane::editRequested, this, [this] { ensureCanEdit(); });
+    applyEditability();
+}
+
+void MainWindow::scheduleChangesCount()
+{
+    if (m_changesTimer && m_app.settings().syncEditing())
+        m_changesTimer->start();
+}
+
+void MainWindow::runSync(Op op, bool userInitiated)
+{
+    if (m_app.syncService().isRunning()) {
+        // A quick change count is under way: do this straight after it.
+        if (userInitiated && m_runningOp == Op::Changes) {
+            m_queuedOp = op;
+            return;
+        }
+        if (userInitiated)
+            statusBar()->showMessage(tr("The server is busy with another request — try again in "
+                                        "a moment."),
+                                     6000);
+        return;
+    }
+    m_runningOp = op;
+    m_syncUserInitiated = userInitiated;
+    if (userInitiated && op != Op::Changes)
+        beginTaskProgress(syncOpTitle(op), {});
+    if (op != Op::Changes) {
+        m_serverView.running = true;
+        m_serverView.runningPhase = syncOpTitle(op);
+    }
+    m_app.syncService().run(op);
+    updateSyncStatus();
+}
+
+void MainWindow::onSyncFinished(const sync::SyncService::Outcome &o)
+{
+    if (m_syncSetupRunning)
+        return;
+    const bool userInitiated = std::exchange(m_syncUserInitiated, false);
+    if (userInitiated && o.op != Op::Changes)
+        endTaskProgress();
+    m_runningOp.reset();
+    auto &settings = m_app.settings();
+    const sync::SyncIdentity me = m_app.syncService().config().identity;
+    ServerView &v = m_serverView;
+    const ServerView before = v;
+
+    v.running = false;
+    v.runningPhase.clear();
+    if (o.state)
+        v.state = o.state;
+    if (!isLocalOp(o.op) && (o.ok || o.localVersion > 0))
+        v.localVersion = o.localVersion;
+    if (o.changes)
+        v.changes = o.changes;
+    else if (o.ok && (o.op == Op::Push || o.op == Op::FinishEditing || o.op == Op::Publish))
+        v.changes = sync::ChangeSummary{};   // all sent
+    if (o.test)
+        v.lastTest = o.test;
+    if (!isLocalOp(o.op)) {
+        if (o.ok || !o.unreachable) {
+            v.offline = false;
+            v.checked = v.checked || o.ok;
+            v.lastContact = o.finishedAt;
+        } else {
+            v.offline = true;
+            v.lastError = o.error;
+        }
+    }
+    if (o.ok && (o.op == Op::Push || o.op == Op::FinishEditing || o.op == Op::Publish
+                 || o.op == Op::Pull))
+        v.lastSync = o.finishedAt;
+
+    // The activity log: the operation, and anything that changed on its own.
+    if (o.op != Op::Changes && (o.op != Op::Check || userInitiated || !o.ok))
+        logActivity(o);
+    sync::SyncActivityLog log(QDir(QFileInfo(settings.databasePath()).absolutePath())
+                                  .filePath(QStringLiteral("sync-activity.log")));
+    const QDateTime now = QDateTime::currentDateTime();
+    if (before.offline != v.offline && !(o.op == Op::Check && !o.ok && !before.checked))
+        log.append({now, v.offline ? tr("Connection lost") : tr("Connection restored"), !v.offline,
+                    v.offline ? QString() : v.server, v.offline ? v.lastError : QString(), 0});
+    const QString lockBefore = before.state ? before.state->lockedBy : QString();
+    const QString lockNow = v.state ? v.state->lockedBy : QString();
+    if (before.state && v.state && lockBefore != lockNow && !(v.state->heldBy(me)))
+        log.append({now, tr("Edit lock"), true,
+                    lockNow.isEmpty() ? tr("%1 finished editing").arg(lockBefore)
+                                      : tr("%1 started editing").arg(lockNow),
+                    {}, 0});
+    if (before.state && v.state && v.state->version > before.state->version
+        && v.state->pushedBy != me.user)
+        log.append({now, tr("Newer version on server"), true,
+                    tr("Version %1 by %2").arg(v.state->version).arg(v.state->pushedBy), {}, 0});
+
+    if (!o.ok) {
+        if (o.op == Op::FinishEditing && !m_switchAfterSync.isEmpty()) {
+            m_switchAfterSync.clear();
+            QMessageBox::warning(this, tr("Switch Catalogue"),
+                                 tr("Your changes couldn't be sent, so you're still in this "
+                                    "catalogue:\n\n%1")
+                                     .arg(o.error));
+            updateSyncStatus();
+            return;
+        }
+        if (m_closeAfterSync) {
+            m_closeAfterSync = false;
+            const auto reply = QMessageBox::question(
+                this, tr("Finish Editing"),
+                tr("Your changes couldn't be sent:\n\n%1\n\nClose anyway? They stay on this "
+                   "computer, and you keep the edit lock.")
+                    .arg(o.error));
+            if (reply == QMessageBox::Yes) {
+                m_closeConfirmed = true;
+                close();
+            }
+        } else if ((o.op == Op::StartEditing || o.op == Op::BreakLock) && o.state
+                   && o.state->isLocked() && !o.state->heldBy(me)) {
+            offerBreakLock();
+        } else if (userInitiated) {
+            QMessageBox::warning(this, syncOpTitle(o.op), o.error);
+        } else if (o.op != Op::Changes) {
+            qInfo().noquote() << "Shared catalogue check failed:" << o.error;
+        }
+        updateSyncStatus();
+        if (m_queuedOp)
+            runSync(*std::exchange(m_queuedOp, std::nullopt), true);
+        return;
+    }
+
+    // Someone broke our lock: we're no longer editing.
+    if (settings.syncEditing() && o.state && !o.state->heldBy(me) && o.op != Op::FinishEditing
+        && o.op != Op::DiscardAndRelease) {
+        settings.setSyncEditing(false);
+        applyEditability();
+        QMessageBox::warning(
+            this, tr("Editing Taken Over"),
+            tr("%1 has taken over editing the shared catalogue, so this computer is read-only "
+               "now. Changes you hadn't sent can't be sent any more; use Get Latest to update.")
+                .arg(o.state->isLocked() ? o.state->lockedBy : tr("Someone")));
+    }
+
+    switch (o.op) {
+    case Op::Check:
+        if (userInitiated) {
+            if (!v.newerAvailable()) {
+                statusBar()->showMessage(tr("Your catalogue is up to date."), 6000);
+                break;
+            }
+            QString text = tr("A newer shared catalogue is available (version %1%2). Get it now? "
+                              "PhotoLife restarts to open it; a backup of your current catalogue "
+                              "is kept.")
+                               .arg(o.state->version)
+                               .arg(o.state->pushedBy.isEmpty()
+                                        ? QString()
+                                        : tr(", by %1").arg(o.state->pushedBy));
+            if (v.pending() > 0)
+                text += QStringLiteral("\n\n")
+                        + tr("%n change(s) made on this computer while not editing will be "
+                             "replaced.",
+                             nullptr, v.pending());
+            if (QMessageBox::question(this, tr("Get Latest"), text) == QMessageBox::Yes)
+                runSync(Op::Pull, true);
+        }
+        break;
+    case Op::Pull:
+        QMessageBox::information(this, tr("Get Latest"),
+                                 tr("Got the latest shared catalogue. PhotoLife will restart to "
+                                    "open it."));
+        relaunch();
+        return;
+    case Op::StartEditing:
+    case Op::BreakLock:
+        settings.setSyncEditing(true);
+        if (m_syncCheckTimer)
+            m_syncCheckTimer->setInterval(2 * 60 * 1000);
+        if (o.pulled) {
+            QMessageBox::information(this, tr("Start Editing"),
+                                     tr("You're editing the shared catalogue. PhotoLife will "
+                                        "restart to open its latest version first."));
+            relaunch();
+            return;
+        }
+        applyEditability();
+        statusBar()->showMessage(tr("You're editing the shared catalogue — others see it "
+                                    "read-only until you Finish Editing."),
+                                 8000);
+        break;
+    case Op::Push:
+    case Op::FinishEditing:
+    case Op::Publish: {
+        if (o.op == Op::FinishEditing) {
+            settings.setSyncEditing(false);
+            if (m_syncCheckTimer)
+                m_syncCheckTimer->setInterval(5 * 60 * 1000);
+            applyEditability();
+        }
+        QString message = o.sent > 0 ? tr("Sent %n change(s) to the shared catalogue.", nullptr, o.sent)
+                                     : tr("No changes to send.");
+        if (o.op == Op::FinishEditing)
+            message += QLatin1Char(' ') + tr("Others can edit now.");
+        statusBar()->showMessage(message, 8000);
+        if (o.outsideRoot > 0)
+            QMessageBox::warning(
+                this, tr("Photos Outside Your Library"),
+                tr("%n photo location(s) are outside your photo library folder (%1), so "
+                   "collaborators won't be able to open those photos. Move them into the "
+                   "library, or change the library folder in Server Settings.",
+                   nullptr, o.outsideRoot)
+                    .arg(QDir::toNativeSeparators(settings.libraryRoot())));
+        if (m_closeAfterSync) {
+            m_closeAfterSync = false;
+            m_closeConfirmed = true;
+            close();
+            return;
+        }
+        if (o.op == Op::FinishEditing && !m_switchAfterSync.isEmpty()) {
+            settings.setActiveProfile(std::exchange(m_switchAfterSync, QString()));
+            relaunch();
+            return;
+        }
+        break;
+    }
+    case Op::Changes:
+        if (m_reviewDialog)
+            m_reviewDialog->setSummary(v.changes, settings.syncEditing());
+        break;
+    case Op::TestConnection: {
+        const auto &t = *o.test;
+        QMessageBox::information(
+            this, tr("Test Connection"),
+            tr("Connected to %1.\n\nConnecting took %2 ms; a round trip takes %3 ms.\n\n"
+               "Server: %4\nCatalogue version %5, schema %6.\nEdit lock: %7.")
+                .arg(v.server)
+                .arg(t.connectMs)
+                .arg(QString::number(t.roundTripMs, 'f', 0))
+                .arg(t.serverVersion.section(QLatin1Char(','), 0, 0))
+                .arg(o.state->version)
+                .arg(o.state->schemaVersion)
+                .arg(o.state->isLocked() ? tr("%1 on %2 since %3")
+                                               .arg(o.state->lockedBy, o.state->lockedMachine,
+                                                    describeLockTime(o.state->lockedAt))
+                                         : tr("free")));
+        break;
+    }
+    case Op::Discard:
+    case Op::DiscardAndRelease:
+        if (o.op == Op::DiscardAndRelease)
+            settings.setSyncEditing(false);
+        QMessageBox::information(this, tr("Discard My Changes"),
+                                 tr("PhotoLife will restart with the catalogue as it was at your "
+                                    "last sync. The discarded version is kept as a backup."));
+        relaunch();
+        return;
+    case Op::PublishFromFile:
+        settings.setSyncEditing(true);
+        relaunch();
+        return;
+    case Op::RestoreBackup:
+        QMessageBox::information(this, tr("Restore a Backup"),
+                                 tr("PhotoLife will restart with the restored catalogue. The one "
+                                    "it replaces is kept as a backup."));
+        relaunch();
+        return;
+    }
+    if (!isLocalOp(o.op) && o.op != Op::Check)
+        scheduleChangesCount();
+    updateSyncStatus();
+    if (m_queuedOp)
+        runSync(*std::exchange(m_queuedOp, std::nullopt), true);
+}
+
+void MainWindow::logActivity(const sync::SyncService::Outcome &o)
+{
+    QString detail;
+    if (o.ok) {
+        switch (o.op) {
+        case Op::Push:
+        case Op::FinishEditing:
+            detail = o.sent > 0 ? tr("Sent %n change(s); server now at version %1", nullptr, o.sent)
+                                      .arg(o.localVersion)
+                                : tr("Nothing to send");
+            if (o.op == Op::FinishEditing)
+                detail += tr("; edit lock released");
+            break;
+        case Op::Publish:
+        case Op::PublishFromFile:
+            detail = tr("Published %L1 rows (version %2)").arg(o.sent).arg(o.localVersion);
+            break;
+        case Op::Pull:
+            detail = tr("Got version %1").arg(o.state ? o.state->version : 0);
+            break;
+        case Op::StartEditing:
+        case Op::BreakLock:
+            detail = o.pulled ? tr("Editing; got version %1 first").arg(o.state ? o.state->version : 0)
+                              : tr("Editing");
+            break;
+        case Op::TestConnection:
+            detail = tr("Connect %1 ms, round trip %2 ms")
+                         .arg(o.test->connectMs)
+                         .arg(QString::number(o.test->roundTripMs, 'f', 0));
+            break;
+        case Op::Check:
+            detail = o.state ? tr("Server at version %1").arg(o.state->version) : QString();
+            break;
+        case Op::Discard:
+        case Op::DiscardAndRelease:
+            detail = tr("Went back to the last synced copy");
+            break;
+        case Op::RestoreBackup:
+            detail = tr("Restored a backup");
+            break;
+        case Op::Changes:
+            break;
+        }
+    }
+    sync::SyncActivityLog(QDir(QFileInfo(m_app.settings().databasePath()).absolutePath())
+                              .filePath(QStringLiteral("sync-activity.log")))
+        .append({o.finishedAt.isValid() ? o.finishedAt : QDateTime::currentDateTime(),
+                 syncOpName(o.op), o.ok, detail, o.error, o.durationMs});
+}
+
+bool MainWindow::confirmSend(bool finishing)
+{
+    if (!m_app.settings().syncConfirmSend())
+        return true;
+    QString error;
+    const auto summary = sync::summarizeChanges(
+        m_app.database().connectionName(),
+        sync::SyncService::basePath(m_app.settings().databasePath()), &error);
+    if (!summary || summary->isEmpty())
+        return true;   // nothing to confirm; the sync says so
+    m_serverView.changes = summary;
+    updateSyncStatus();
+
+    QMessageBox box(QMessageBox::Question, finishing ? tr("Finish Editing") : tr("Sync"),
+                    tr("Send these changes to the shared catalogue?"), QMessageBox::NoButton, this);
+    box.setInformativeText(summary->headline() + QStringLiteral("\n\n")
+                           + (finishing ? tr("Others can edit once they're sent.")
+                                        : tr("You keep editing afterwards.")));
+    QPushButton *send = box.addButton(tr("Send"), QMessageBox::AcceptRole);
+    QPushButton *review = box.addButton(tr("Review…"), QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(send);
+    auto *dontAsk = new QCheckBox(tr("Don't ask again"), &box);
+    box.setCheckBox(dontAsk);
+    box.exec();
+    if (box.clickedButton() == review) {
+        showReviewChanges();
+        return false;
+    }
+    if (box.clickedButton() != send)
+        return false;
+    if (dontAsk->isChecked())
+        m_app.settings().setSyncConfirmSend(false);
+    return true;
+}
+
+void MainWindow::syncNow()
+{
+    // Editing: send what's changed. Otherwise: see whether there's newer.
+    if (m_app.settings().syncEditing()) {
+        if (confirmSend(false))
+            runSync(Op::Push, true);
+    } else {
+        runSync(Op::Check, true);
+    }
+}
+
+void MainWindow::startEditing(bool breakLock)
+{
+    runSync(breakLock ? Op::BreakLock : Op::StartEditing, true);
+}
+
+void MainWindow::finishEditing()
+{
+    if (confirmSend(true))
+        runSync(Op::FinishEditing, true);
+}
+
+void MainWindow::offerBreakLock()
+{
+    const QString who = m_serverView.state ? m_serverView.state->lockedBy : tr("Someone");
+    const QString since = m_serverView.state ? describeLockTime(m_serverView.state->lockedAt) : QString();
+    QMessageBox box(QMessageBox::Information, tr("Take Over Editing"),
+                    since.isEmpty() ? tr("%1 is editing the shared catalogue.").arg(who)
+                                    : tr("%1 has been editing the shared catalogue since %2.")
+                                          .arg(who, since),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(
+        tr("Only one person edits at a time. If %1 has finished but forgot to Finish Editing "
+           "(or their computer is off), you can take over — any changes they haven't sent "
+           "yet will then be lost to them.")
+            .arg(who));
+    QPushButton *take = box.addButton(tr("Take Over Editing…"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != take)
+        return;
+    if (QMessageBox::warning(this, tr("Take Over Editing"),
+                             tr("Take over editing from %1?").arg(who),
+                             QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+        == QMessageBox::Yes)
+        startEditing(true);
+}
+
+bool MainWindow::ensureCanEdit()
+{
+    if (m_app.catalogueEditable())
+        return true;
+    QString text = tr("The shared catalogue is read-only on this computer until you start "
+                      "editing it.");
+    if (m_serverView.lockedByOther())
+        text += QLatin1Char(' ') + tr("%1 is editing it at the moment.").arg(m_serverView.state->lockedBy);
+    if (QMessageBox::question(this, tr("Read-Only Catalogue"),
+                              text + QStringLiteral("\n\n") + tr("Start editing now?"))
+        == QMessageBox::Yes)
+        startEditing();
+    return false;
+}
+
+void MainWindow::applyEditability()
+{
+    const bool editable = m_app.catalogueEditable();
+    m_reviewPane->setReadOnly(!editable);
+    updateSyncStatus();
+}
+
+void MainWindow::updateSyncStatus()
+{
+    if (!m_serverBar)
+        return;
+    ServerView &v = m_serverView;
+    v.editing = m_app.settings().syncEditing();
+    v.backups = int(m_app.syncService().backups().size());
+    v.libraryRoot = m_app.settings().libraryRoot();
+    m_serverBar->setView(v);
+    if (m_statusDialog)
+        m_statusDialog->setView(v);
+
+    const bool idle = !v.running;
+    m_startEditingAction->setEnabled(idle && !v.editing && !v.offline);
+    m_syncNowAction->setEnabled(idle && !(v.editing && v.offline));
+    m_syncNowAction->setText(v.editing ? tr("S&ync Now (Send My Changes)")
+                                       : tr("S&ync Now (Get Latest)"));
+    m_finishEditingAction->setEnabled(idle && v.editing && !v.offline);
+    m_discardAction->setEnabled(idle && v.pending() > 0);
+    m_breakLockAction->setEnabled(idle && !v.editing && !v.offline && v.lockedByOther());
+    m_testConnectionAction->setEnabled(idle);
+    m_restoreBackupAction->setEnabled(idle && v.backups > 0);
+    m_reviewChangesAction->setText(v.pending() > 0 ? tr("&Review Changes (%L1)…").arg(v.pending())
+                                                   : tr("&Review Changes…"));
+
+    setWindowTitle(QStringLiteral("%1 — %2").arg(QString::fromLatin1(kAppName),
+                                                 v.editing ? tr("Editing shared catalogue")
+                                                           : tr("Viewing shared catalogue")));
+}
+
+void MainWindow::showServerStatus()
+{
+    if (!m_statusDialog) {
+        m_statusDialog = new ServerStatusDialog(this);
+        m_statusDialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(m_statusDialog, &ServerStatusDialog::startEditingRequested, this, [this] { startEditing(); });
+        connect(m_statusDialog, &ServerStatusDialog::getLatestRequested, this,
+                [this] { runSync(Op::Check, true); });
+        connect(m_statusDialog, &ServerStatusDialog::syncRequested, this, &MainWindow::syncNow);
+        connect(m_statusDialog, &ServerStatusDialog::finishEditingRequested, this, &MainWindow::finishEditing);
+        connect(m_statusDialog, &ServerStatusDialog::reviewChangesRequested, this,
+                &MainWindow::showReviewChanges);
+        connect(m_statusDialog, &ServerStatusDialog::testConnectionRequested, this,
+                &MainWindow::testConnection);
+        connect(m_statusDialog, &ServerStatusDialog::activityLogRequested, this,
+                &MainWindow::showActivityLog);
+        connect(m_statusDialog, &ServerStatusDialog::restoreBackupRequested, this,
+                &MainWindow::restoreBackup);
+    }
+    m_statusDialog->setView(m_serverView);
+    m_statusDialog->show();
+    m_statusDialog->raise();
+    m_statusDialog->activateWindow();
+    runSync(Op::Check, false);   // freshen it up
+}
+
+void MainWindow::showReviewChanges()
+{
+    if (!m_reviewDialog) {
+        m_reviewDialog = new ReviewChangesDialog(this);
+        m_reviewDialog->setAttribute(Qt::WA_DeleteOnClose);
+        connect(m_reviewDialog, &ReviewChangesDialog::refreshRequested, this,
+                [this] { runSync(Op::Changes, false); });
+        connect(m_reviewDialog, &ReviewChangesDialog::syncRequested, this, [this] {
+            if (m_reviewDialog)
+                m_reviewDialog->close();
+            runSync(Op::Push, true);   // they've just reviewed: no second confirmation
+        });
+        connect(m_reviewDialog, &ReviewChangesDialog::discardRequested, this,
+                &MainWindow::discardChanges);
+    }
+    m_reviewDialog->setSummary(std::nullopt, m_app.settings().syncEditing());
+    m_reviewDialog->show();
+    m_reviewDialog->raise();
+    m_reviewDialog->activateWindow();
+    runSync(Op::Changes, false);
+}
+
+void MainWindow::showActivityLog()
+{
+    if (!m_activityDialog) {
+        m_activityDialog = new ActivityLogDialog(
+            QDir(QFileInfo(m_app.settings().databasePath()).absolutePath())
+                .filePath(QStringLiteral("sync-activity.log")),
+            this);
+        m_activityDialog->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    m_activityDialog->reload();
+    m_activityDialog->show();
+    m_activityDialog->raise();
+    m_activityDialog->activateWindow();
+}
+
+void MainWindow::discardChanges()
+{
+    const bool editing = m_app.settings().syncEditing();
+    QString error;
+    const auto summary = sync::summarizeChanges(
+        m_app.database().connectionName(),
+        sync::SyncService::basePath(m_app.settings().databasePath()), &error);
+    if (!summary) {
+        QMessageBox::warning(this, tr("Discard My Changes"), error);
+        return;
+    }
+    if (summary->isEmpty()) {
+        QMessageBox::information(this, tr("Discard My Changes"),
+                                 tr("There's nothing to discard: this computer matches the last sync."));
+        return;
+    }
+    QMessageBox box(QMessageBox::Warning, tr("Discard My Changes"),
+                    tr("Discard these changes and go back to the catalogue as it was at your last "
+                       "sync?"),
+                    QMessageBox::NoButton, this);
+    box.setInformativeText(summary->headline() + QStringLiteral("\n\n")
+                           + tr("PhotoLife restarts to finish. The current catalogue is kept as a "
+                                "backup, so this can be undone with Restore a Backup."));
+    QCheckBox *release = nullptr;
+    if (editing && !m_serverView.offline) {
+        release = new QCheckBox(tr("Also stop editing (let others edit)"), &box);
+        box.setCheckBox(release);
+    }
+    QPushButton *discard = box.addButton(tr("Discard Changes"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != discard)
+        return;
+    if (m_reviewDialog)
+        m_reviewDialog->close();
+    runSync(release && release->isChecked() ? Op::DiscardAndRelease : Op::Discard, true);
+}
+
+void MainWindow::restoreBackup()
+{
+    auto &service = m_app.syncService();
+    const QStringList backups = service.backups();
+    if (backups.isEmpty()) {
+        QMessageBox::information(this, tr("Restore a Backup"), tr("There are no backups yet."));
+        return;
+    }
+    QStringList labels;
+    for (const QString &path : backups) {
+        const QFileInfo f(path);
+        labels << tr("%1 — saved %2 — %3 MB")
+                      .arg(f.fileName(), describeTime(f.lastModified()))
+                      .arg(QString::number(f.size() / 1048576.0, 'f', 1));
+    }
+    bool ok = false;
+    const QString chosen = QInputDialog::getItem(this, tr("Restore a Backup"),
+                                                 tr("Catalogue to restore (newest first):"),
+                                                 labels, 0, false, &ok);
+    if (!ok)
+        return;
+    const QString path = backups.at(labels.indexOf(chosen));
+    QString text = tr("Restore %1? PhotoLife restarts to finish; the current catalogue is kept as "
+                      "a backup.")
+                       .arg(QFileInfo(path).fileName());
+    if (m_app.settings().syncEnabled())
+        text += QStringLiteral("\n\n")
+                + tr("Anything in it that differs from your last sync then shows as your changes "
+                     "(Review Changes). Nothing is sent until you Sync while editing.");
+    if (QMessageBox::question(this, tr("Restore a Backup"), text) != QMessageBox::Yes)
+        return;
+    if (service.isRunning()) {
+        statusBar()->showMessage(tr("The server is busy — try again in a moment."), 6000);
+        return;
+    }
+    m_runningOp = Op::RestoreBackup;
+    m_syncUserInitiated = true;
+    beginTaskProgress(syncOpTitle(Op::RestoreBackup), {});
+    service.restoreBackup(path);
+}
+
+void MainWindow::testConnection()
+{
+    runSync(Op::TestConnection, true);
+}
+
+void MainWindow::switchToLocalCatalogue()
+{
+    switchToCatalogue(QString::fromLatin1(Settings::kLocalProfileId));
+}
+
+void MainWindow::setUpSharedCatalogue()
+{
+    // A server catalogue opened here for the first time: its working copy is
+    // new and empty. Get the server's catalogue -- or, for an empty server,
+    // start it (from a copy of the Local catalogue, or empty).
+    auto &settings = m_app.settings();
+    auto &service = m_app.syncService();
+    if (service.isRunning())
+        return;
+    m_syncSetupRunning = true;
+    const QString serverName = settings.activeProfile().name;
+
+    auto runAndWait = [&](sync::SyncService::Op op, const QString &source = {}) {
+        QEventLoop loop;
+        sync::SyncService::Outcome result;
+        auto done = connect(&service, &sync::SyncService::finished, &loop,
+                            [&](const sync::SyncService::Outcome &o) {
+                                result = o;
+                                loop.quit();
+                            });
+        auto progress = connect(&service, &sync::SyncService::progress, this,
+                                [this](const QString &phase, int d, int t) { updateTaskProgress(phase, d, t); });
+        beginTaskProgress(syncOpTitle(op), {});
+        if (op == sync::SyncService::Op::PublishFromFile)
+            service.publishFromFile(source);
+        else
+            service.run(op);
+        loop.exec();
+        disconnect(done);
+        disconnect(progress);
+        endTaskProgress();
+        return result;
+    };
+    auto backToLocal = [&] {
+        settings.setActiveProfile(QString::fromLatin1(Settings::kLocalProfileId));
+        relaunch();
+    };
+
+    const auto check = runAndWait(sync::SyncService::Op::Check);
+    if (!check.ok || !check.state) {
+        QMessageBox box(QMessageBox::Warning, tr("Server Catalogue"),
+                        tr("Couldn't reach \"%1\".").arg(serverName), QMessageBox::NoButton, this);
+        box.setInformativeText(check.error);
+        QPushButton *retry = box.addButton(tr("Try Again"), QMessageBox::AcceptRole);
+        box.addButton(tr("Back to Local Catalogue"), QMessageBox::RejectRole);
+        box.exec();
+        m_syncSetupRunning = false;
+        if (box.clickedButton() == retry)
+            QTimer::singleShot(0, this, &MainWindow::setUpSharedCatalogue);
+        else
+            backToLocal();
+        return;
+    }
+
+    const QString localPath = settings.profileDatabasePath(QString::fromLatin1(Settings::kLocalProfileId));
+    const QString localSummary = ManageCataloguesDialog::describeCatalogueFile(localPath);
+    QMessageBox box(QMessageBox::Question, tr("Server Catalogue: %1").arg(serverName), QString(),
+                    QMessageBox::NoButton, this);
+    QPushButton *download = nullptr, *fromLocal = nullptr, *empty = nullptr;
+    if (check.state->empty) {
+        box.setText(tr("\"%1\" is empty. How do you want to start it?").arg(serverName));
+        box.setInformativeText(
+            tr("From your Local catalogue (%1): a copy is published to the server; your Local "
+               "catalogue itself stays as it is.\n\nOr start empty, and add photos and reference "
+               "trees here.")
+                .arg(localSummary));
+        fromLocal = box.addButton(tr("Copy My Local Catalogue"), QMessageBox::AcceptRole);
+        empty = box.addButton(tr("Start Empty"), QMessageBox::ActionRole);
+    } else {
+        box.setText(tr("Get the catalogue from \"%1\"?").arg(serverName));
+        box.setInformativeText(
+            tr("The server has %n reference tree(s)", nullptr, check.state->trees)
+            + tr(" and %1 photos. A working copy is downloaded to this computer, separate from "
+                 "your Local catalogue.")
+                  .arg(QLocale().toString(check.state->photos)));
+        download = box.addButton(tr("Download"), QMessageBox::AcceptRole);
+    }
+    QPushButton *back = box.addButton(tr("Back to Local Catalogue"), QMessageBox::RejectRole);
+    box.setDefaultButton(back);
+    box.exec();
+
+    sync::SyncService::Outcome result;
+    if (download && box.clickedButton() == download) {
+        result = runAndWait(sync::SyncService::Op::Pull);
+    } else if (fromLocal && box.clickedButton() == fromLocal) {
+        result = runAndWait(sync::SyncService::Op::PublishFromFile, localPath);
+        if (result.ok)
+            settings.setSyncEditing(true);   // publishing takes the edit lock
+    } else if (empty && box.clickedButton() == empty) {
+        result = runAndWait(sync::SyncService::Op::Publish);
+        if (result.ok)
+            settings.setSyncEditing(true);
+    } else {
+        backToLocal();
+        return;
+    }
+    if (!result.ok) {
+        QMessageBox::warning(this, tr("Server Catalogue"), result.error);
+        backToLocal();
+        return;
+    }
+    if (result.outsideRoot > 0)
+        QMessageBox::information(
+            this, tr("Photos Outside the Library Folder"),
+            tr("%n photo location(s) are outside this catalogue's photo library folder, so "
+               "collaborators won't be able to open those photos.",
+               nullptr, result.outsideRoot));
+    relaunch();   // opens the downloaded / published working copy
+}
+
+void MainWindow::relaunch()
+{
     if (m_app.scanService().isRunning() || m_app.matchService().isRunning()
         || m_app.lightroomImporter().isRunning() || m_builder->isRunning()
         || m_infraFiller->isRunning()) {
-        const auto reply = QMessageBox::question(
-            this, tr("Catalogue Settings"),
-            tr("PhotoLife needs to restart to use the new catalogue, but a "
-               "background operation is still running. Cancel it and restart now?"),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes)
-            return;
         m_app.scanService().cancel();
         m_app.matchService().cancel();
         m_app.lightroomImporter().cancel();
         m_builder->cancel();
         m_infraFiller->cancel();
     }
-
-    // Force the new descriptor out to disk before the relaunched process
-    // starts reading it -- QSettings otherwise buffers writes (flushed
-    // periodically or on destruction), which a same-process re-read can't
-    // tell apart from a real write but a brand-new process can: without
-    // this, the child can start and read the old settings before this
-    // process's buffered write ever reaches disk.
+    // Force settings out to disk before the new process reads them --
+    // QSettings buffers writes, which a brand-new process can't see.
     m_app.settings().sync();
-
+    m_closeConfirmed = true;   // no "finish editing?" on the way out
     QProcess::startDetached(QCoreApplication::applicationFilePath(),
                             QCoreApplication::arguments().mid(1));
     QCoreApplication::quit();

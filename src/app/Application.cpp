@@ -20,6 +20,7 @@
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
+#include "sync/SyncService.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/MainWindow.h"
@@ -27,7 +28,9 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QLoggingCategory>
+#include <QFileInfo>
 #include <QStandardPaths>
+#include <QSysInfo>
 
 namespace pl {
 
@@ -52,6 +55,19 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
     qInfo() << "Data directory:" << dataDir;
 
     m_settings = std::make_unique<Settings>();
+    if (m_settings->migrateProfiles())
+        qInfo() << "Settings moved to catalogue profiles; active:" << m_settings->activeProfile().name;
+    // A server's working copy lives in its own folder (data/servers/<id>/).
+    QDir().mkpath(QFileInfo(m_settings->databasePath()).absolutePath());
+    qInfo() << "Catalogue:" << m_settings->activeProfile().name;
+
+    m_syncService = std::make_unique<sync::SyncService>();
+    configureSync();
+    // A catalogue staged last session -- downloaded from the shared server,
+    // a discard, or a restored backup -- replaces this one now, before
+    // anything opens it. The one it replaces is kept as a backup.
+    if (sync::SyncService::applyPendingPull(m_settings->databasePath()))
+        qInfo() << "Switched to the catalogue staged last session (previous one kept as a backup)";
 
     m_database = std::make_unique<Database>();
     const CatalogueDescriptor descriptor =
@@ -213,6 +229,26 @@ net::UpdateChecker &Application::updateChecker()
 inat::InatPhotoDownloader &Application::inatPhotoDownloader()
 {
     return *m_inatPhotoDownloader;
+}
+
+sync::SyncService &Application::syncService()
+{
+    return *m_syncService;
+}
+
+bool Application::catalogueEditable() const
+{
+    return !m_settings->syncEnabled() || m_settings->syncEditing();
+}
+
+void Application::configureSync()
+{
+    sync::SyncService::Config config;
+    config.databasePath = m_settings->databasePath();
+    config.server = m_settings->syncServerDescriptor();
+    config.identity = {m_settings->syncUserName(), QSysInfo::machineHostName()};
+    config.libraryRoot = m_settings->libraryRoot();
+    m_syncService->setConfig(config);
 }
 
 } // namespace pl

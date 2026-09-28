@@ -331,7 +331,9 @@ InatDownloadPage::InatDownloadPage(Application &app, InatAccountBar &account, QW
     m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_grid->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_grid->setIconSize(QSize(192, 192));
-    m_grid->setGridSize(QSize(212, 232));
+    // Tall enough for the delegate's three caption lines (name, common name,
+    // date) under the 192 px thumbnail -- see InatCandidateDelegate::sizeHint().
+    m_grid->setGridSize(QSize(212, 264));
     m_grid->setWordWrap(true);
     m_grid->setSpacing(6);
     m_grid->setItemDelegate(new InatCandidateDelegate(m_grid));
@@ -491,6 +493,10 @@ void InatDownloadPage::search()
     const qint64 placeId = m_restrictToLocality->isChecked() && pid > 0
                                ? m_app.taxonomyStore().projectPlaceInatId(pid).value_or(0)
                                : 0;
+
+    // A name filter typed for the previous results would otherwise silently
+    // hide some or all of the new ones.
+    m_filterEdit->clear();
 
     m_searchButton->setEnabled(false);
     m_cancelSearchButton->setEnabled(true);

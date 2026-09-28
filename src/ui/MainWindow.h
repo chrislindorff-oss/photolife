@@ -2,6 +2,10 @@
 
 #include "catalogue/UntreedMatchStore.h"
 #include "coverage/CoverageCalculator.h"
+#include "sync/SyncService.h"
+#include "ui/ServerBar.h"
+
+#include <QPointer>
 
 #include <QHash>
 #include <QList>
@@ -28,6 +32,7 @@ class QToolButton;
 class QTreeView;
 class QTreeWidget;
 class QTreeWidgetItem;
+class QTimer;
 class QComboBox;
 class QAction;
 class QActionGroup;
@@ -35,6 +40,10 @@ class QAbstractItemModel;
 class QProgressDialog;
 
 namespace pl {
+
+class ActivityLogDialog;
+class ReviewChangesDialog;
+class ServerStatusDialog;
 
 class Application;
 class PostgresConnectionMonitor;
@@ -62,6 +71,9 @@ struct StaleDecision;
 }
 namespace checklist {
 class ChecklistImporter;
+}
+namespace treefile {
+class TreeImporter;
 }
 namespace collection {
 struct ExportSummary;
@@ -154,8 +166,9 @@ private:
     void switchToTreeTab(QWidget *page);
     void setBestShotForSelection(QListView *grid, bool nominate);
     void reloadProjectList();
-    // Fetches iNaturalist place ancestry for tree regions that lack it.
-    void fetchMissingPlaceAncestry();
+    // Fetches iNaturalist place ancestry and outlines for tree regions that
+    // lack them.
+    void fetchMissingPlaceDetails();
     // Threatened status (ALA) and plant origins (APC) for Australian trees:
     // when due (monthly), when `force`d from the menu, or -- `rematchOnly`,
     // after a tree gains taxa -- re-matched against what's already fetched.
@@ -172,11 +185,16 @@ private:
     // `projectId`'s tree -- shared by Add Taxon and the "Not in Any Tree" tab.
     void addTaxonToTree(int projectId, qint64 inatId, const QString &name);
     void deleteReferenceTree();
+    void renameReferenceTree();
+    // Right-click on the tree selector: Rename, plus the tree's own commands.
+    void showTreeSelectorMenu(const QPoint &pos);
     void fetchInfraspecificTaxa();
     void startInfraspecificFetch(qint64 scopeInatId, const QString &scopeName);
     void showTreeContextMenu(const QPoint &pos);
     void pruneTaxonFromTree(qint64 inatId, const QString &name);
     void importChecklist();
+    void exportReferenceTree();
+    void importReferenceTree();
     void importLightroom();
 
     // Probes a Postgres catalogue on a background thread (Database::
@@ -187,6 +205,52 @@ private:
     // long enough for the OS to decide PhotoLife has hung. A no-op (returns
     // true immediately) when the active backend is SQLite.
     bool ensureCatalogueReachable();
+
+    // --- shared catalogue (sync mode) ---
+    // True when this machine may change the catalogue. Otherwise explains
+    // that the shared catalogue is read-only here, offers to Start Editing,
+    // and returns false -- call it first in anything that writes.
+    bool ensureCanEdit();
+    void setupSync();
+    void runSync(sync::SyncService::Op op, bool userInitiated);
+    void onSyncFinished(const sync::SyncService::Outcome &outcome);
+    void syncNow();
+    void startEditing(bool breakLock = false);
+    void finishEditing();
+    void offerBreakLock();
+    void applyEditability();
+    // Recomputes m_serverView's derived parts and shows it everywhere: the
+    // top-right bar, the Server Status window, the menu, the window title.
+    void updateSyncStatus();
+    void buildServerMenu(QMenu *serverMenu);
+    void showServerStatus();
+    void showReviewChanges();
+    void showActivityLog();
+    void discardChanges();
+    void restoreBackup();
+    void testConnection();
+    void switchToLocalCatalogue();
+    // Opens another catalogue profile (restarting PhotoLife), offering to
+    // Finish Editing first when leaving a server catalogue mid-edit.
+    void switchToCatalogue(const QString &id);
+    void editServerSettings();
+    // The top-right corner: the catalogue switcher, then the LOCAL badge or
+    // the ServerBar.
+    void buildCatalogueCorner();
+    void updateCatalogueCorner();
+    // Counts the unsent changes again, a moment after edits (local only).
+    void scheduleChangesCount();
+    // "Send these changes?" -- true to go ahead.
+    bool confirmSend(bool finishing);
+    void logActivity(const sync::SyncService::Outcome &outcome);
+    // First use of a shared catalogue: download it, or publish this one.
+    void setUpSharedCatalogue();
+    // Restarts PhotoLife (settings saved first), e.g. to open a downloaded
+    // catalogue.
+    void relaunch();
+    // A progress window (with Cancel) for a scan the user started -- not for
+    // the folder watcher's quiet background rescans.
+    void beginScanProgress(const QString &title);
 
     // Shared modal progress display for the long Postgres-writing actions
     // (reference tree build/refresh, add taxon, fetch subspecies/varieties,
@@ -200,7 +264,13 @@ private:
     void updateTaskProgress(const QString &phase, int done, int total);
     void endTaskProgress();
 
+    // Recomputes the active tree's coverage (panel, tree badges, map
+    // locality, photo tabs). Queued: every request made while handling one
+    // action runs as a single refresh on the next event-loop turn -- each
+    // refresh is several catalogue queries, which a remote (Postgres)
+    // catalogue pays for in round trips.
     void refreshCoverage();
+    void refreshCoverageNow();
     void onTreeSelectionChanged();
     void selectTaxonInTree(qint64 inatId);
     void onTreeSearchChanged(const QString &text);
@@ -308,6 +378,38 @@ private:
     qint64 m_selectedTaxon = 0;
     qint64 m_lastSelectedTaxon = 0;   // last taxon the user chose; survives a filter toggle
     bool m_restoringTreeState = false;
+    bool m_coverageRefreshQueued = false;
+
+    QMenu *m_serverMenu = nullptr;
+    ServerBar *m_serverBar = nullptr;
+    ServerView m_serverView;
+    QPointer<ServerStatusDialog> m_statusDialog;
+    QPointer<ReviewChangesDialog> m_reviewDialog;
+    QPointer<ActivityLogDialog> m_activityDialog;
+    QTimer *m_changesTimer = nullptr;
+    std::optional<sync::SyncService::Op> m_runningOp;
+    std::optional<sync::SyncService::Op> m_queuedOp;   // asked for while counting changes
+    QAction *m_syncNowAction = nullptr;
+    QAction *m_serverStatusAction = nullptr;
+    QAction *m_reviewChangesAction = nullptr;
+    QAction *m_discardAction = nullptr;
+    QAction *m_testConnectionAction = nullptr;
+    QAction *m_restoreBackupAction = nullptr;
+    QAction *m_startEditingAction = nullptr;
+    QAction *m_finishEditingAction = nullptr;
+    QAction *m_breakLockAction = nullptr;
+    QTimer *m_syncCheckTimer = nullptr;
+    std::optional<sync::ServerState> m_serverState;
+    qint64 m_localSyncVersion = 0;
+    int m_pendingChanges = -1;
+    bool m_syncUserInitiated = false;
+    bool m_closeAfterSync = false;   // closing waits on a Finish Editing
+    bool m_closeConfirmed = false;   // ...which has now finished
+    bool m_syncSetupRunning = false; // setUpSharedCatalogue() handles its own results
+    QString m_switchAfterSync;       // a catalogue to open once Finish Editing is done
+    QWidget *m_catalogueCorner = nullptr;
+    QToolButton *m_catalogueSwitcher = nullptr;
+    QLabel *m_localBadge = nullptr;
     QAction *m_scanAction = nullptr;
     QAction *m_cancelAction = nullptr;
     QAction *m_addFolderAction = nullptr;
@@ -346,6 +448,7 @@ private:
     };
     SourceSyncProgress m_sourceSync;
     checklist::ChecklistImporter *m_checklistImporter = nullptr;
+    treefile::TreeImporter *m_treeImporter = nullptr;
     geo::LocalityFetcher *m_localityFetcher = nullptr;
     QAction *m_fetchLocalitiesAction = nullptr;
 
@@ -369,6 +472,7 @@ private:
     QAction *m_deleteTreeAction = nullptr;
     QAction *m_fetchInfraAction = nullptr;
     QAction *m_importChecklistAction = nullptr;
+    QAction *m_importTreeAction = nullptr;
     QAction *m_importLightroomAction = nullptr;
     // Set while addTaxonToReferenceTree()'s fetchTaxon() call is in flight --
     // that call is async and non-modal (unlike the TaxonConfirmDialog that
@@ -379,6 +483,7 @@ private:
     // rather than reused, since each task's Cancel button needs to be wired
     // to a different service's cancel().
     QProgressDialog *m_taskProgress = nullptr;
+    bool m_scanProgressActive = false;   // a user-started scan owns m_taskProgress
 
     QAction *m_matchAction = nullptr;
     QString m_groupMatchName;   // set while a group match runs; empty for a full Match Library

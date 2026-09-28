@@ -1,6 +1,6 @@
 #pragma once
 
-#include "db/CatalogueDescriptor.h"
+#include "settings/Settings.h"
 
 #include <QDialog>
 
@@ -8,41 +8,36 @@ class QComboBox;
 class QDialogButtonBox;
 class QLineEdit;
 class QSpinBox;
-class QStackedWidget;
 
 namespace pl {
 
-// Lets the user pick which catalogue to open next: a local SQLite file, or a
-// shared Postgres database (e.g. Cloud SQL) other collaborators point their
-// own PhotoLife instances at. Edits Settings' stored CatalogueDescriptor;
-// the change takes effect on the next app start (nothing here re-points an
-// already-open Database/ScanService/MatchService at the new descriptor).
+// Adds or edits one Server catalogue profile (see Settings::CatalogueProfile):
+// its display name, the Postgres connection, your name there and this
+// machine's photo library folder for it.
 class CatalogueSettingsDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit CatalogueSettingsDialog(const CatalogueDescriptor &current, QWidget *parent = nullptr);
-
-    CatalogueDescriptor descriptor() const;
+    explicit CatalogueSettingsDialog(const Settings::CatalogueProfile &profile,
+                                     QWidget *parent = nullptr);
+    Settings::CatalogueProfile profile() const;
 
 private:
     void updateOkState();
     void testConnection();
-    void browseForSqliteFile();
+    void browseForLibraryRoot();
 
-    QComboBox *m_backend;
-    QStackedWidget *m_pages;
-
-    QLineEdit *m_sqlitePath;
-
+    Settings::CatalogueProfile m_profile;
+    QLineEdit *m_name;
     QLineEdit *m_pgHost;
     QSpinBox *m_pgPort;
     QLineEdit *m_pgDbName;
     QLineEdit *m_pgUser;
     QLineEdit *m_pgPassword;
     QComboBox *m_pgSslMode;
-
+    QLineEdit *m_userName;
+    QLineEdit *m_libraryRoot;
     QDialogButtonBox *m_buttons;
 };
 

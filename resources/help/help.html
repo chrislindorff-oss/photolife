@@ -30,6 +30,7 @@ photo file are when you explicitly ask it to (see
   <li><a href="#names">Learned names</a></li>
   <li><a href="#writes">What PhotoLife writes to your photos</a></li>
   <li><a href="#settings">Catalogue, appearance &amp; updates</a></li>
+  <li><a href="#sharing">Local and server catalogues</a></li>
   <li><a href="#files">Where PhotoLife keeps things</a></li>
   <li><a href="#raw">RAW files</a></li>
   <li><a href="#shortcuts">Keyboard shortcuts</a></li>
@@ -141,6 +142,31 @@ it follows along, showing that taxon&rsquo;s photos. A match hidden by the
 &ldquo;photographed only&rdquo; filter un-hides it. The <b>Ranks&hellip;</b> button
 lets you hide ranks you don't care to see in the tree (e.g. collapse straight to
 species, skipping family/genus rows).</p>
+
+<h3 id="treefiles">Exporting and importing a tree</h3>
+<p><b>Reference Tree &rarr; Export Reference Tree&hellip;</b> saves the current tree
+as an Excel workbook (<tt>.xlsx</tt>) or a CSV file, with one row per taxon at every
+rank, in tree order. The first columns are for reading: rank, scientific and common
+name, the kingdom, phylum, class, order, family and genus each taxon sits in, its
+conservation status and origin, and whether it's recorded in the tree's region. Four
+more say how much of it you've photographed: <i>Photographed</i> (yes/no, counting
+photos of anything below it too), <i>Photos</i>, <i>Latest photo</i>, and for genera,
+families and other higher ranks <i>Species photographed</i> (e.g. <tt>12 / 40</tt>)
+&mdash; filter on <i>Photographed = no</i> for a list of what's still to find. These
+describe your photos, not the tree, so importing ignores them. The
+columns after those (collapsed in the workbook; click the <b>+</b> above them to show
+them) hold what PhotoLife needs to rebuild the tree exactly: iNaturalist IDs,
+ancestry, and every recorded status and origin. The workbook's <i>Tree</i> sheet (or
+the <tt>#</tt> lines at the top of a CSV) holds the tree's name, root taxon, region
+and any groups you've pruned.</p>
+<p><b>Reference Tree &rarr; Import Reference Tree&hellip;</b> creates a new tree from
+such a file &mdash; to restore a backup, or to use a tree someone else exported. An
+exported file imports in seconds without needing the internet. You can also import a
+file you've made or edited yourself: only a <i>Scientific name</i> column (or
+<i>Name</i>, <i>Species</i> or <i>Taxon</i>) is required. Rows without an iNaturalist
+ID are looked up on iNaturalist, like a checklist's, and any missing higher ranks
+are fetched so the tree stays connected. Optional <i>Common name</i>, <i>Status</i>
+and <i>Origin</i> columns are read too.</p>
 
 <h2 id="checklist">3. Import a regional checklist</h2>
 <p><b>Reference Tree &rarr; Import Checklist&hellip;</b> and pick a CSV of
@@ -317,9 +343,17 @@ tab. The full-size viewer also has an Add/Remove Best Shot button.</p>
 pin on an OpenStreetMap view, scoped exactly like <b>Photos of Tree Selection</b>.
 Drag to pan, scroll to zoom, and use <b>Fit to Photos</b> to frame everything in view
 &mdash; it does this automatically whenever you change the tree selection.
-<b>Restrict to Active Reference Tree Locality</b> hides photos taken outside the
-tree's region. Photos taken close together cluster into one pin showing a count; click
-a single-photo pin to open it, or a cluster to pick which of its photos to open. Only
+The active tree's region is outlined and lightly shaded, using the boundary
+iNaturalist has for that place (fetched once, in the background); turn this off with
+<b>View &rarr; Show Tree Locality on Map</b>.
+<b>Restrict to Active Reference Tree Locality</b> hides photos taken outside that
+boundary. For the few places iNaturalist has no boundary for, the region's bounding
+rectangle is used instead, which takes in a little of the neighbouring regions.
+Photos taken close together cluster into one pin showing a count; click
+a single-photo pin to open it. Clicking a cluster lists the taxa photographed there,
+each with its number of photos; click a taxon to see its photos, then a photo to open
+it. <b>&lsaquo; All taxa</b> goes back to the list, and the <b>&#x2715;</b> button,
+<b>Esc</b> or a click elsewhere on the map closes it. Only
 photos whose file carried GPS data appear here &mdash; look for the <b>GEO</b> badge
 on a thumbnail elsewhere in the app, or hover it for the exact coordinates.</p>
 <p><b>Library &rarr; Fetch Photo Localities</b> looks up a place name (suburb, park,
@@ -422,16 +456,79 @@ your photos. PhotoLife writes files only when you ask it to:</p>
 
 <h2 id="settings">Catalogue, appearance &amp; updates</h2>
 <ul>
-  <li><b>File &rarr; Catalogue Settings&hellip;</b> chooses where the catalogue lives:
-      a <b>Local (SQLite)</b> file on this computer (the default), or a <b>Shared
-      (Postgres)</b> database several people can work on together, each from their own
-      copy of PhotoLife. With a shared catalogue, a coloured indicator at the right of
-      the menu bar shows whether you're connected. If two people change the same photo
-      at the same moment, the last change wins.</li>
+  <li><b>File &rarr; Switch Catalogue</b> and <b>File &rarr; Manage Catalogues&hellip;</b>
+      move between your Local catalogue and any server catalogues (see
+      <a href="#sharing">Local and server catalogues</a>).</li>
   <li><b>View &rarr; Dark Mode</b> switches between the light and dark themes.</li>
   <li><b>Help &rarr; Check for Updates&hellip;</b> looks for a newer release, and
       <b>Help &rarr; Storage Usage&hellip;</b> shows how much disk space the catalogue
       and caches are using.</li>
+</ul>
+
+<h2 id="sharing">Local and server catalogues</h2>
+<p>PhotoLife keeps completely separate catalogues, each with its own reference trees,
+photos, folders and review queue:</p>
+<ul>
+  <li><b>Your Local catalogue</b> &mdash; your own photo library on your drives. Not
+      shared and never synced.</li>
+  <li><b>Server catalogues</b> &mdash; shared with collaborators through a Postgres
+      server, with the photos on a shared platform such as Google Drive or OpenDrive. Each
+      has a working copy on your computer (so PhotoLife stays fast) that syncs with the
+      server only when you ask. You can belong to several.</li>
+</ul>
+<p>The top right of the window always says which catalogue is open &mdash; <i>Local
+catalogue</i> with a <i>LOCAL CATALOGUE</i> badge, or <i>Server: name</i> with the server
+badge &mdash; and so does the window title. Click it (or <b>File &rarr; Switch
+Catalogue</b>) to open another; PhotoLife restarts into it. Switching never copies
+anything between catalogues. <b>File &rarr; Manage Catalogues&hellip;</b> lists them all,
+and adds, edits or removes servers. To bring a reference tree from one catalogue into
+another, export it (Reference Tree &rarr; Export Reference Tree&hellip;) and import it
+there.</p>
+<h3>Working in a server catalogue</h3>
+<p>One person edits a server catalogue at a time &mdash; there is never anything to
+merge.</p>
+<ul>
+  <li><b>Setting up:</b> <b>File &rarr; Manage Catalogues&hellip; &rarr; Add
+      Server&hellip;</b>: the server's details, your name (shown to the others while you
+      edit) and this catalogue's <b>photo library</b> folder &mdash; where its photos are on
+      your computer. Photo locations are shared relative to that folder, so each person can
+      keep it wherever suits them, even on a different operating system. The first time you
+      open it, PhotoLife downloads the server's catalogue &mdash; or, for an empty server,
+      starts it from a copy of your Local catalogue or empty. Your Local catalogue itself is
+      never changed.</li>
+  <li><b>What mode am I in?</b> The badge at the top right of the window always says:
+      grey <i>VIEWING</i>, blue <i>NEWER VERSION AVAILABLE</i>, amber <i>VIEWING &mdash;
+      Alex is editing</i>, green <i>EDITING &middot; 12 changes</i>, red <i>OFFLINE</i>, or
+      <i>SYNCING&hellip;</i>. Beside it are the buttons that make sense right now, and the
+      window title says <i>Editing</i> or <i>Viewing</i>. Click the badge for <b>Server
+      Status</b>: the connection, who holds the edit lock and since when, your version and
+      the server's (and who last updated it), your unsent changes, your photo library
+      folder and your backups.</li>
+  <li><b>Viewing:</b> you can browse, filter, view photos and export; anything that would
+      change the catalogue offers to <b>Start Editing</b> first. <b>Get Latest</b>
+      downloads a newer catalogue when there is one (PhotoLife restarts to open it).</li>
+  <li><b>Editing:</b> <b>Start Editing</b> takes the edit lock (getting the latest
+      catalogue first if there's a newer one); while you hold it, everyone else can only
+      view. <b>Changes</b> (Server &rarr; Review Changes) lists everything you've changed
+      since your last sync, by kind &mdash; photo identifications, trees, best shots,
+      learned names&hellip; &mdash; each expandable to the individual items; automatic
+      updates such as cover photos are grouped separately. <b>Sync</b> sends your
+      changes and keeps the lock; <b>Finish Editing</b> sends them and lets others edit.
+      Both first show a summary of what will be sent. Closing PhotoLife while editing asks
+      whether to finish.</li>
+  <li><b>Server menu:</b> everything above, plus <b>Discard My Changes&hellip;</b> (back to
+      your last sync, optionally stopping editing), <b>Activity Log&hellip;</b> (every
+      server action on this computer, with times, results and any problems), <b>Test
+      Connection</b> (how long connecting and a round trip take), <b>Take Over
+      Editing&hellip;</b> (for when someone forgot to finish &mdash; their unsent changes
+      can then no longer be sent), <b>Restore a Backup&hellip;</b> and <b>Switch to Local
+      Catalogue&hellip;</b>.</li>
+  <li><b>Backups:</b> whenever a catalogue is replaced &mdash; by Get Latest, Discard or
+      Restore &mdash; the one it replaces is kept beside it (the last three), and can be
+      brought back with Restore a Backup. What a restored backup differs by shows as your
+      changes; nothing is sent until you Sync while editing.</li>
+  <li>Photos outside your library folder can't be opened by the others; a sync that
+      sends any says how many.</li>
 </ul>
 
 <h2 id="files">Where PhotoLife keeps things</h2>

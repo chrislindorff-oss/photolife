@@ -1,5 +1,7 @@
 #include "checklist/ChecklistParser.h"
 
+#include "util/Csv.h"
+
 #include <QIODevice>
 #include <QRegularExpression>
 #include <QStringList>
@@ -7,43 +9,7 @@
 #include <optional>
 
 namespace pl::checklist {
-namespace {
 
-// Splits one CSV line into fields, honouring double-quoted fields with ""
-// escapes. Only used for lines that actually contain a quote; the common case
-// (no quotes) takes the fast path in parse().
-QStringList splitCsvLine(const QString &line)
-{
-    QStringList fields;
-    QString field;
-    bool inQuotes = false;
-    for (int i = 0; i < line.size(); ++i) {
-        const QChar c = line.at(i);
-        if (inQuotes) {
-            if (c == QLatin1Char('"')) {
-                if (i + 1 < line.size() && line.at(i + 1) == QLatin1Char('"')) {
-                    field += QLatin1Char('"');
-                    ++i;
-                } else {
-                    inQuotes = false;
-                }
-            } else {
-                field += c;
-            }
-        } else if (c == QLatin1Char('"')) {
-            inQuotes = true;
-        } else if (c == QLatin1Char(',')) {
-            fields << field;
-            field.clear();
-        } else {
-            field += c;
-        }
-    }
-    fields << field;
-    return fields;
-}
-
-// "introduced" / "native" for a recognised origin value, else "".
 QString originFromValue(const QString &raw)
 {
     const QString v = raw.trimmed().toLower();
@@ -72,6 +38,8 @@ bool isOriginHeader(const QString &h)
     return h.contains(QLatin1String("origin")) || h.contains(QLatin1String("nativ"))
            || h.contains(QLatin1String("introduc")) || h.contains(QLatin1String("establishment"));
 }
+
+namespace {
 
 // Column positions, from a header row or the plain "<name>,<status>" layout.
 struct Columns
@@ -119,7 +87,7 @@ QList<ChecklistEntry> parseChecklistCsv(const QByteArray &bytes)
             continue;
 
         const QStringList fields = line.contains(QLatin1Char('"'))
-                                       ? splitCsvLine(line)
+                                       ? util::splitCsvLine(line)
                                        : line.split(QLatin1Char(','));
 
         if (firstRow) {

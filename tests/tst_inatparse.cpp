@@ -118,6 +118,9 @@ void TestINatParse::placeWithBoundingBox()
     const auto p = parsePlace(obj(R"({
         "id": 6744, "name": "Victoria", "display_name": "Victoria, AU", "admin_level": 10,
         "ancestor_place_ids": [97393, 6744, 7830],
+        "geometry_geojson": {"type": "MultiPolygon", "coordinates": [[[
+            [141.0, -38.0], [149.0, -38.0], [145.0, -34.0], [141.0, -38.0]
+        ]]]},
         "bounding_box_geojson": {"type": "Polygon", "coordinates": [[
             [140.9, -39.2], [140.9, -33.9], [150.0, -33.9], [150.0, -39.2], [140.9, -39.2]
         ]]}
@@ -129,6 +132,9 @@ void TestINatParse::placeWithBoundingBox()
     QCOMPARE(p.bboxSwLat.value(), -39.2);
     QCOMPARE(p.bboxNeLng.value(), 150.0);
     QCOMPARE(p.ancestorIds, (QList<qint64>{97393, 6744, 7830}));
+    // The outline is kept whole, as compact JSON.
+    QVERIFY(p.geometryGeoJson.startsWith(QStringLiteral("{\"coordinates\":[[[[141,-38]")));
+    QVERIFY(p.geometryGeoJson.contains(QStringLiteral("\"type\":\"MultiPolygon\"")));
 }
 
 void TestINatParse::placeWithNullAdminLevel()
@@ -136,6 +142,7 @@ void TestINatParse::placeWithNullAdminLevel()
     const auto p = parsePlace(obj(R"({"id": 7, "name": "Gabo Island", "admin_level": null})"));
     QVERIFY(!p.adminLevel.has_value());
     QVERIFY(p.ancestorIds.isEmpty());
+    QVERIFY(p.geometryGeoJson.isEmpty());
 }
 
 void TestINatParse::observationCoreFieldsAndExplicitPhotoSizes()
@@ -161,7 +168,7 @@ void TestINatParse::observationCoreFieldsAndExplicitPhotoSizes()
     QCOMPARE(o.latitude.value(), -37.8136);
     QCOMPARE(o.photos.size(), 1);
     QCOMPARE(o.photos.first().id, qint64(1));
-    QCOMPARE(o.photos.first().previewUrl, QStringLiteral("https://x/1/square.jpg"));
+    QCOMPARE(o.photos.first().previewUrl, QStringLiteral("https://x/1/medium.jpg"));
     QCOMPARE(o.photos.first().downloadUrl, QStringLiteral("https://x/1/medium.jpg"));
 }
 
@@ -172,9 +179,9 @@ void TestINatParse::observationDerivesOriginalFromSquareUrl()
         "photos": [{"id": 5, "url": "https://x/5/square.jpg"}]
     })"));
     QCOMPARE(o.photos.size(), 1);
-    // No explicit sized fields at all -> preview stays the cheap default,
-    // download is derived up to "original" from it.
-    QCOMPARE(o.photos.first().previewUrl, QStringLiteral("https://x/5/square.jpg"));
+    // No explicit sized fields at all -> preview is derived up to "small",
+    // download up to "original".
+    QCOMPARE(o.photos.first().previewUrl, QStringLiteral("https://x/5/small.jpg"));
     QCOMPARE(o.photos.first().downloadUrl, QStringLiteral("https://x/5/original.jpg"));
 }
 

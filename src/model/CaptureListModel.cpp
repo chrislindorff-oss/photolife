@@ -118,6 +118,7 @@ QHash<int, QByteArray> CaptureListModel::roleNames() const
         {PreviewPathRole, "previewPath"},
         {MatchStatusRole, "matchStatus"},
         {MatchedNameRole, "matchedName"},
+        {MatchedCommonNameRole, "matchedCommonName"},
         {DisplayNameRole, "displayName"},
         {ExtRole, "ext"},
         {HasGpsRole, "hasGps"},
@@ -221,6 +222,8 @@ QVariant CaptureListModel::data(const QModelIndex &index, int role) const
         return row.matchedTaxonInatId;
     case PreviewIsRawRole:
         return row.previewIsRaw;
+    case MatchedCommonNameRole:
+        return row.matchedCommonName;
     default:
         return {};
     }
@@ -454,7 +457,8 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
         q.prepare(QStringLiteral(
             "SELECT id, base_name, name_text, captured_on, date_source, path, preview_path, "
             "       preview_hash, match_status, matched_name, preview_ext, latitude, longitude, "
-            "       is_best_shot, locality, matched_taxon_inat_id, preview_kind "
+            "       is_best_shot, locality, matched_taxon_inat_id, preview_kind, "
+            "       matched_common_name "
             "FROM ("
             "  SELECT c.id, c.base_name, c.name_text, c.captured_on, c.date_source, f.path, "
             "    (SELECT r.path FROM rendition r WHERE r.capture_id = c.id "
@@ -468,7 +472,8 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             "    EXISTS(SELECT 1 FROM best_shot bs WHERE bs.capture_id = c.id) AS is_best_shot, "
             "    g.locality AS locality, t.inat_id AS matched_taxon_inat_id, "
             "    (SELECT r.kind FROM rendition r WHERE r.capture_id = c.id "
-            "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_kind "
+            "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_kind, "
+            "    t.common_name AS matched_common_name "
             "  FROM capture c JOIN folder f ON f.id = c.folder_id "
             "  LEFT JOIN capture_match m ON m.id = ("
             "     SELECT id FROM capture_match WHERE capture_id = c.id "
@@ -524,6 +529,7 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             row.locality = q.value(14).toString();
             row.matchedTaxonInatId = q.value(15).toLongLong();
             row.previewIsRaw = q.value(16).toString() == QLatin1String("raw");
+            row.matchedCommonName = q.value(17).toString();
 
             rows.append(std::move(row));
         }

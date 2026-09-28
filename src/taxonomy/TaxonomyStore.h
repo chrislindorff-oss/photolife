@@ -1,6 +1,7 @@
 #pragma once
 
 #include "geo/GeoBox.h"
+#include "geo/GeoShape.h"
 #include "taxonomy/TaxonomyTypes.h"
 
 #include <QByteArray>
@@ -61,6 +62,10 @@ public:
     // Records that iNaturalist has no ancestry for this place, so it isn't
     // asked again (bounding boxes stay the fallback for it).
     bool markPlaceAncestryUnavailable(qint64 inatId);
+    // Reference-tree regions whose outline hasn't been fetched yet, and the
+    // matching "iNaturalist has none" marker.
+    QList<qint64> projectPlacesMissingGeometry() const;
+    bool markPlaceGeometryUnavailable(qint64 inatId);
 
     // Inserts or updates the taxon (keyed by inat_id) and replaces its
     // taxon_name rows. Returns the local taxon.id, or -1 on failure.
@@ -89,6 +94,11 @@ public:
     QHash<qint64, int> upsertTaxa(const QList<Taxon> &taxa);
 
     bool addStatus(qint64 taxonInatId, const StatusRecord &status);
+    // Batched addStatus()/addOrigin(): chunked multi-row upserts, a handful of
+    // round trips for any number of records (taxa not cached are skipped).
+    // False if a statement failed.
+    bool addStatuses(const QList<std::pair<qint64, StatusRecord>> &statuses);
+    bool addOrigins(const QList<std::pair<qint64, OriginRecord>> &origins);
 
     // Records (or updates) a taxon's origin in a place, from one source.
     bool addOrigin(qint64 taxonInatId, const OriginRecord &origin);
@@ -109,8 +119,9 @@ public:
     };
     // Replaces everything `source` recorded (every region) with `rows`, in
     // one transaction -- for sources that are re-downloaded whole (ALA
-    // lists, the APC). Chunked multi-row inserts, so large sources stay
-    // cheap on a remote catalogue. Returns rows written, or -1 (nothing
+    // lists, the APC). By content: unchanged rows keep their ids and aren't
+    // rewritten; only gone, changed and new rows are (so a shared catalogue
+    // only has real changes to send). Chunked, so large sources stay cheap. Returns rows written, or -1 (nothing
     // changed).
     int replaceStatusesFromSource(const QString &source, const QList<SourcedFact> &rows);
     int replaceOriginsFromSource(const QString &source, const QList<SourcedFact> &rows);
@@ -207,6 +218,12 @@ public:
     // at prune time).
     QList<qint64> projectExcludedTaxonIds(int projectId) const;
 
+    // Records each of `taxonInatIds` as excluded from the project, as a prune
+    // would (for restoring an exported tree -- see treefile/TreeImporter).
+    // Ids not in the taxon cache are skipped. Returns how many were recorded
+    // (already-excluded ones included), or -1 on error.
+    int addProjectExclusions(int projectId, const QList<qint64> &taxonInatIds);
+
     // Removes one exclusion row (a no-op success if none exists) -- the
     // inverse of pruneTaxonFromProject() for a single taxon. Called when a
     // previously-pruned taxon is explicitly re-added, so a later refresh can
@@ -239,6 +256,9 @@ public:
 
     std::optional<Place> placeByInatId(qint64 inatId) const;
     std::optional<qint64> taxonLocalId(qint64 inatId) const;
+    // Batched taxonLocalId(): inat id -> taxon.id for the cached ones among
+    // `inatIds` (the rest are absent). Chunked, so any list size is fine.
+    QHash<qint64, qint64> taxonLocalIds(const QList<qint64> &inatIds) const;
 
     // A cached taxon's name and iNaturalist reference photo (empty strings when
     // the column is null; `found` is false when the taxon isn't cached at all).
@@ -268,12 +288,32 @@ public:
 
     int taxonCount() const;
     std::optional<int> projectIdByName(const QString &name) const;
+    // The tree's stored name (without any display decoration), or empty.
+    QString projectName(int projectId) const;
+    // Renames a tree. Refuses (false) an empty name, or one another tree
+    // already has; renaming to its own name is a successful no-op.
+    bool renameProject(int projectId, const QString &name);
     std::optional<qint64> projectPlaceInatId(int projectId) const;
 
     // The active locality's bounding box, or nullopt if the project has no
     // locality, that place isn't cached, or it has no bbox recorded.
     std::optional<geo::GeoBox> projectLocalityBox(int projectId) const;
+    // The active locality's outline, or nullopt if the project has no
+    // locality or its outline hasn't been fetched (or iNaturalist has none).
+    std::optional<geo::GeoShape> projectLocalityShape(int projectId) const;
     QList<qint64> projectTaxonInatIds(int projectId) const;
+
+    // One recorded conservation status or origin of a project taxon, from any
+    // source and for any place -- for exporting a tree.
+    struct TaxonFact
+    {
+        qint64 taxonInatId = 0;
+        std::optional<qint64> placeInatId;
+        QString value;    // the status text, or "introduced" / "native"
+        QString source;
+    };
+    QList<TaxonFact> projectStatuses(int projectId) const;
+    QList<TaxonFact> projectOrigins(int projectId) const;
 
     // The project's tree, parents before children (breadth-ish via rank_level).
     QList<TreeNode> projectTree(int projectId) const;

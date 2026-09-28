@@ -124,14 +124,17 @@ bool TaxonomyStore::upsertPlace(const Place &place)
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "INSERT INTO place (inat_id, name, display_name, admin_level, "
-        "  bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, ancestor_ids, fetched_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, %1) "
+        "  bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, ancestor_ids, geometry_geojson, "
+        "  fetched_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, %1) "
         "ON CONFLICT(inat_id) DO UPDATE SET name = excluded.name, "
         "  display_name = excluded.display_name, admin_level = excluded.admin_level, "
         "  bbox_swlat = excluded.bbox_swlat, bbox_swlng = excluded.bbox_swlng, "
         "  bbox_nelat = excluded.bbox_nelat, bbox_nelng = excluded.bbox_nelng, "
         // A response without ancestry never erases one fetched earlier.
         "  ancestor_ids = COALESCE(excluded.ancestor_ids, place.ancestor_ids), "
+        // Nor one without an outline (place searches don't include it).
+        "  geometry_geojson = COALESCE(excluded.geometry_geojson, place.geometry_geojson), "
         "  fetched_at = excluded.fetched_at")
                     .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(qlonglong(place.inatId));
@@ -146,6 +149,7 @@ bool TaxonomyStore::upsertPlace(const Place &place)
     for (qint64 id : place.ancestorIds)
         ancestry << QString::number(id);
     q.addBindValue(ancestry.isEmpty() ? QVariant() : ancestry.join(QLatin1Char('/')));
+    q.addBindValue(place.geometryGeoJson.isEmpty() ? QVariant() : place.geometryGeoJson);
     return q.exec();
 }
 
@@ -173,6 +177,28 @@ bool TaxonomyStore::markPlaceAncestryUnavailable(qint64 inatId)
         "UPDATE place SET ancestor_ids = '' WHERE inat_id = ? AND ancestor_ids IS NULL"));
     q.addBindValue(qlonglong(inatId));
     return q.exec();
+}
+
+bool TaxonomyStore::markPlaceGeometryUnavailable(qint64 inatId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "UPDATE place SET geometry_geojson = '' WHERE inat_id = ? AND geometry_geojson IS NULL"));
+    q.addBindValue(qlonglong(inatId));
+    return q.exec();
+}
+
+QList<qint64> TaxonomyStore::projectPlacesMissingGeometry() const
+{
+    QList<qint64> ids;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    if (!q.exec(QStringLiteral(
+            "SELECT DISTINCT p.place_inat_id FROM project p "
+            "JOIN place pl ON pl.inat_id = p.place_inat_id WHERE pl.geometry_geojson IS NULL")))
+        return ids;
+    while (q.next())
+        ids.append(q.value(0).toLongLong());
+    return ids;
 }
 
 QList<qint64> TaxonomyStore::projectPlacesMissingAncestry() const
@@ -362,43 +388,213 @@ bool TaxonomyStore::addStatus(qint64 taxonInatId, const StatusRecord &status)
 
 namespace {
 
+// Shared body of addStatuses()/addOrigins(): chunked multi-row upserts into
+// `table` keyed (taxon_id, place_inat_id, source). `columns` are the value
+// columns between place_inat_id and source; `updates` the SET clause.
+struct FactRow
+{
+    qint64 taxonId = 0;
+    std::optional<qint64> placeInatId;
+    QVariantList values;
+    QVariant source;
+};
+
+bool upsertFacts(QSqlDatabase &db, const QString &table, const QStringList &columns,
+                 const QString &updates, const QList<FactRow> &rows)
+{
+    // One statement can't upsert the same key twice (Postgres refuses);
+    // the last record for a key wins, as it would one at a time.
+    QList<FactRow> deduped;
+    QHash<QString, qsizetype> indexOf;
+    for (const FactRow &r : rows) {
+        const QString key = QStringLiteral("%1/%2/%3")
+                                .arg(r.taxonId)
+                                .arg(r.placeInatId ? QString::number(*r.placeInatId) : QString())
+                                .arg(r.source.toString());
+        if (const auto it = indexOf.constFind(key); it != indexOf.constEnd()) {
+            deduped[*it] = r;
+        } else {
+            indexOf.insert(key, deduped.size());
+            deduped.append(r);
+        }
+    }
+
+    const int perRow = int(columns.size()) + 3;
+    const qsizetype chunkSize = std::max(1, kMaxBatchBindParams / perRow);
+    const QString rowPlaceholder =
+        QStringLiteral("(%1)").arg(QStringList(perRow, QStringLiteral("?")).join(QLatin1Char(',')));
+    for (qsizetype offset = 0; offset < deduped.size(); offset += chunkSize) {
+        const QList<FactRow> chunk = deduped.mid(offset, chunkSize);
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("INSERT INTO %1 (taxon_id, place_inat_id, %2, source) VALUES %3 "
+                                 "ON CONFLICT(taxon_id, place_inat_id, source) DO UPDATE SET %4")
+                      .arg(table, columns.join(QStringLiteral(", ")),
+                           QStringList(chunk.size(), rowPlaceholder).join(QLatin1Char(',')),
+                           updates));
+        for (const FactRow &r : chunk) {
+            q.addBindValue(qlonglong(r.taxonId));
+            q.addBindValue(r.placeInatId ? QVariant(qlonglong(*r.placeInatId)) : QVariant());
+            for (const QVariant &v : r.values)
+                q.addBindValue(v);
+            q.addBindValue(r.source);
+        }
+        if (!q.exec())
+            return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool TaxonomyStore::addStatuses(const QList<std::pair<qint64, StatusRecord>> &statuses)
+{
+    QList<qint64> ids;
+    for (const auto &[inatId, s] : statuses)
+        ids << inatId;
+    const QHash<qint64, qint64> local = taxonLocalIds(ids);
+    QList<FactRow> rows;
+    for (const auto &[inatId, s] : statuses) {
+        if (const auto it = local.constFind(inatId); it != local.constEnd())
+            rows.append({*it, s.placeInatId, {s.status, foldName(s.status)},
+                         s.source.isEmpty() ? QVariant() : QVariant(s.source)});
+    }
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    return upsertFacts(db, QStringLiteral("taxon_status"),
+                       {QStringLiteral("status"), QStringLiteral("status_folded")},
+                       QStringLiteral("status = excluded.status, "
+                                      "status_folded = excluded.status_folded"),
+                       rows);
+}
+
+bool TaxonomyStore::addOrigins(const QList<std::pair<qint64, OriginRecord>> &origins)
+{
+    QList<qint64> ids;
+    for (const auto &[inatId, o] : origins)
+        ids << inatId;
+    const QHash<qint64, qint64> local = taxonLocalIds(ids);
+    QList<FactRow> rows;
+    for (const auto &[inatId, o] : origins) {
+        if (const auto it = local.constFind(inatId); it != local.constEnd())
+            rows.append({*it, o.placeInatId, {o.origin}, QVariant(o.source)});
+    }
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    return upsertFacts(db, QStringLiteral("taxon_origin"), {QStringLiteral("origin")},
+                       QStringLiteral("origin = excluded.origin"), rows);
+}
+
+namespace {
+
 // Shared body of replaceStatusesFromSource()/replaceOriginsFromSource().
 // `columns` are the table's value columns after (taxon_id, place_inat_id)
 // and before source; `values` gives their bind values for one row.
+//
+// Replaces by content, not wholesale: a row that's unchanged keeps its id
+// and isn't touched; only rows that are gone are deleted, changed ones
+// updated and new ones inserted. A source re-downloaded monthly (ALA, the
+// APC) is otherwise rewritten in full under fresh ids each time -- which a
+// shared catalogue would then see, and send, as thousands of changes.
 int replaceFromSource(const QString &connectionName, const QString &table,
                       const QStringList &columns, const QString &source,
                       const QList<TaxonomyStore::SourcedFact> &rows,
                       const std::function<QVariantList(const TaxonomyStore::SourcedFact &)> &values)
 {
+    auto keyOf = [](qint64 taxonId, const QVariant &place) {
+        return QStringLiteral("%1/%2").arg(taxonId).arg(place.isNull() ? QStringLiteral("-")
+                                                                        : place.toString());
+    };
+    auto join = [](const QVariantList &v) {
+        QStringList parts;
+        for (const QVariant &x : v)
+            parts << (x.isNull() ? QStringLiteral("\u0001") : x.toString());
+        return parts.join(QChar(0x1F));
+    };
+
+    // What the source says now: (taxon, place) once -- the first row wins.
+    QHash<QString, const TaxonomyStore::SourcedFact *> wanted;
+    QStringList wantedOrder;
+    for (const TaxonomyStore::SourcedFact &r : rows) {
+        const QString key = keyOf(r.taxonId, r.placeInatId ? QVariant(qlonglong(*r.placeInatId))
+                                                           : QVariant());
+        if (!wanted.contains(key)) {
+            wanted.insert(key, &r);
+            wantedOrder << key;
+        }
+    }
+
     QSqlDatabase db = QSqlDatabase::database(connectionName, false);
     if (!db.transaction())
         return -1;
-    QSqlQuery del(db);
-    del.prepare(QStringLiteral("DELETE FROM %1 WHERE source = ?").arg(table));
-    del.addBindValue(source);
-    if (!del.exec()) {
+    auto fail = [&db]() {
         db.rollback();
         return -1;
+    };
+
+    // What's recorded now.
+    QList<qint64> deletes;
+    QList<std::pair<qint64, const TaxonomyStore::SourcedFact *>> updates;
+    QSet<QString> kept;
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        q.prepare(QStringLiteral("SELECT id, taxon_id, place_inat_id, %1 FROM %2 WHERE source = ?")
+                      .arg(columns.join(QStringLiteral(", ")), table));
+        q.addBindValue(source);
+        if (!q.exec())
+            return fail();
+        while (q.next()) {
+            const qint64 id = q.value(0).toLongLong();
+            const QString key = keyOf(q.value(1).toLongLong(), q.value(2));
+            const auto it = wanted.constFind(key);
+            if (it == wanted.constEnd() || kept.contains(key)) {
+                deletes << id;   // gone from the source (or a duplicate)
+                continue;
+            }
+            kept.insert(key);
+            QVariantList current;
+            for (int c = 0; c < columns.size(); ++c)
+                current << q.value(3 + c);
+            if (join(current) != join(values(**it)))
+                updates.append({id, *it});
+        }
     }
 
+    for (qsizetype i = 0; i < deletes.size(); i += kMaxBatchBindParams) {
+        const QList<qint64> chunk = deletes.mid(i, kMaxBatchBindParams);
+        QSqlQuery del(db);
+        del.prepare(QStringLiteral("DELETE FROM %1 WHERE id IN (%2)")
+                        .arg(table, QStringList(chunk.size(), QStringLiteral("?")).join(QLatin1Char(','))));
+        for (qint64 id : chunk)
+            del.addBindValue(qlonglong(id));
+        if (!del.exec())
+            return fail();
+    }
+
+    if (!updates.isEmpty()) {
+        QStringList sets;
+        for (const QString &c : columns)
+            sets << QStringLiteral("%1 = ?").arg(c);
+        QSqlQuery upd(db);
+        upd.prepare(QStringLiteral("UPDATE %1 SET %2 WHERE id = ?").arg(table, sets.join(QStringLiteral(", "))));
+        for (const auto &[id, fact] : std::as_const(updates)) {
+            for (const QVariant &v : values(*fact))
+                upd.addBindValue(v);
+            upd.addBindValue(qlonglong(id));
+            if (!upd.exec())
+                return fail();
+        }
+    }
+
+    QList<const TaxonomyStore::SourcedFact *> inserts;
+    for (const QString &key : std::as_const(wantedOrder)) {
+        if (!kept.contains(key))
+            inserts << wanted.value(key);
+    }
     const int perRow = int(columns.size()) + 3;
     const int rowsPerChunk = std::max(1, kMaxBatchBindParams / perRow);
     const QString rowPlaceholder =
         QStringLiteral("(%1)").arg(QStringList(perRow, QStringLiteral("?")).join(QLatin1Char(',')));
-    QSet<QString> seen;   // (taxon, place) once per source -- the unique key
-    int written = 0;
-    for (qsizetype start = 0; start < rows.size(); start += rowsPerChunk) {
-        QList<const TaxonomyStore::SourcedFact *> chunk;
-        for (qsizetype i = start; i < std::min(rows.size(), start + rowsPerChunk); ++i) {
-            const auto &r = rows.at(i);
-            const QString key = QStringLiteral("%1/%2").arg(r.taxonId).arg(r.placeInatId.value_or(0));
-            if (!seen.contains(key)) {
-                seen.insert(key);
-                chunk.append(&r);
-            }
-        }
-        if (chunk.isEmpty())
-            continue;
+    for (qsizetype start = 0; start < inserts.size(); start += rowsPerChunk) {
+        const auto chunk = inserts.mid(start, rowsPerChunk);
         QSqlQuery ins(db);
         ins.prepare(QStringLiteral("INSERT INTO %1 (taxon_id, place_inat_id, %2, source) VALUES %3")
                         .arg(table, columns.join(QStringLiteral(", ")),
@@ -410,15 +606,12 @@ int replaceFromSource(const QString &connectionName, const QString &table,
                 ins.addBindValue(v);
             ins.addBindValue(source);
         }
-        if (!ins.exec()) {
-            db.rollback();
-            return -1;
-        }
-        written += int(chunk.size());
+        if (!ins.exec())
+            return fail();
     }
     if (!db.commit())
         return -1;
-    return written;
+    return int(wanted.size());
 }
 
 } // namespace
@@ -719,6 +912,29 @@ QList<qint64> TaxonomyStore::projectExcludedTaxonIds(int projectId) const
     return ids;
 }
 
+int TaxonomyStore::addProjectExclusions(int projectId, const QList<qint64> &taxonInatIds)
+{
+    const QHash<qint64, qint64> local = taxonLocalIds(taxonInatIds);
+    const QList<qint64> ids = local.values();
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    constexpr int kParamsPerRow = 2;
+    const qsizetype chunkSize = std::max(1, kMaxBatchBindParams / kParamsPerRow);
+    for (qsizetype offset = 0; offset < ids.size(); offset += chunkSize) {
+        const QList<qint64> chunk = ids.mid(offset, chunkSize);
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("INSERT INTO project_excluded_taxon (project_id, taxon_id) VALUES ")
+                  + QStringList(chunk.size(), QStringLiteral("(?,?)")).join(QLatin1Char(','))
+                  + QStringLiteral(" ON CONFLICT(project_id, taxon_id) DO NOTHING"));
+        for (qint64 id : chunk) {
+            q.addBindValue(projectId);
+            q.addBindValue(qlonglong(id));
+        }
+        if (!q.exec())
+            return -1;
+    }
+    return int(ids.size());
+}
+
 bool TaxonomyStore::clearProjectExclusion(int projectId, qint64 taxonInatId)
 {
     const auto local = taxonLocalId(taxonInatId);
@@ -973,7 +1189,7 @@ std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
         "SELECT name, display_name, admin_level, bbox_swlat, bbox_swlng, bbox_nelat, bbox_nelng, "
-        "       ancestor_ids "
+        "       ancestor_ids, geometry_geojson "
         "FROM place WHERE inat_id = ?"));
     q.addBindValue(qlonglong(inatId));
     if (!q.exec() || !q.next())
@@ -995,6 +1211,7 @@ std::optional<Place> TaxonomyStore::placeByInatId(qint64 inatId) const
         p.bboxNeLng = q.value(6).toDouble();
     for (const QString &part : q.value(7).toString().split(QLatin1Char('/'), Qt::SkipEmptyParts))
         p.ancestorIds.append(part.toLongLong());
+    p.geometryGeoJson = q.value(8).toString();
     return p;
 }
 
@@ -1006,6 +1223,28 @@ std::optional<qint64> TaxonomyStore::taxonLocalId(qint64 inatId) const
     if (!q.exec() || !q.next())
         return std::nullopt;
     return q.value(0).toLongLong();
+}
+
+QHash<qint64, qint64> TaxonomyStore::taxonLocalIds(const QList<qint64> &inatIds) const
+{
+    QHash<qint64, qint64> ids;
+    QSet<qint64> unique(inatIds.cbegin(), inatIds.cend());
+    const QList<qint64> list(unique.cbegin(), unique.cend());
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    for (qsizetype offset = 0; offset < list.size(); offset += kMaxBatchBindParams) {
+        const QList<qint64> chunk = list.mid(offset, kMaxBatchBindParams);
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        q.prepare(QStringLiteral("SELECT inat_id, id FROM taxon WHERE inat_id IN (%1)")
+                      .arg(QStringList(chunk.size(), QStringLiteral("?")).join(QLatin1Char(','))));
+        for (qint64 id : chunk)
+            q.addBindValue(qlonglong(id));
+        if (!q.exec())
+            return ids;
+        while (q.next())
+            ids.insert(q.value(0).toLongLong(), q.value(1).toLongLong());
+    }
+    return ids;
 }
 
 TaxonomyStore::TaxonPhoto TaxonomyStore::taxonPhoto(qint64 inatId) const
@@ -1077,6 +1316,28 @@ std::optional<int> TaxonomyStore::projectIdByName(const QString &name) const
     return q.value(0).toInt();
 }
 
+QString TaxonomyStore::projectName(int projectId) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("SELECT name FROM project WHERE id = ?"));
+    q.addBindValue(projectId);
+    return q.exec() && q.next() ? q.value(0).toString() : QString();
+}
+
+bool TaxonomyStore::renameProject(int projectId, const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return false;
+    if (const auto other = projectIdByName(trimmed); other && *other != projectId)
+        return false;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("UPDATE project SET name = ? WHERE id = ?"));
+    q.addBindValue(trimmed);
+    q.addBindValue(projectId);
+    return q.exec() && q.numRowsAffected() == 1;
+}
+
 std::optional<qint64> TaxonomyStore::projectPlaceInatId(int projectId) const
 {
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
@@ -1098,6 +1359,17 @@ std::optional<geo::GeoBox> TaxonomyStore::projectLocalityBox(int projectId) cons
     return geo::GeoBox{*place->bboxSwLat, *place->bboxSwLng, *place->bboxNeLat, *place->bboxNeLng};
 }
 
+std::optional<geo::GeoShape> TaxonomyStore::projectLocalityShape(int projectId) const
+{
+    const auto placeId = projectPlaceInatId(projectId);
+    if (!placeId)
+        return std::nullopt;
+    const auto place = placeByInatId(*placeId);
+    if (!place || place->geometryGeoJson.isEmpty())
+        return std::nullopt;
+    return geo::parseGeoJsonShape(place->geometryGeoJson);
+}
+
 QList<qint64> TaxonomyStore::projectTaxonInatIds(int projectId) const
 {
     QList<qint64> ids;
@@ -1111,6 +1383,48 @@ QList<qint64> TaxonomyStore::projectTaxonInatIds(int projectId) const
             ids.append(q.value(0).toLongLong());
     }
     return ids;
+}
+
+namespace {
+
+QList<TaxonomyStore::TaxonFact> projectFacts(const QString &connectionName, const QString &table,
+                                             const QString &valueColumn, int projectId)
+{
+    QList<TaxonomyStore::TaxonFact> facts;
+    QSqlQuery q(QSqlDatabase::database(connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT t.inat_id, f.place_inat_id, f.%2, f.source "
+        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+        "JOIN %1 f ON f.taxon_id = pt.taxon_id "
+        "WHERE pt.project_id = ? ORDER BY t.inat_id, f.id")
+                  .arg(table, valueColumn));
+    q.addBindValue(projectId);
+    if (!q.exec())
+        return facts;
+    while (q.next()) {
+        TaxonomyStore::TaxonFact f;
+        f.taxonInatId = q.value(0).toLongLong();
+        if (!q.value(1).isNull())
+            f.placeInatId = q.value(1).toLongLong();
+        f.value = q.value(2).toString();
+        f.source = q.value(3).toString();
+        facts.append(f);
+    }
+    return facts;
+}
+
+} // namespace
+
+QList<TaxonomyStore::TaxonFact> TaxonomyStore::projectStatuses(int projectId) const
+{
+    return projectFacts(m_connectionName, QStringLiteral("taxon_status"), QStringLiteral("status"),
+                        projectId);
+}
+
+QList<TaxonomyStore::TaxonFact> TaxonomyStore::projectOrigins(int projectId) const
+{
+    return projectFacts(m_connectionName, QStringLiteral("taxon_origin"), QStringLiteral("origin"),
+                        projectId);
 }
 
 QList<qint64> TaxonomyStore::projectSubtreeTaxonIds(int projectId, qint64 rootInatId) const
@@ -1137,7 +1451,8 @@ QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
     QList<TreeNode> nodes;
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
-        "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name, pt.in_region "
+        "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name, pt.in_region, "
+        "       pt.from_checklist "
         "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
         "WHERE pt.project_id = ? "
         "ORDER BY COALESCE(t.rank_level, 0) DESC, t.name"));
@@ -1154,6 +1469,7 @@ QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
         n.name = q.value(3).toString();
         n.commonName = q.value(4).toString();
         n.inRegion = q.value(5).toInt() != 0;
+        n.fromChecklist = q.value(6).toInt() != 0;
         n.isLeafRank = TaxonomyStore::isLeafRank(n.rank);
         nodes.append(n);
     }

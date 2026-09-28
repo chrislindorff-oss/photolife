@@ -1,6 +1,7 @@
 #include "net/INatParse.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 
@@ -105,6 +106,11 @@ pl::taxonomy::Place parsePlace(const QJsonObject &obj)
             p.ancestorIds.append(*id);
     }
 
+    const QJsonObject geometry = obj.value(QStringLiteral("geometry_geojson")).toObject();
+    if (!geometry.isEmpty())
+        p.geometryGeoJson =
+            QString::fromUtf8(QJsonDocument(geometry).toJson(QJsonDocument::Compact));
+
     const QJsonObject box = obj.value(QStringLiteral("bounding_box_geojson")).toObject();
     const QJsonArray rings = box.value(QStringLiteral("coordinates")).toArray();
     if (!rings.isEmpty()) {
@@ -189,9 +195,15 @@ pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
             return {};
         };
 
-        photo.previewUrl = explicitUrl({"small_url", "square_url", "medium_url"});
+        // Preview at "small" (240 px): the base "square" is only 75 px, which
+        // looks blurry scaled up to the download grid's 192 px thumbnails.
+        photo.previewUrl = explicitUrl({"small_url", "medium_url"});
         if (photo.previewUrl.isEmpty())
-            photo.previewUrl = !base.isEmpty() ? base : derivedUrl("small");
+            photo.previewUrl = derivedUrl("small");
+        if (photo.previewUrl.isEmpty())
+            photo.previewUrl = explicitUrl({"square_url"});
+        if (photo.previewUrl.isEmpty())
+            photo.previewUrl = base;
 
         photo.downloadUrl = explicitUrl({"original_url", "large_url", "medium_url"});
         if (photo.downloadUrl.isEmpty())

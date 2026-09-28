@@ -204,6 +204,18 @@ QPushButton:disabled {
     border-color: @border@;
 }
 
+/* A toggle that is on (e.g. the map's "Restrict to ... Locality") -- filled,
+   so on and off can't be mistaken for each other. */
+QPushButton:checked {
+    background: @primaryAccent@;
+    border-color: @primaryAccent@;
+    color: #FFFFFF;
+}
+
+QPushButton:checked:hover {
+    background: #2660D6;
+}
+
 QPushButton:default {
     background: @primaryAccent@;
     border-color: @primaryAccent@;

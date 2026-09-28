@@ -28,6 +28,8 @@ private slots:
     void onlyAutoAndConfirmedMatchesCount();
     void picksHighestConfidenceRepresentative();
     void representativeRollsUpToAncestors();
+    void representativeWritesOnlyWhatChanged();
+    void coverageIgnoresOtherTreesTaxa();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -420,6 +422,61 @@ void TestCoverageCalculator::picksHighestConfidenceRepresentative()
 
     const auto rep = representativeFor(m_db->connectionName(), m_projectId, 2);
     QCOMPARE(rep.captureId, qint64(strong));
+}
+
+void TestCoverageCalculator::representativeWritesOnlyWhatChanged()
+{
+    addTaxon(1, 0, QStringLiteral("family"), QStringLiteral("Orchidaceae"));
+    addTaxon(10, 1, QStringLiteral("genus"), QStringLiteral("Diuris"));
+    addTaxon(11, 10, QStringLiteral("species"), QStringLiteral("Diuris pardina"));
+    addTaxon(12, 10, QStringLiteral("species"), QStringLiteral("Diuris sulphurea"));
+
+    const int first = captureInFolder(QStringLiteral("/a"), QStringLiteral("x"));
+    matchCapture(first, 11, QStringLiteral("auto"));
+    const QString conn = m_db->connectionName();
+    QCOMPARE(pickRepresentatives(conn, m_projectId), 3);   // species, genus, family
+    QCOMPARE(pickRepresentatives(conn, m_projectId), 0);   // nothing changed: no writes
+
+    // A newer photo of the other species: it's added, and takes over the
+    // genus and family (each cleared and rewritten); Diuris pardina stays.
+    const int second = captureInFolder(QStringLiteral("/b"), QStringLiteral("y"));
+    matchCapture(second, 12, QStringLiteral("confirmed"));
+    QSqlQuery q(QSqlDatabase::database(conn, false));
+    q.exec(QStringLiteral("UPDATE capture SET captured_on = '2030-01-01' WHERE id = %1").arg(second));
+    QCOMPARE(pickRepresentatives(conn, m_projectId), 5);
+    QCOMPARE(representativeFor(conn, m_projectId, 11).captureId, qint64(first));
+    QCOMPARE(representativeFor(conn, m_projectId, 12).captureId, qint64(second));
+    QCOMPARE(representativeFor(conn, m_projectId, 1).captureId, qint64(second));
+
+    // Unmatched: its rows go, and the first photo covers the family again.
+    q.exec(QStringLiteral("DELETE FROM capture_match WHERE capture_id = %1").arg(second));
+    QVERIFY(pickRepresentatives(conn, m_projectId) > 0);
+    QCOMPARE(representativeFor(conn, m_projectId, 12).captureId, qint64(0));
+    QCOMPARE(representativeFor(conn, m_projectId, 1).captureId, qint64(first));
+}
+
+// Statuses, origins and matches of taxa outside the tree don't leak in (the
+// queries are limited to the tree's own taxa).
+void TestCoverageCalculator::coverageIgnoresOtherTreesTaxa()
+{
+    addTaxon(1, 0, QStringLiteral("genus"), QStringLiteral("Diuris"));
+    addTaxon(11, 1, QStringLiteral("species"), QStringLiteral("Diuris pardina"));
+    taxonomy::TaxonomyStore store(m_db->connectionName());
+    taxonomy::Taxon outside;
+    outside.inatId = 99;
+    outside.rank = QStringLiteral("species");
+    outside.name = QStringLiteral("Acacia dealbata");
+    store.upsertTaxon(outside);
+    store.addStatus(99, {std::nullopt, QStringLiteral("Endangered"), QStringLiteral("x")});
+    store.addStatus(11, {std::nullopt, QStringLiteral("Rare"), QStringLiteral("x")});
+    matchCapture(captureInFolder(QStringLiteral("/a"), QStringLiteral("x")), 99,
+                 QStringLiteral("auto"));
+
+    const auto cov = computeCoverage(m_db->connectionName(), m_projectId);
+    QCOMPARE(cov.byTaxon.value(11).status, QStringLiteral("Rare"));
+    QVERIFY(!cov.byTaxon.contains(99));
+    QCOMPARE(cov.byStatus.size(), 1);
+    QCOMPARE(cov.speciesWithPhotos, 0);
 }
 
 void TestCoverageCalculator::representativeRollsUpToAncestors()

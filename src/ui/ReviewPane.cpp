@@ -739,6 +739,8 @@ void ReviewPane::afterDecision(qint64 captureId)
 
 void ReviewPane::undo()
 {
+    if (!editAllowed())
+        return;
     if (m_lastDecidedCaptureId <= 0)
         return;
     const qint64 cid = m_lastDecidedCaptureId;
@@ -778,6 +780,8 @@ void ReviewPane::updateBucketButtons()
 
 void ReviewPane::confirm()
 {
+    if (!editAllowed())
+        return;
     const qint64 cid = currentCaptureId();
     if (cid <= 0)
         return;
@@ -803,6 +807,8 @@ void ReviewPane::updateTreeTaxonButton()
 
 void ReviewPane::useTreeTaxon()
 {
+    if (!editAllowed())
+        return;
     const qint64 cid = currentCaptureId();
     if (cid <= 0 || m_treeTaxonInatId <= 0)
         return;
@@ -812,6 +818,8 @@ void ReviewPane::useTreeTaxon()
 
 void ReviewPane::reject()
 {
+    if (!editAllowed())
+        return;
     const qint64 cid = currentCaptureId();
     if (cid > 0 && m_reviewer.reject(cid))
         afterDecision(cid);
@@ -819,6 +827,8 @@ void ReviewPane::reject()
 
 void ReviewPane::genusOnly()
 {
+    if (!editAllowed())
+        return;
     const qint64 cid = currentCaptureId();
     if (cid <= 0)
         return;
@@ -829,6 +839,8 @@ void ReviewPane::genusOnly()
 
 void ReviewPane::notATaxon()
 {
+    if (!editAllowed())
+        return;
     const qint64 cid = currentCaptureId();
     if (cid > 0 && m_reviewer.markNotATaxon(cid, true))
         afterDecision(cid);
@@ -845,6 +857,8 @@ void ReviewPane::skip()
 
 void ReviewPane::applyToFolder()
 {
+    if (!editAllowed())
+        return;
     const int folderId = currentFolderId();
     const qint64 taxon = chosenTaxonInatId();
     if (folderId <= 0 || taxon <= 0)
@@ -880,6 +894,8 @@ void ReviewPane::applyToFolder()
 
 void ReviewPane::ignoreFolder()
 {
+    if (!editAllowed())
+        return;
     const int folderId = currentFolderId();
     if (folderId <= 0)
         return;
@@ -903,6 +919,19 @@ void ReviewPane::ignoreFolder()
         selectCapture(visibleQueueIndex(0));
     showCurrent();
     emit queueChanged();
+}
+
+void ReviewPane::setReadOnly(bool readOnly)
+{
+    m_readOnly = readOnly;
+}
+
+bool ReviewPane::editAllowed()
+{
+    if (!m_readOnly)
+        return true;
+    emit editRequested();
+    return false;
 }
 
 } // namespace pl

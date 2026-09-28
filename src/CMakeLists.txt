@@ -14,6 +14,7 @@ qt_add_library(photolife_core STATIC
     db/Database.h           db/Database.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
     geo/GeoBox.h            geo/GeoBox.cpp
+    geo/GeoShape.h          geo/GeoShape.cpp
     geo/LocalityFetcher.h   geo/LocalityFetcher.cpp
     geo/LocalityStore.h     geo/LocalityStore.cpp
     geo/PinClusterer.h      geo/PinClusterer.cpp
@@ -64,6 +65,10 @@ qt_add_library(photolife_core STATIC
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
+    sync/ChangeSummary.h    sync/ChangeSummary.cpp
+    sync/CatalogueSync.h    sync/CatalogueSync.cpp
+    sync/SyncService.h      sync/SyncService.cpp
+    sync/SyncActivityLog.h  sync/SyncActivityLog.cpp
     taxonomy/InfraspecificFiller.h taxonomy/InfraspecificFiller.cpp
     taxonomy/OriginFetcher.h taxonomy/OriginFetcher.cpp
     taxonomy/AlaStatusSync.h taxonomy/AlaStatusSync.cpp
@@ -73,6 +78,8 @@ qt_add_library(photolife_core STATIC
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
     taxonomy/TaxonomyTypes.h
     thumb/ThumbnailCache.h  thumb/ThumbnailCache.cpp
+    treefile/TreeFile.h     treefile/TreeFile.cpp
+    treefile/TreeImporter.h treefile/TreeImporter.cpp
     ui/AliasEditorDialog.h  ui/AliasEditorDialog.cpp
     ui/CatalogueConnectDialog.h ui/CatalogueConnectDialog.cpp
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
@@ -88,15 +95,19 @@ qt_add_library(photolife_core STATIC
     ui/InatToolsView.h      ui/InatToolsView.cpp
     ui/LibraryFoldersDialog.h ui/LibraryFoldersDialog.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
+    ui/ManageCataloguesDialog.h ui/ManageCataloguesDialog.cpp
     ui/MapView.h            ui/MapView.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
     ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp
     ui/ReferencePhotoDialog.h ui/ReferencePhotoDialog.cpp
     ui/ReviewPane.h         ui/ReviewPane.cpp
+    ui/ServerBar.h          ui/ServerBar.cpp
+    ui/ServerDialogs.h      ui/ServerDialogs.cpp
     ui/StaleMatchDialog.h   ui/StaleMatchDialog.cpp
     ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp
     ui/TaxonPickerDialog.h  ui/TaxonPickerDialog.cpp
     ui/Theme.h              ui/Theme.cpp
+    util/Csv.h              util/Csv.cpp
     util/PathSanitize.h     util/PathSanitize.cpp
 )
 
@@ -138,6 +149,22 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(Exiv2 REQUIRED IMPORTED_TARGET exiv2)
 target_link_libraries(photolife_core PRIVATE PkgConfig::Exiv2)
+
+# QXlsx reads and writes the .xlsx reference-tree files (treefile/TreeFile).
+# MIT-licensed and Qt-only, so it is fetched and built statically rather than
+# being yet another system package to install. It does need Qt's private Gui
+# headers (for QZipReader/QZipWriter): qt6-base-private-dev on Debian/Ubuntu;
+# the official Qt installers (install-qt-action on CI) already include them.
+include(FetchContent)
+FetchContent_Declare(QXlsx
+    GIT_REPOSITORY https://github.com/QtExcel/QXlsx.git
+    GIT_TAG        v1.5.0
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  QXlsx)
+set(QT_VERSION_MAJOR 6)
+set(BUILD_SHARED_LIBS OFF)
+FetchContent_MakeAvailable(QXlsx)
+target_link_libraries(photolife_core PRIVATE QXlsx::QXlsx)
 target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_EXIV2)
 message(STATUS "exiv2 ${Exiv2_VERSION}: EXIF writing enabled")
 
@@ -166,6 +193,9 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/016_place_ancestry.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/017_taxon_origin.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/018_drop_http_cache.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/019_place_geometry.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/020_catalogue_sync.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/021_sync_pushed_by.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -184,6 +214,9 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/016_place_ancestry.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/017_taxon_origin.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/018_drop_http_cache.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/019_place_geometry.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/020_catalogue_sync.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/021_sync_pushed_by.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

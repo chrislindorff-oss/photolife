@@ -1,7 +1,10 @@
 #include "settings/Settings.h"
 
 #include <QDir>
+#include <QObject>
 #include <QStandardPaths>
+
+#include <algorithm>
 
 namespace pl {
 namespace {
@@ -14,10 +17,15 @@ constexpr auto kPgDbName = "library/pg/dbName";
 constexpr auto kPgUser = "library/pg/user";
 constexpr auto kPgPassword = "library/pg/password";   // stored in plain text, like inatApiToken()
 constexpr auto kPgSslMode = "library/pg/sslMode";
+constexpr auto kSyncUserName = "library/sync/userName";
+constexpr auto kLibraryRoot = "library/sync/libraryRoot";
+constexpr auto kSyncEditing = "library/sync/editing";
+constexpr auto kSyncConfirmSend = "library/sync/confirmSend";
 constexpr auto kWindowGeometry = "ui/mainWindow/geometry";
 constexpr auto kWindowState = "ui/mainWindow/state";
 constexpr auto kCaptionFields = "ui/captureGrid/captionFields";
 constexpr auto kDarkMode = "ui/darkMode";
+constexpr auto kShowMapLocality = "ui/showMapLocality";
 constexpr auto kInatUsername = "inat/username";
 constexpr auto kInatApiToken = "inat/apiToken";
 constexpr auto kExportDestFolder = "export/destFolder";
@@ -39,63 +47,225 @@ QString expandHome(const QString &path)
 
 Settings::Settings() = default;
 
+// --- catalogue profiles -------------------------------------------------------
+
+namespace {
+
+constexpr auto kActiveProfile = "catalogues/active";
+constexpr auto kProfilesMigrated = "catalogues/migrated";
+constexpr auto kServersGroup = "servers";
+
+QString dataDir()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+}
+
+// "Photo Club (Neon)" -> "photo-club-neon"
+QString slug(const QString &name)
+{
+    QString out;
+    for (const QChar c : name.toLower()) {
+        if (c.isLetterOrNumber() && c.unicode() < 128)
+            out += c;
+        else if (!out.endsWith(QLatin1Char('-')))
+            out += QLatin1Char('-');
+    }
+    while (out.endsWith(QLatin1Char('-')))
+        out.chop(1);
+    while (out.startsWith(QLatin1Char('-')))
+        out.remove(0, 1);
+    return out.isEmpty() ? QStringLiteral("server") : out;
+}
+
+QString serverKey(const QString &id, const QString &key)
+{
+    return QStringLiteral("%1/%2/%3").arg(QLatin1String(kServersGroup), id, key);
+}
+
+} // namespace
+
+QString Settings::activeServerId() const
+{
+    const QString id = m_settings.value(QLatin1String(kActiveProfile)).toString();
+    if (id.isEmpty() || id == QLatin1String(kLocalProfileId))
+        return {};
+    return m_settings.contains(serverKey(id, QStringLiteral("name"))) ? id : QString();
+}
+
+QString Settings::profileKey(const QString &serverKeyName, const QString &localKey) const
+{
+    const QString id = activeServerId();
+    return id.isEmpty() ? localKey : serverKey(id, serverKeyName);
+}
+
+std::optional<Settings::CatalogueProfile> Settings::profile(const QString &id) const
+{
+    if (id.isEmpty() || id == QLatin1String(kLocalProfileId)) {
+        CatalogueProfile local;
+        local.id = QString::fromLatin1(kLocalProfileId);
+        local.name = QObject::tr("Local catalogue");
+        return local;
+    }
+    if (!m_settings.contains(serverKey(id, QStringLiteral("name"))))
+        return std::nullopt;
+    CatalogueProfile p;
+    p.id = id;
+    p.server = true;
+    auto v = [&](const char *key, const QVariant &fallback = {}) {
+        return m_settings.value(serverKey(id, QLatin1String(key)), fallback);
+    };
+    p.name = v("name").toString();
+    p.pg.backend = CatalogueDescriptor::Backend::Postgres;
+    p.pg.pgHost = v("pg/host").toString();
+    p.pg.pgPort = v("pg/port", 5432).toInt();
+    p.pg.pgDbName = v("pg/dbName").toString();
+    p.pg.pgUser = v("pg/user").toString();
+    p.pg.pgPassword = v("pg/password").toString();
+    p.pg.pgSslMode = v("pg/sslMode", QStringLiteral("require")).toString();
+    p.userName = v("userName").toString();
+    p.libraryRoot = v("libraryRoot").toString();
+    return p;
+}
+
+QList<Settings::CatalogueProfile> Settings::profiles() const
+{
+    QList<CatalogueProfile> out{*profile(QString::fromLatin1(kLocalProfileId))};
+    m_settings.beginGroup(QLatin1String(kServersGroup));
+    const QStringList ids = m_settings.childGroups();
+    m_settings.endGroup();
+    QList<CatalogueProfile> servers;
+    for (const QString &id : ids) {
+        if (const auto p = profile(id))
+            servers << *p;
+    }
+    std::sort(servers.begin(), servers.end(), [](const CatalogueProfile &a, const CatalogueProfile &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
+    return out + servers;
+}
+
+Settings::CatalogueProfile Settings::activeProfile() const
+{
+    return *profile(activeServerId());
+}
+
+void Settings::setActiveProfile(const QString &id)
+{
+    m_settings.setValue(QLatin1String(kActiveProfile),
+                        profile(id) ? id : QString::fromLatin1(kLocalProfileId));
+}
+
+QString Settings::saveServerProfile(const CatalogueProfile &p)
+{
+    QString id = p.id;
+    if (id.isEmpty() || id == QLatin1String(kLocalProfileId)) {
+        const QString base = slug(p.name);
+        id = base;
+        for (int n = 2; profile(id) || id == QLatin1String(kLocalProfileId); ++n)
+            id = QStringLiteral("%1-%2").arg(base).arg(n);
+    }
+    auto set = [&](const char *key, const QVariant &value) {
+        m_settings.setValue(serverKey(id, QLatin1String(key)), value);
+    };
+    set("name", p.name.trimmed().isEmpty() ? p.pg.pgDbName : p.name.trimmed());
+    set("pg/host", p.pg.pgHost);
+    set("pg/port", p.pg.pgPort);
+    set("pg/dbName", p.pg.pgDbName);
+    set("pg/user", p.pg.pgUser);
+    set("pg/password", p.pg.pgPassword);
+    set("pg/sslMode", p.pg.pgSslMode);
+    set("userName", p.userName.trimmed());
+    set("libraryRoot", p.libraryRoot.trimmed());
+    return id;
+}
+
+void Settings::removeServerProfile(const QString &id)
+{
+    if (id.isEmpty() || id == QLatin1String(kLocalProfileId) || !profile(id))
+        return;
+    if (m_settings.value(QLatin1String(kActiveProfile)).toString() == id)
+        setActiveProfile(QString::fromLatin1(kLocalProfileId));
+    m_settings.remove(QStringLiteral("%1/%2").arg(QLatin1String(kServersGroup), id));
+}
+
+QString Settings::profileDatabasePath(const QString &id) const
+{
+    if (id.isEmpty() || id == QLatin1String(kLocalProfileId)) {
+        const QString configured = m_settings.value(QLatin1String(kDatabasePath)).toString();
+        return configured.isEmpty() ? QDir(dataDir()).filePath(QStringLiteral("catalogue.db"))
+                                    : expandHome(configured);
+    }
+    return QDir(dataDir()).filePath(QStringLiteral("servers/%1/catalogue.db").arg(id));
+}
+
+bool Settings::migrateProfiles()
+{
+    if (m_settings.value(QLatin1String(kProfilesMigrated)).toBool())
+        return false;
+    m_settings.setValue(QLatin1String(kProfilesMigrated), true);
+
+    // Before profiles: one catalogue, and maybe one server (the old direct
+    // Postgres mode, or sync mode). The catalogue file stays the Local one,
+    // exactly as it is; the server becomes a profile whose working copy
+    // starts empty (it's downloaded on first use).
+    const QString backend = m_settings.value(QLatin1String(kCatalogueBackend)).toString();
+    const QString host = m_settings.value(QLatin1String(kPgHost)).toString();
+    QString serverId;
+    if (!host.isEmpty()) {
+        CatalogueProfile p;
+        p.server = true;
+        p.pg.backend = CatalogueDescriptor::Backend::Postgres;
+        p.pg.pgHost = host;
+        p.pg.pgPort = m_settings.value(QLatin1String(kPgPort), 5432).toInt();
+        p.pg.pgDbName = m_settings.value(QLatin1String(kPgDbName)).toString();
+        p.pg.pgUser = m_settings.value(QLatin1String(kPgUser)).toString();
+        p.pg.pgPassword = m_settings.value(QLatin1String(kPgPassword)).toString();
+        p.pg.pgSslMode = m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("require")).toString();
+        p.name = p.pg.pgDbName.isEmpty() ? host : p.pg.pgDbName;
+        p.userName = m_settings.value(QLatin1String(kSyncUserName)).toString();
+        p.libraryRoot = m_settings.value(QLatin1String(kLibraryRoot)).toString();
+        serverId = saveServerProfile(p);
+    }
+    const bool serverWasActive = backend == QLatin1String("sync") || backend == QLatin1String("postgres");
+    setActiveProfile(serverWasActive && !serverId.isEmpty() ? serverId
+                                                            : QString::fromLatin1(kLocalProfileId));
+    m_settings.setValue(QLatin1String(kCatalogueBackend), QStringLiteral("sqlite"));
+    m_settings.remove(QLatin1String(kSyncEditing));
+    return true;
+}
+
+// --- the active profile's catalogue settings ----------------------------------
+
 QStringList Settings::watchedRoots() const
 {
-    return m_settings.value(QLatin1String(kWatchedRoots)).toStringList();
+    return m_settings.value(profileKey(QStringLiteral("watchedRoots"), QLatin1String(kWatchedRoots)))
+        .toStringList();
 }
 
 void Settings::setWatchedRoots(const QStringList &roots)
 {
-    m_settings.setValue(QLatin1String(kWatchedRoots), roots);
+    m_settings.setValue(profileKey(QStringLiteral("watchedRoots"), QLatin1String(kWatchedRoots)), roots);
 }
 
 QString Settings::databasePath() const
 {
-    const QString configured =
-        m_settings.value(QLatin1String(kDatabasePath)).toString();
-    if (!configured.isEmpty())
-        return expandHome(configured);
-
-    const QString dataDir =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    return QDir(dataDir).filePath(QStringLiteral("catalogue.db"));
+    return profileDatabasePath(activeServerId());
 }
 
 void Settings::setDatabasePath(const QString &path)
 {
-    m_settings.setValue(QLatin1String(kDatabasePath), path);
+    m_settings.setValue(QLatin1String(kDatabasePath), path);   // the Local catalogue's
 }
 
 CatalogueDescriptor Settings::catalogueDescriptor() const
 {
-    CatalogueDescriptor d;
-    // Always populated, regardless of backend -- lets CatalogueSettingsDialog
-    // prefill the SQLite file field with the real configured path even when
-    // switching back from Postgres, instead of showing it blank.
-    d.sqlitePath = databasePath();
-
-    const QString backend = m_settings.value(QLatin1String(kCatalogueBackend)).toString();
-    d.backend = backend == QStringLiteral("postgres") ? CatalogueDescriptor::Backend::Postgres
-                                                       : CatalogueDescriptor::Backend::Sqlite;
-
-    // Also always populated, regardless of backend -- mirrors sqlitePath
-    // above, so CatalogueSettingsDialog can prefill the Postgres tab with
-    // the last-used connection even after switching back to Local SQLite,
-    // instead of showing it blank. setCatalogueDescriptor() never writes
-    // these keys when saving as SQLite, so the last Postgres values saved
-    // stay put until the user overwrites them by saving as Postgres again.
-    d.pgHost = m_settings.value(QLatin1String(kPgHost)).toString();
-    d.pgPort = m_settings.value(QLatin1String(kPgPort), 5432).toInt();
-    d.pgDbName = m_settings.value(QLatin1String(kPgDbName)).toString();
-    d.pgUser = m_settings.value(QLatin1String(kPgUser)).toString();
-    d.pgPassword = m_settings.value(QLatin1String(kPgPassword)).toString();
-    d.pgSslMode = m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("prefer")).toString();
-    return d;
+    return CatalogueDescriptor::sqlite(databasePath());
 }
 
 void Settings::setCatalogueDescriptor(const CatalogueDescriptor &descriptor)
 {
     if (descriptor.backend == CatalogueDescriptor::Backend::Postgres) {
+        // Pre-profile form, kept for migrateProfiles() (and old settings).
         m_settings.setValue(QLatin1String(kCatalogueBackend), QStringLiteral("postgres"));
         m_settings.setValue(QLatin1String(kPgHost), descriptor.pgHost);
         m_settings.setValue(QLatin1String(kPgPort), descriptor.pgPort);
@@ -104,9 +274,66 @@ void Settings::setCatalogueDescriptor(const CatalogueDescriptor &descriptor)
         m_settings.setValue(QLatin1String(kPgPassword), descriptor.pgPassword);
         m_settings.setValue(QLatin1String(kPgSslMode), descriptor.pgSslMode);
     } else {
-        m_settings.setValue(QLatin1String(kCatalogueBackend), QStringLiteral("sqlite"));
         setDatabasePath(descriptor.sqlitePath);
     }
+}
+
+bool Settings::syncEnabled() const
+{
+    return !activeServerId().isEmpty();
+}
+
+CatalogueDescriptor Settings::syncServerDescriptor() const
+{
+    return activeProfile().pg;
+}
+
+QString Settings::syncUserName() const
+{
+    QString fallback = qEnvironmentVariable("USER");
+    if (fallback.isEmpty())
+        fallback = qEnvironmentVariable("USERNAME");
+    const QString name = activeProfile().userName;
+    return name.isEmpty() ? fallback : name;
+}
+
+void Settings::setSyncUserName(const QString &name)
+{
+    if (const QString id = activeServerId(); !id.isEmpty())
+        m_settings.setValue(serverKey(id, QStringLiteral("userName")), name.trimmed());
+}
+
+QString Settings::libraryRoot() const
+{
+    return activeProfile().libraryRoot;
+}
+
+void Settings::setLibraryRoot(const QString &root)
+{
+    if (const QString id = activeServerId(); !id.isEmpty())
+        m_settings.setValue(serverKey(id, QStringLiteral("libraryRoot")), root.trimmed());
+}
+
+bool Settings::syncEditing() const
+{
+    const QString id = activeServerId();
+    return !id.isEmpty() && m_settings.value(serverKey(id, QStringLiteral("editing")), false).toBool();
+}
+
+void Settings::setSyncEditing(bool editing)
+{
+    if (const QString id = activeServerId(); !id.isEmpty())
+        m_settings.setValue(serverKey(id, QStringLiteral("editing")), editing);
+}
+
+bool Settings::syncConfirmSend() const
+{
+    return m_settings.value(QLatin1String(kSyncConfirmSend), true).toBool();
+}
+
+void Settings::setSyncConfirmSend(bool confirm)
+{
+    m_settings.setValue(QLatin1String(kSyncConfirmSend), confirm);
 }
 
 void Settings::sync()
@@ -154,6 +381,16 @@ void Settings::setDarkModeEnabled(bool enabled)
     m_settings.setValue(QLatin1String(kDarkMode), enabled);
 }
 
+bool Settings::showMapLocality() const
+{
+    return m_settings.value(QLatin1String(kShowMapLocality), true).toBool();
+}
+
+void Settings::setShowMapLocality(bool show)
+{
+    m_settings.setValue(QLatin1String(kShowMapLocality), show);
+}
+
 QString Settings::inatUsername() const
 {
     return m_settings.value(QLatin1String(kInatUsername)).toString();
@@ -171,12 +408,14 @@ QString Settings::inatApiToken() const
 
 QDateTime Settings::sourceSyncedAt(const QString &source) const
 {
-    return m_settings.value(QStringLiteral("sources/%1/syncedAt").arg(source)).toDateTime();
+    const QString key = QStringLiteral("sources/%1/syncedAt").arg(source);
+    return m_settings.value(profileKey(key, key)).toDateTime();
 }
 
 void Settings::setSourceSyncedAt(const QString &source, const QDateTime &when)
 {
-    m_settings.setValue(QStringLiteral("sources/%1/syncedAt").arg(source), when);
+    const QString key = QStringLiteral("sources/%1/syncedAt").arg(source);
+    m_settings.setValue(profileKey(key, key), when);
 }
 
 void Settings::setInatApiToken(const QString &token)

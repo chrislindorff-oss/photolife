@@ -35,4 +35,15 @@ struct ChecklistEntry
 QList<ChecklistEntry> parseChecklistCsv(const QByteArray &bytes);
 QList<ChecklistEntry> parseChecklistCsv(QIODevice &device);
 
+// "introduced" / "native" for a recognised origin value ("*", "exotic",
+// "naturalised", "indigenous" ...), else "". Shared with the reference-tree
+// file reader (treefile/TreeFile).
+QString originFromValue(const QString &raw);
+
+// Header recognisers, given a trimmed, lower-cased header cell: a name column
+// ("name", "scientific name", "taxon", "species" ...) and an origin column
+// ("origin", "native/introduced", "establishment" ...).
+bool isNameHeader(const QString &h);
+bool isOriginHeader(const QString &h);
+
 } // namespace pl::checklist

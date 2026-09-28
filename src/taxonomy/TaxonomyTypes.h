@@ -19,6 +19,9 @@ struct Place
     // iNaturalist's ancestor_place_ids -- the places this one lies within,
     // broadest first, ending with itself. Empty = not known.
     QList<qint64> ancestorIds;
+    // The place's outline: iNaturalist's geometry_geojson (Polygon or
+    // MultiPolygon) as compact JSON text. Empty = not known.
+    QString geometryGeoJson;
 };
 
 // A taxonomy node plus the alternative names known for it. Decoupled from the
@@ -80,6 +83,7 @@ struct TreeNode
     QString name;
     QString commonName;
     bool inRegion = false;
+    bool fromChecklist = false;   // project_taxon.from_checklist
     bool isLeafRank = false;   // rank == "species" or below
 };
 

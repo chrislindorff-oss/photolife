@@ -62,8 +62,14 @@ public:
     // the tree selection changes.
     void setTreeTaxon(qint64 inatId, const QString &name);
 
+    // Read-only (a shared catalogue this machine isn't editing): decisions
+    // are refused and editRequested() emitted instead, so the window can
+    // offer to start editing.
+    void setReadOnly(bool readOnly);
+
 signals:
     void queueChanged();   // a decision was applied; refresh coverage / other views
+    void editRequested();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -115,6 +121,8 @@ private:
     pl::model::ReviewQueueFilterProxy *m_queueProxy;
     pl::model::ReviewQueueGroupModel *m_queueGroup;
     pl::match::MatchReviewer m_reviewer;
+    bool m_readOnly = false;
+    bool editAllowed();
     pl::match::CandidateFinder m_finder;
 
     QLineEdit *m_photoFilter;

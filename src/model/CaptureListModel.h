@@ -55,6 +55,7 @@ public:
         MatchedTaxonInatIdRole,   // matched taxon's iNat id, or 0 if unmatched
         PreviewIsRawRole,  // true when PreviewPathRole's rendition is a RAW file
                           // (only possible when the capture has no JPEG rendition)
+        MatchedCommonNameRole,   // matched taxon's common name, or empty
     };
 
     // Which fields the Qt::DisplayRole caption (shown under each grid thumbnail)
@@ -151,6 +152,7 @@ public:
         QString ext;
         QString matchStatus;
         QString matchedName;
+        QString matchedCommonName;
         bool hasGps = false;
         double latitude = 0.0;
         double longitude = 0.0;

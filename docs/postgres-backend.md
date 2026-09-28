@@ -1,18 +1,28 @@
 # Shared Postgres backend
 
 By default, PhotoLife's catalogue is a local SQLite file: fast, zero-setup,
-but usable by one person on one machine. As an alternative, a catalogue can
-live in a shared Postgres database instead, so several collaborators — each
-running their own local install of PhotoLife — can manage one catalogue
-together. Every client connects directly to the same Postgres database; there
-is no PhotoLife server component.
+but usable by one person on one machine. To share one catalogue between
+several collaborators, choose **Shared — sync with server** in
+**File → Catalogue Settings…**: the catalogue then also lives in a Postgres
+database, and each collaborator works on a local SQLite copy of it, syncing
+with the server (`src/sync/CatalogueSync`). There is no PhotoLife server
+component — the clients talk to Postgres directly, but only when syncing.
 
-This is a v1 feature with a deliberately simple concurrency model:
-**last write wins**. If two collaborators confirm a match, or star/unstar a
-Best Shot, for the same capture at the same moment, whichever write commits
-last is what sticks — there's no conflict warning or merge UI. For a small
-group of collaborators this is rarely an issue in practice, but it's worth
-knowing before you rely on it.
+**One editor at a time.** The server holds an edit lock (`catalogue_sync`,
+migration 020). **Start Editing** takes it — refused while someone else holds
+it — after getting the latest catalogue if the server has a newer version.
+Everyone else is read-only. **Sync** pushes the lock holder's changes (only
+the rows that differ from the snapshot taken at the last pull/push,
+`catalogue.base.db` beside the catalogue) in one transaction; **Finish
+Editing** pushes and releases the lock. A push is refused unless the server
+is still at the version the pusher last pulled, so a broken lock can never
+overwrite newer work. With nothing to merge, there are no conflicts.
+
+Every operation is a handful of round trips, however large the catalogue:
+bulk statements go as literal SQL of a few hundred KB each. So PhotoLife
+stays fast even over a slow link to the server (earlier versions ran every
+query against the server directly, which a ~600 ms round trip made
+unusable).
 
 ## Provisioning a database
 
@@ -184,18 +194,14 @@ it as a watched folder. PhotoLife just reads files at a path; it doesn't
 know or care whether that path resolves to local disk, a network mount, or
 a FUSE-mounted bucket.
 
-**Known limitation — same path on every machine, required today.**
-PhotoLife stores each file's *absolute* path in the catalogue
-(`folder.path`, `rendition.path`) and has no relative-path or per-machine
-path-remapping support yet. For a shared catalogue's photo paths to resolve
-for everyone, every collaborator currently has to mount the shared storage
-at the *exact same absolute path*. That's achievable within one OS (e.g.
-every Linux collaborator using `/mnt/photolife-photos`), but **not** across
-a mixed Linux/Windows group — the two platforms don't share a path syntax
-at all (`/mnt/photolife-photos` vs `G:\...` or `\\...`), so there is no
-single mount point that works on both today. Supporting that properly needs
-a real change (paths stored relative to a per-machine-configurable library
-root) that hasn't been built yet.
+**Photo paths differ per machine.** Each collaborator sets their **photo
+library** folder in Catalogue Settings. On the server, a path under it is
+stored as `lib:/<relative path>` (forward slashes); pulling maps it under
+the local library folder, pushing maps it back (`sync::PathMapping` —
+`folder.path`, `rendition.path`, and folder-scoped `name_alias.scope`). So
+collaborators can keep the library in different places and on different
+operating systems. A photo outside the library folder is stored as its
+absolute path, and a sync that sends one says so: others can't open it.
 
 ## Runtime dependency: `libpq`
 

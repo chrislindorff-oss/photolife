@@ -4,6 +4,7 @@
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -11,153 +12,102 @@
 #include <QSpinBox>
 #include <QSqlDatabase>
 #include <QSqlError>
-#include <QStackedWidget>
 #include <QVBoxLayout>
-#include <QWidget>
 
 namespace pl {
 
-namespace {
-constexpr int kSqlitePageIndex = 0;
-constexpr int kPostgresPageIndex = 1;
-} // namespace
-
-CatalogueSettingsDialog::CatalogueSettingsDialog(const CatalogueDescriptor &current,
+CatalogueSettingsDialog::CatalogueSettingsDialog(const Settings::CatalogueProfile &profile,
                                                  QWidget *parent)
-    : QDialog(parent)
+    : QDialog(parent), m_profile(profile)
 {
-    setWindowTitle(tr("Catalogue Settings"));
+    setWindowTitle(profile.id.isEmpty() ? tr("Add Server Catalogue") : tr("Edit Server Catalogue"));
     setModal(true);
 
-    m_backend = new QComboBox(this);
-    m_backend->setObjectName(QStringLiteral("catalogueBackend"));
-    m_backend->addItem(tr("Local (SQLite)"), int(CatalogueDescriptor::Backend::Sqlite));
-    m_backend->addItem(tr("Shared (Postgres)"), int(CatalogueDescriptor::Backend::Postgres));
-
-    // --- Local (SQLite) page ---
-    auto *sqlitePage = new QWidget(this);
-    m_sqlitePath = new QLineEdit(sqlitePage);
-    auto *browse = new QPushButton(tr("Browse…"), sqlitePage);
-    connect(browse, &QPushButton::clicked, this, &CatalogueSettingsDialog::browseForSqliteFile);
-    auto *sqliteRow = new QVBoxLayout(sqlitePage);
-    auto *sqliteForm = new QFormLayout;
-    auto *sqlitePathRow = new QVBoxLayout;
-    sqlitePathRow->addWidget(m_sqlitePath);
-    sqlitePathRow->addWidget(browse);
-    sqliteForm->addRow(tr("&File:"), sqlitePathRow);
-    sqliteRow->addLayout(sqliteForm);
-    sqliteRow->addStretch();
-
-    // --- Shared (Postgres) page ---
-    auto *pgPage = new QWidget(this);
-    m_pgHost = new QLineEdit(pgPage);
+    m_name = new QLineEdit(profile.name, this);
+    m_name->setPlaceholderText(tr("e.g. Nature Photo Club"));
+    m_pgHost = new QLineEdit(profile.pg.pgHost, this);
     m_pgHost->setObjectName(QStringLiteral("pgHost"));
-    m_pgHost->setPlaceholderText(tr("e.g. 10.1.2.3 or my-instance.us-central1.sql.goog"));
-    m_pgPort = new QSpinBox(pgPage);
-    m_pgPort->setObjectName(QStringLiteral("pgPort"));
+    m_pgHost->setPlaceholderText(tr("e.g. ep-cool-lab-12345.ap-southeast-2.aws.neon.tech"));
+    m_pgPort = new QSpinBox(this);
     m_pgPort->setRange(1, 65535);
-    m_pgPort->setValue(5432);
-    m_pgDbName = new QLineEdit(pgPage);
-    m_pgDbName->setObjectName(QStringLiteral("pgDbName"));
-    m_pgUser = new QLineEdit(pgPage);
-    m_pgUser->setObjectName(QStringLiteral("pgUser"));
-    m_pgPassword = new QLineEdit(pgPage);
-    m_pgPassword->setObjectName(QStringLiteral("pgPassword"));
+    m_pgPort->setValue(profile.pg.pgPort > 0 ? profile.pg.pgPort : 5432);
+    m_pgDbName = new QLineEdit(profile.pg.pgDbName, this);
+    m_pgUser = new QLineEdit(profile.pg.pgUser, this);
+    m_pgPassword = new QLineEdit(profile.pg.pgPassword, this);
     m_pgPassword->setEchoMode(QLineEdit::Password);
-    m_pgSslMode = new QComboBox(pgPage);
+    m_pgSslMode = new QComboBox(this);
     for (const QString &mode : {QStringLiteral("disable"), QStringLiteral("prefer"),
-                                QStringLiteral("require"), QStringLiteral("verify-full")}) {
+                                QStringLiteral("require"), QStringLiteral("verify-full")})
         m_pgSslMode->addItem(mode);
-    }
-    auto *testButton = new QPushButton(tr("Test Connection"), pgPage);
-    testButton->setObjectName(QStringLiteral("pgTestConnection"));
-    connect(testButton, &QPushButton::clicked, this, &CatalogueSettingsDialog::testConnection);
+    const int ssl = m_pgSslMode->findText(profile.pg.pgSslMode);
+    m_pgSslMode->setCurrentIndex(ssl >= 0 ? ssl : m_pgSslMode->findText(QStringLiteral("require")));
 
-    auto *pgForm = new QFormLayout;
-    pgForm->addRow(tr("&Host:"), m_pgHost);
-    pgForm->addRow(tr("&Port:"), m_pgPort);
-    pgForm->addRow(tr("&Database:"), m_pgDbName);
-    pgForm->addRow(tr("&User:"), m_pgUser);
-    pgForm->addRow(tr("Pass&word:"), m_pgPassword);
-    pgForm->addRow(tr("&SSL mode:"), m_pgSslMode);
+    QString defaultUser = qEnvironmentVariable("USER");
+    if (defaultUser.isEmpty())
+        defaultUser = qEnvironmentVariable("USERNAME");
+    m_userName = new QLineEdit(profile.userName.isEmpty() ? defaultUser : profile.userName, this);
+    m_userName->setToolTip(tr("Shown to your collaborators while you're editing this catalogue."));
+    m_libraryRoot = new QLineEdit(profile.libraryRoot, this);
+    m_libraryRoot->setToolTip(
+        tr("Where this catalogue's photos are on this computer -- e.g. the shared Google Drive "
+           "or OpenDrive folder. Photo locations are shared relative to it, so each "
+           "collaborator can keep it wherever suits them."));
+    auto *browse = new QPushButton(tr("Browse…"), this);
+    connect(browse, &QPushButton::clicked, this, &CatalogueSettingsDialog::browseForLibraryRoot);
+    auto *rootRow = new QHBoxLayout;
+    rootRow->addWidget(m_libraryRoot, 1);
+    rootRow->addWidget(browse);
 
-    auto *pgWarning = new QLabel(
-        tr("Stored locally in your OS settings, not encrypted. Every collaborator "
-           "connects directly to this database -- make sure it's reachable and "
-           "that this user has appropriate access."),
-        pgPage);
-    pgWarning->setWordWrap(true);
-    pgWarning->setEnabled(false);
+    auto *form = new QFormLayout;
+    form->addRow(tr("&Name:"), m_name);
+    form->addRow(tr("&Host:"), m_pgHost);
+    form->addRow(tr("&Port:"), m_pgPort);
+    form->addRow(tr("&Database:"), m_pgDbName);
+    form->addRow(tr("&User:"), m_pgUser);
+    form->addRow(tr("Pass&word:"), m_pgPassword);
+    form->addRow(tr("&SSL mode:"), m_pgSslMode);
+    form->addRow(tr("Your na&me:"), m_userName);
+    form->addRow(tr("Photo &library:"), rootRow);
 
-    auto *pgLayout = new QVBoxLayout(pgPage);
-    pgLayout->addLayout(pgForm);
-    pgLayout->addWidget(testButton);
-    pgLayout->addWidget(pgWarning);
-    pgLayout->addStretch();
-
-    m_pages = new QStackedWidget(this);
-    m_pages->insertWidget(kSqlitePageIndex, sqlitePage);
-    m_pages->insertWidget(kPostgresPageIndex, pgPage);
-    connect(m_backend, &QComboBox::currentIndexChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    auto *test = new QPushButton(tr("Test Connection"), this);
+    connect(test, &QPushButton::clicked, this, &CatalogueSettingsDialog::testConnection);
+    auto *note = new QLabel(
+        tr("A server catalogue is separate from your Local catalogue: it has its own reference "
+           "trees and photos, and a working copy on this computer that you sync with the server. "
+           "The password is stored in your OS settings, not encrypted."),
+        this);
+    note->setWordWrap(true);
+    note->setEnabled(false);
 
     m_buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     connect(m_buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(m_buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    auto *restartNotice = new QLabel(
-        tr("Takes effect the next time PhotoLife starts."), this);
-    restartNotice->setEnabled(false);
-
     auto *layout = new QVBoxLayout(this);
-    auto *backendForm = new QFormLayout;
-    backendForm->addRow(tr("&Catalogue:"), m_backend);
-    layout->addLayout(backendForm);
-    layout->addWidget(m_pages);
-    layout->addWidget(restartNotice);
+    layout->addLayout(form);
+    layout->addWidget(test);
+    layout->addWidget(note);
     layout->addWidget(m_buttons);
 
-    connect(m_sqlitePath, &QLineEdit::textChanged, this, &CatalogueSettingsDialog::updateOkState);
-    connect(m_pgHost, &QLineEdit::textChanged, this, &CatalogueSettingsDialog::updateOkState);
-    connect(m_pgDbName, &QLineEdit::textChanged, this, &CatalogueSettingsDialog::updateOkState);
-    connect(m_pgUser, &QLineEdit::textChanged, this, &CatalogueSettingsDialog::updateOkState);
-
-    // Prefill from the current descriptor.
-    m_sqlitePath->setText(current.sqlitePath);
-    m_pgHost->setText(current.pgHost);
-    m_pgPort->setValue(current.pgPort > 0 ? current.pgPort : 5432);
-    m_pgDbName->setText(current.pgDbName);
-    m_pgUser->setText(current.pgUser);
-    m_pgPassword->setText(current.pgPassword);
-    const int sslIndex = m_pgSslMode->findText(current.pgSslMode);
-    m_pgSslMode->setCurrentIndex(sslIndex >= 0 ? sslIndex : m_pgSslMode->findText(QStringLiteral("prefer")));
-
-    const int backendIndex = current.backend == CatalogueDescriptor::Backend::Postgres
-                                  ? kPostgresPageIndex
-                                  : kSqlitePageIndex;
-    m_backend->setCurrentIndex(backendIndex);
-    m_pages->setCurrentIndex(backendIndex);
-
+    for (QLineEdit *e : {m_name, m_pgHost, m_pgDbName, m_pgUser, m_userName, m_libraryRoot})
+        connect(e, &QLineEdit::textChanged, this, &CatalogueSettingsDialog::updateOkState);
     updateOkState();
 }
 
-void CatalogueSettingsDialog::browseForSqliteFile()
+void CatalogueSettingsDialog::browseForLibraryRoot()
 {
-    const QString path = QFileDialog::getSaveFileName(
-        this, tr("Catalogue File"), m_sqlitePath->text(),
-        tr("PhotoLife catalogue (*.db);;All files (*)"), nullptr,
-        QFileDialog::DontConfirmOverwrite);
-    if (!path.isEmpty())
-        m_sqlitePath->setText(path);
+    const QString dir = QFileDialog::getExistingDirectory(this, tr("Photo Library"),
+                                                          m_libraryRoot->text());
+    if (!dir.isEmpty())
+        m_libraryRoot->setText(dir);
 }
 
 void CatalogueSettingsDialog::updateOkState()
 {
-    const bool sqliteValid = !m_sqlitePath->text().trimmed().isEmpty();
-    const bool pgValid = !m_pgHost->text().trimmed().isEmpty()
-                        && !m_pgDbName->text().trimmed().isEmpty()
-                        && !m_pgUser->text().trimmed().isEmpty();
-    const bool valid = m_backend->currentIndex() == kPostgresPageIndex ? pgValid : sqliteValid;
-    m_buttons->button(QDialogButtonBox::Ok)->setEnabled(valid);
+    bool ok = true;
+    for (QLineEdit *e : {m_pgHost, m_pgDbName, m_pgUser, m_userName, m_libraryRoot})
+        ok = ok && !e->text().trimmed().isEmpty();
+    m_buttons->button(QDialogButtonBox::Ok)->setEnabled(ok);
 }
 
 void CatalogueSettingsDialog::testConnection()
@@ -170,12 +120,10 @@ void CatalogueSettingsDialog::testConnection()
         db.setDatabaseName(m_pgDbName->text().trimmed());
         db.setUserName(m_pgUser->text().trimmed());
         db.setPassword(m_pgPassword->text());
-        db.setConnectOptions(QStringLiteral("sslmode=%1").arg(m_pgSslMode->currentText()));
-
+        db.setConnectOptions(QStringLiteral("sslmode=%1;connect_timeout=15").arg(m_pgSslMode->currentText()));
         if (db.open()) {
             db.close();
-            QMessageBox::information(this, tr("Test Connection"),
-                                     tr("Connected successfully."));
+            QMessageBox::information(this, tr("Test Connection"), tr("Connected successfully."));
         } else {
             QMessageBox::warning(this, tr("Test Connection"),
                                  tr("Could not connect:\n%1").arg(db.lastError().text()));
@@ -184,22 +132,21 @@ void CatalogueSettingsDialog::testConnection()
     QSqlDatabase::removeDatabase(connectionName);
 }
 
-CatalogueDescriptor CatalogueSettingsDialog::descriptor() const
+Settings::CatalogueProfile CatalogueSettingsDialog::profile() const
 {
-    CatalogueDescriptor d;
-    if (m_backend->currentIndex() == kPostgresPageIndex) {
-        d.backend = CatalogueDescriptor::Backend::Postgres;
-        d.pgHost = m_pgHost->text().trimmed();
-        d.pgPort = m_pgPort->value();
-        d.pgDbName = m_pgDbName->text().trimmed();
-        d.pgUser = m_pgUser->text().trimmed();
-        d.pgPassword = m_pgPassword->text();
-        d.pgSslMode = m_pgSslMode->currentText();
-    } else {
-        d.backend = CatalogueDescriptor::Backend::Sqlite;
-        d.sqlitePath = m_sqlitePath->text().trimmed();
-    }
-    return d;
+    Settings::CatalogueProfile p = m_profile;
+    p.server = true;
+    p.name = m_name->text().trimmed().isEmpty() ? m_pgDbName->text().trimmed() : m_name->text().trimmed();
+    p.pg.backend = CatalogueDescriptor::Backend::Postgres;
+    p.pg.pgHost = m_pgHost->text().trimmed();
+    p.pg.pgPort = m_pgPort->value();
+    p.pg.pgDbName = m_pgDbName->text().trimmed();
+    p.pg.pgUser = m_pgUser->text().trimmed();
+    p.pg.pgPassword = m_pgPassword->text();
+    p.pg.pgSslMode = m_pgSslMode->currentText();
+    p.userName = m_userName->text().trimmed();
+    p.libraryRoot = m_libraryRoot->text().trimmed();
+    return p;
 }
 
 } // namespace pl

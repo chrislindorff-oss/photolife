@@ -363,6 +363,10 @@ void InatComparePage::compare()
     m_resultProjectId = pid;
     m_resultGroupLabel = groupId > 0 ? m_taxonLimit->label() : QString();
 
+    // A name filter typed for the previous results would otherwise silently
+    // hide some or all of the new ones.
+    m_filterEdit->clear();
+
     m_compareButton->setEnabled(false);
     m_stopButton->setEnabled(true);
     m_note->setText(tr("Comparing…"));

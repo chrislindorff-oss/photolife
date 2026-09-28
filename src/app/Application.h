@@ -45,6 +45,9 @@ class TaxonomyStore;
 namespace inat {
 class InatPhotoDownloader;
 }
+namespace sync {
+class SyncService;
+}
 
 // Owns process-wide state: settings, the open database, the thumbnail cache,
 // the scan service, the main window. One instance, created in main() after
@@ -89,6 +92,14 @@ public:
     net::UpdateChecker &updateChecker();
     inat::InatPhotoDownloader &inatPhotoDownloader();
 
+    // Shared-catalogue sync (Settings::syncEnabled()).
+    sync::SyncService &syncService();
+    // Whether this machine may change the catalogue: always for a local-only
+    // catalogue; in sync mode only while holding the server's edit lock.
+    bool catalogueEditable() const;
+    // Points syncService() at the current settings (after they change).
+    void configureSync();
+
 private:
     std::unique_ptr<Settings> m_settings;
     std::unique_ptr<Database> m_database;
@@ -108,6 +119,7 @@ private:
     std::unique_ptr<net::TileCache> m_tileCache;
     std::unique_ptr<net::UpdateChecker> m_updateChecker;
     std::unique_ptr<inat::InatPhotoDownloader> m_inatPhotoDownloader;
+    std::unique_ptr<sync::SyncService> m_syncService;
     std::unique_ptr<MainWindow> m_mainWindow;
 };
 

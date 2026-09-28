@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QMap>
 
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -14,6 +15,63 @@
 using namespace pl;
 using namespace pl::taxonomy;
 
+namespace {
+
+// addStatuses()/addOrigins()/addProjectExclusions()/taxonLocalIds() on any
+// backend: more rows than one statement's chunk, a repeated key within one
+// batch (Postgres refuses to upsert a row twice in one statement), and ids
+// that aren't cached.
+void checkBatchedWriters(pl::taxonomy::TaxonomyStore &store, const QString &connection)
+{
+    using namespace pl::taxonomy;
+    constexpr int kTaxa = 700;   // > one chunk for every writer
+    QList<Taxon> taxa;
+    for (int i = 1; i <= kTaxa; ++i) {
+        Taxon t;
+        t.inatId = 100000 + i;
+        t.rank = QStringLiteral("species");
+        t.name = QStringLiteral("Species %1").arg(i);
+        taxa << t;
+    }
+    QVERIFY(!store.upsertTaxa(taxa).isEmpty());
+    const int proj = store.ensureProject(QStringLiteral("Batch"), std::nullopt, 7830,
+                                         QStringLiteral("inat"));
+
+    QList<qint64> ids;
+    for (const Taxon &t : taxa)
+        ids << t.inatId;
+    const auto local = store.taxonLocalIds(ids + QList<qint64>{999999999});
+    QCOMPARE(local.size(), kTaxa);   // the uncached id is simply absent
+
+    QList<std::pair<qint64, StatusRecord>> statuses;
+    QList<std::pair<qint64, OriginRecord>> origins;
+    for (qint64 id : ids) {
+        statuses.append({id, {7830, QStringLiteral("Rare"), QStringLiteral("VBA")}});
+        origins.append({id, {7830, QStringLiteral("native"), QStringLiteral("APC")}});
+    }
+    statuses.append({ids.first(), {7830, QStringLiteral("Endangered"), QStringLiteral("VBA")}});
+    statuses.append({999999999, {7830, QStringLiteral("Rare"), QStringLiteral("VBA")}});
+    QVERIFY(store.addStatuses(statuses));
+    QVERIFY(store.addOrigins(origins));
+    QVERIFY(store.addStatuses(statuses));   // again: upserts, no duplicates
+
+    QSqlQuery q(QSqlDatabase::database(connection, false));
+    QVERIFY(q.exec(QStringLiteral("SELECT COUNT(*) FROM taxon_status")) && q.next());
+    QCOMPARE(q.value(0).toInt(), kTaxa);
+    QVERIFY(q.exec(QStringLiteral("SELECT COUNT(*) FROM taxon_origin")) && q.next());
+    QCOMPARE(q.value(0).toInt(), kTaxa);
+    QVERIFY(q.exec(QStringLiteral("SELECT s.status FROM taxon_status s JOIN taxon t "
+                                  "ON t.id = s.taxon_id WHERE t.inat_id = 100001"))
+            && q.next());
+    QCOMPARE(q.value(0).toString(), QStringLiteral("Endangered"));   // the later record won
+
+    QCOMPARE(store.addProjectExclusions(proj, ids + QList<qint64>{999999999}), kTaxa);
+    QCOMPARE(store.addProjectExclusions(proj, ids), kTaxa);   // again: no conflict error
+    QCOMPARE(store.projectExcludedTaxonIds(proj).size(), kTaxa);
+}
+
+} // namespace
+
 class TestTaxonomyStore : public QObject
 {
     Q_OBJECT
@@ -26,6 +84,9 @@ private slots:
     void foldSearchTextNormalisesHybridMarker();
     void placeRoundTrips();
     void placeAncestryRoundTripsAndDecidesWithin();
+    void placeGeometryRoundTripsAndResolvesForProject();
+    void renameProjectRefusesEmptyAndTakenNames();
+    void replaceFromSourceKeepsUnchangedRows();
     void taxonUpsertStoresNamesAndIsIdempotent();
     void reUpsertReplacesNamesWithoutDuplicating();
     void taxaByInatIdsReturnsCachedAndSkipsUnknown();
@@ -48,6 +109,8 @@ private slots:
     void buildCheckpointRoundTripsUpsertsAndClears();
     void projectSpeciesAncestorIdsDerivedFromAncestryColumn();
     void pgAddProjectTaxonMergesFlagsOnConflict();
+    void batchedWriters();
+    void pgBatchedWriters();
     void pgRollbackBatchRecoversConnectionAfterFailure();
     void pgSaveBuildCheckpointParticipatesInBatch();
     void pgUpsertTaxaDedupeAvoidsConflictError();
@@ -123,6 +186,119 @@ void TestTaxonomyStore::placeRoundTrips()
     p.displayName = QStringLiteral("State of Victoria");
     QVERIFY(m_store->upsertPlace(p));
     QCOMPARE(m_store->placeByInatId(6744)->displayName, QStringLiteral("State of Victoria"));
+}
+
+void TestTaxonomyStore::replaceFromSourceKeepsUnchangedRows()
+{
+    for (qint64 id : {1, 2, 3, 4}) {
+        Taxon t;
+        t.inatId = id;
+        t.rank = QStringLiteral("species");
+        t.name = QStringLiteral("Species %1").arg(id);
+        m_store->upsertTaxon(t);
+    }
+    const auto local = m_store->taxonLocalIds({1, 2, 3, 4});
+    using F = TaxonomyStore::SourcedFact;
+    auto rowsFor = [&](const QList<std::pair<qint64, QString>> &facts) {
+        QList<F> rows;
+        for (const auto &[inat, value] : facts)
+            rows.append({local.value(inat), 7830, value});
+        return rows;
+    };
+    auto idsAndValues = [&] {
+        QMap<qint64, QString> out;   // local taxon id -> "id:status"
+        QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+        q.exec(QStringLiteral("SELECT taxon_id, id, status FROM taxon_status WHERE source = 'ALA x'"));
+        while (q.next())
+            out.insert(q.value(0).toLongLong(),
+                       q.value(1).toString() + QLatin1Char(':') + q.value(2).toString());
+        return out;
+    };
+
+    QCOMPARE(m_store->replaceStatusesFromSource(
+                 QStringLiteral("ALA x"),
+                 rowsFor({{1, QStringLiteral("Rare")}, {2, QStringLiteral("Vulnerable")},
+                          {3, QStringLiteral("Endangered")}})),
+             3);
+    const auto before = idsAndValues();
+
+    // The same list again: nothing rewritten (same ids).
+    QCOMPARE(m_store->replaceStatusesFromSource(
+                 QStringLiteral("ALA x"),
+                 rowsFor({{1, QStringLiteral("Rare")}, {2, QStringLiteral("Vulnerable")},
+                          {3, QStringLiteral("Endangered")}})),
+             3);
+    QCOMPARE(idsAndValues(), before);
+
+    // One changed, one gone, one new: only those touched.
+    m_store->replaceStatusesFromSource(
+        QStringLiteral("ALA x"),
+        rowsFor({{1, QStringLiteral("Rare")}, {2, QStringLiteral("Endangered")},
+                 {4, QStringLiteral("Critically Endangered")}}));
+    const auto after = idsAndValues();
+    QCOMPARE(after.value(local.value(1)), before.value(local.value(1)));   // untouched
+    QCOMPARE(after.value(local.value(2)).section(QLatin1Char(':'), 0, 0),
+             before.value(local.value(2)).section(QLatin1Char(':'), 0, 0));   // same row...
+    QVERIFY(after.value(local.value(2)).endsWith(QStringLiteral(":Endangered")));   // ...updated
+    QVERIFY(!after.contains(local.value(3)));
+    QVERIFY(after.value(local.value(4)).endsWith(QStringLiteral(":Critically Endangered")));
+}
+
+void TestTaxonomyStore::renameProjectRefusesEmptyAndTakenNames()
+{
+    const int orchids = m_store->ensureProject(QStringLiteral("Orchids"), std::nullopt,
+                                               std::nullopt, QStringLiteral("inat"));
+    const int birds = m_store->ensureProject(QStringLiteral("Birds"), std::nullopt, std::nullopt,
+                                             QStringLiteral("inat"));
+    QCOMPARE(m_store->projectName(orchids), QStringLiteral("Orchids"));
+
+    QVERIFY(m_store->renameProject(orchids, QStringLiteral("  Orchids of Victoria ")));
+    QCOMPARE(m_store->projectName(orchids), QStringLiteral("Orchids of Victoria"));
+    QCOMPARE(m_store->projectIdByName(QStringLiteral("Orchids of Victoria")), std::optional<int>(orchids));
+    QVERIFY(!m_store->projectIdByName(QStringLiteral("Orchids")));
+
+    QVERIFY(!m_store->renameProject(orchids, QStringLiteral("   ")));   // empty
+    QVERIFY(!m_store->renameProject(orchids, QStringLiteral("Birds")));   // taken
+    QCOMPARE(m_store->projectName(birds), QStringLiteral("Birds"));
+    QVERIFY(m_store->renameProject(orchids, QStringLiteral("Orchids of Victoria")));   // same: fine
+    QVERIFY(!m_store->renameProject(9999, QStringLiteral("Nowhere")));   // no such tree
+}
+
+void TestTaxonomyStore::placeGeometryRoundTripsAndResolvesForProject()
+{
+    Place victoria;
+    victoria.inatId = 7830;
+    victoria.name = QStringLiteral("Victoria");
+    QVERIFY(m_store->upsertPlace(victoria));
+    const int pid = m_store->ensureProject(QStringLiteral("Orchids"), std::nullopt, 7830,
+                                           QStringLiteral("inat"));
+
+    // Not fetched yet: listed as missing, no shape.
+    QCOMPARE(m_store->projectPlacesMissingGeometry(), QList<qint64>{7830});
+    QVERIFY(!m_store->projectLocalityShape(pid));
+
+    victoria.geometryGeoJson = QStringLiteral(
+        R"({"type":"Polygon","coordinates":[[[141,-39],[150,-39],[150,-34],[141,-34],[141,-39]]]})");
+    QVERIFY(m_store->upsertPlace(victoria));
+    QVERIFY(m_store->projectPlacesMissingGeometry().isEmpty());
+    const auto shape = m_store->projectLocalityShape(pid);
+    QVERIFY(shape);
+    QVERIFY(geo::shapeContains(*shape, 145, -37));
+
+    // A later response without the outline (a place search) keeps it.
+    victoria.geometryGeoJson.clear();
+    QVERIFY(m_store->upsertPlace(victoria));
+    QVERIFY(m_store->projectLocalityShape(pid));
+
+    // iNaturalist has none for this one: marked, so it isn't asked again.
+    Place gabo;
+    gabo.inatId = 7;
+    gabo.name = QStringLiteral("Gabo Island");
+    QVERIFY(m_store->upsertPlace(gabo));
+    m_store->ensureProject(QStringLiteral("Gabo"), std::nullopt, 7, QStringLiteral("inat"));
+    QCOMPARE(m_store->projectPlacesMissingGeometry(), QList<qint64>{7});
+    QVERIFY(m_store->markPlaceGeometryUnavailable(7));
+    QVERIFY(m_store->projectPlacesMissingGeometry().isEmpty());
 }
 
 void TestTaxonomyStore::placeAncestryRoundTripsAndDecidesWithin()
@@ -901,6 +1077,25 @@ void TestTaxonomyStore::projectSpeciesAncestorIdsDerivedFromAncestryColumn()
     QCOMPARE(ids.size(), 5);
     for (qint64 id : {qint64(48460), qint64(47126), qint64(47217), qint64(800), qint64(801)})
         QVERIFY(ids.contains(id));
+}
+
+void TestTaxonomyStore::batchedWriters()
+{
+    checkBatchedWriters(*m_store, m_db->connectionName());
+}
+
+void TestTaxonomyStore::pgBatchedWriters()
+{
+    const auto descriptor = test::pgTestDescriptorFromEnv();
+    if (!descriptor)
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run Postgres-backed TaxonomyStore tests");
+    Database db;
+    QVERIFY2(db.open(*descriptor), qPrintable(db.error()));
+    QSqlDatabase conn = QSqlDatabase::database(db.connectionName(), false);
+    conn.exec(QStringLiteral("TRUNCATE taxon, project, project_taxon, taxon_status, taxon_origin, "
+                             "project_excluded_taxon RESTART IDENTITY CASCADE"));
+    TaxonomyStore store(db.connectionName());
+    checkBatchedWriters(store, db.connectionName());
 }
 
 void TestTaxonomyStore::pgAddProjectTaxonMergesFlagsOnConflict()
