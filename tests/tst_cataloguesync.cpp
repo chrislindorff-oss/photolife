@@ -100,6 +100,25 @@ private:
     }
     QString base(const QString &name) const { return m_dir->filePath(name + QStringLiteral(".base.db")); }
 
+    // catalogue_sync.version as recorded in a sync snapshot file.
+    static qint64 snapshotVersion(const QString &path)
+    {
+        qint64 version = -1;
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                        QStringLiteral("snapshot-check"));
+            db.setDatabaseName(path);
+            if (db.open()) {
+                QSqlQuery q(db);
+                if (q.exec(QStringLiteral("SELECT version FROM catalogue_sync WHERE id = 1"))
+                    && q.next())
+                    version = q.value(0).toLongLong();
+            }
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("snapshot-check"));
+        return version;
+    }
+
     std::unique_ptr<QTemporaryDir> m_dir;
     std::unique_ptr<Database> m_server;
 };
@@ -247,6 +266,7 @@ void TestCatalogueSync::pushSendsOnlyWhatChanged()
     CatalogueSync a = syncFor(*alice, kAliceRoot);
     QVERIFY2(a.publish(base(QStringLiteral("alice")), kAlice), qPrintable(a.error()));
     QCOMPARE(*a.pendingChanges(base(QStringLiteral("alice"))), 0);
+    QCOMPARE(snapshotVersion(base(QStringLiteral("alice"))), qint64(1));
 
     // Inserts, an update, a delete, and a row replaced under a new id (as a
     // re-downloaded source does).
@@ -269,6 +289,8 @@ void TestCatalogueSync::pushSendsOnlyWhatChanged()
     QCOMPARE(a.serverState()->pushedBy, QStringLiteral("Alice"));
     QVERIFY(!a.serverState()->pushedAt.isEmpty());
     QCOMPARE(*a.pendingChanges(base(QStringLiteral("alice"))), 0);   // snapshot refreshed
+    // ...and it records the new version, since Discard copies it back.
+    QCOMPARE(snapshotVersion(base(QStringLiteral("alice"))), qint64(2));
 
     // Nothing changed: nothing sent, the version stays.
     const auto again = a.push(base(QStringLiteral("alice")), kAlice);

@@ -31,7 +31,8 @@ public slots:
 
 signals:
     void started();
-    void progress(int done, int total);
+    // phase is an ExportEngine::Phase.
+    void progress(int phase, int done, int total);
     void finished(pl::collection::ExportSummary summary);
 
 private:

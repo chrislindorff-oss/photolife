@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- How PhotoLife's catalogues, photo libraries and online storage link together.
+     Rendered to resources/help/catalogues.png for the in-app help: see README.md here. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="2800" height="1680" viewBox="0 0 1400 840"
+     font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7"
+            orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3d4450"/>
+    </marker>
+    <style>
+      .title { font-size: 26px; font-weight: bold; fill: #1f2328; }
+      .subtitle { font-size: 16px; fill: #57606a; }
+      .zone { font-size: 14px; font-weight: bold; fill: #57606a; letter-spacing: 1px; }
+      .head { font-size: 17px; font-weight: bold; fill: #1f2328; }
+      .text { font-size: 14px; fill: #3d4450; }
+      .action { font-size: 14px; font-weight: bold; fill: #1f2328; }
+      .when { font-size: 12.5px; fill: #57606a; }
+      .note { font-size: 14px; fill: #3d4450; }
+      .catalogue { fill: #e8f0fe; stroke: #2f6fdf; stroke-width: 2; }
+      .photos { fill: #e7f5ec; stroke: #2e8b57; stroke-width: 2; }
+      .app { fill: #f2f4f7; stroke: #5f6b7a; stroke-width: 2; }
+      .computer { fill: #fbfbfc; stroke: #8c959f; stroke-width: 1.5; stroke-dasharray: 7 5; }
+      .online { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; }
+      .flow { stroke: #3d4450; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .badge { fill: #1f2328; }
+      .badgetext { font-size: 13px; font-weight: bold; fill: #ffffff; }
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="1398" height="838" rx="16" fill="#ffffff" stroke="#d0d7de" stroke-width="2"/>
+
+  <!-- ===================== Local catalogue ===================== -->
+  <text x="40" y="58" class="title">Local catalogue</text>
+  <text x="40" y="84" class="subtitle">just you, on your own drives</text>
+
+  <rect x="30" y="104" width="420" height="640" rx="14" class="computer"/>
+  <text x="50" y="132" class="zone">YOUR COMPUTER</text>
+
+  <rect x="70" y="150" width="340" height="104" rx="12" class="photos"/>
+  <text x="240" y="190" text-anchor="middle" class="head">Library folders</text>
+  <text x="240" y="214" text-anchor="middle" class="text">your photos, wherever they are</text>
+  <text x="240" y="234" text-anchor="middle" class="text">on your drives</text>
+
+  <line x1="240" y1="256" x2="240" y2="352" class="flow"/>
+  <text x="254" y="300" class="action">Add Folder · Rescan</text>
+  <text x="254" y="318" class="when">Library menu</text>
+
+  <rect x="70" y="356" width="340" height="88" rx="12" class="app"/>
+  <text x="240" y="394" text-anchor="middle" class="head">PhotoLife</text>
+  <text x="240" y="418" text-anchor="middle" class="text">scans, matches, browses, exports</text>
+
+  <line x1="240" y1="446" x2="240" y2="542" class="flow"/>
+  <text x="254" y="490" class="action">Match · Review</text>
+  <text x="254" y="508" class="when">Matching menu,</text>
+  <text x="254" y="524" class="when">Review Unmatched</text>
+
+  <rect x="70" y="546" width="340" height="118" rx="12" class="catalogue"/>
+  <text x="240" y="584" text-anchor="middle" class="head">Catalogue</text>
+  <text x="240" y="608" text-anchor="middle" class="text">reference trees, matches, reviews,</text>
+  <text x="240" y="628" text-anchor="middle" class="text">best shots — one file on this</text>
+  <text x="240" y="648" text-anchor="middle" class="text">computer</text>
+
+  <text x="240" y="712" text-anchor="middle" class="note">Nothing leaves your computer.</text>
+
+  <!-- divider -->
+  <line x1="480" y1="40" x2="480" y2="800" stroke="#d0d7de" stroke-width="2"/>
+
+  <!-- ===================== Server catalogue ===================== -->
+  <text x="520" y="58" class="title">Server catalogue</text>
+  <text x="520" y="84" class="subtitle">shared with collaborators — everyone works on their own copies</text>
+
+  <!-- online -->
+  <rect x="510" y="98" width="860" height="140" rx="14" class="online"/>
+  <text x="530" y="124" class="zone">ONLINE</text>
+
+  <rect x="540" y="134" width="320" height="94" rx="12" class="catalogue"/>
+  <text x="700" y="166" text-anchor="middle" class="head">Shared catalogue</text>
+  <text x="700" y="190" text-anchor="middle" class="text">on the server (Neon)</text>
+  <text x="700" y="210" text-anchor="middle" class="text">trees, matches, reviews</text>
+
+  <rect x="1020" y="134" width="320" height="94" rx="12" class="photos"/>
+  <text x="1180" y="166" text-anchor="middle" class="head">Photo storage</text>
+  <text x="1180" y="190" text-anchor="middle" class="text">Google Drive folder › library</text>
+  <text x="1180" y="210" text-anchor="middle" class="text">or an S3 bucket (R2, B2…)</text>
+
+  <!-- your computer -->
+  <rect x="510" y="324" width="860" height="216" rx="14" class="computer"/>
+  <text x="530" y="530" class="zone">YOUR COMPUTER</text>
+
+  <!-- catalogue arrows -->
+  <line x1="680" y1="346" x2="680" y2="232" class="flow"/>
+  <text x="668" y="276" text-anchor="end" class="action">Sync · Finish Editing</text>
+  <text x="668" y="294" text-anchor="end" class="when">sends your changes ①</text>
+  <line x1="720" y1="232" x2="720" y2="346" class="flow"/>
+  <text x="732" y="276" class="action">Get Latest</text>
+  <text x="732" y="294" class="when">newer catalogue</text>
+
+  <!-- photo arrows -->
+  <line x1="1160" y1="346" x2="1160" y2="232" class="flow"/>
+  <text x="1148" y="276" text-anchor="end" class="action">upload</text>
+  <text x="1148" y="294" text-anchor="end" class="when">first, whenever you Sync</text>
+  <line x1="1200" y1="232" x2="1200" y2="346" class="flow"/>
+  <text x="1212" y="276" class="action">download</text>
+  <text x="1212" y="294" class="when">at start, Get Latest,</text>
+  <text x="1212" y="310" class="when">Sync Photos ②</text>
+
+
+  <rect x="540" y="350" width="320" height="110" rx="12" class="catalogue"/>
+  <text x="700" y="384" text-anchor="middle" class="head">Your copy of the catalogue</text>
+  <text x="700" y="408" text-anchor="middle" class="text">fast, and works offline;</text>
+  <text x="700" y="428" text-anchor="middle" class="text">changes need Start Editing ①</text>
+
+  <rect x="1020" y="350" width="320" height="110" rx="12" class="photos"/>
+  <text x="1180" y="384" text-anchor="middle" class="head">Your photo library folder</text>
+  <text x="1180" y="408" text-anchor="middle" class="text">all the photos, or just some</text>
+  <text x="1180" y="428" text-anchor="middle" class="text">trees' photos ②</text>
+
+  <line x1="1018" y1="405" x2="864" y2="405" class="flow"/>
+  <text x="940" y="392" text-anchor="middle" class="action">Scan · Match</text>
+  <text x="940" y="428" text-anchor="middle" class="when">in PhotoLife</text>
+
+  <text x="940" y="506" text-anchor="middle" class="note">Library ▸ Add Folder to Library: pick your photo library folder,</text>
+  <text x="940" y="526" text-anchor="middle" class="note">then Matching ▸ Match Library (while editing ①)</text>
+
+  <!-- a collaborator -->
+  <g opacity="0.6">
+    <rect x="510" y="566" width="860" height="150" rx="14" class="computer"/>
+    <text x="530" y="590" class="zone">A COLLABORATOR'S COMPUTER</text>
+    <rect x="540" y="604" width="320" height="76" rx="12" class="catalogue"/>
+    <text x="700" y="636" text-anchor="middle" class="head">Their copy of the catalogue</text>
+    <text x="700" y="660" text-anchor="middle" class="text">same server</text>
+    <rect x="1020" y="604" width="320" height="76" rx="12" class="photos"/>
+    <text x="1180" y="636" text-anchor="middle" class="head">Their photo library folder</text>
+    <text x="1180" y="660" text-anchor="middle" class="text">same photo storage</text>
+    <text x="940" y="648" text-anchor="middle" class="text">…and so on</text>
+  </g>
+
+  <!-- notes -->
+  <circle cx="530" cy="751" r="11" class="badge"/>
+  <text x="530" y="756" text-anchor="middle" class="badgetext">1</text>
+  <text x="550" y="756" class="note">One person edits at a time: Start Editing takes the edit lock; Finish Editing gives it back.</text>
+  <circle cx="530" cy="783" r="11" class="badge"/>
+  <text x="530" y="788" text-anchor="middle" class="badgetext">2</text>
+  <text x="550" y="788" class="note">Server ▸ Photos on This Computer: keep only some trees' photos; the rest stay ONLINE,</text>
+  <text x="550" y="808" class="note">shown by thumbnail, and download when you open them.</text>
+</svg>

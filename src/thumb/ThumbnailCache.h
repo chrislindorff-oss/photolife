@@ -39,6 +39,17 @@ public:
     // True once a disk file exists for this key (no generation scheduled).
     bool isCached(const QString &contentHash, int longestEdge) const;
 
+    // Renders `path` scaled so its longest edge is at most `longestEdge`,
+    // rotated upright, falling back to `rawLoader` for formats QImageReader
+    // can't read. Null QImage on failure. Safe to call from any thread.
+    static QImage render(const QString &path, int longestEdge, const SourceLoader &rawLoader);
+
+    // Where a cache rooted at `cacheDir` keeps its `longestEdge` thumbnail for
+    // `contentHash`. Lets another thread read already-made thumbnails without
+    // touching a ThumbnailCache object.
+    static QString diskPathFor(const QString &cacheDir, const QString &contentHash,
+                               int longestEdge);
+
     QString cacheDir() const { return m_cacheDir; }
 
 signals:

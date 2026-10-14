@@ -40,6 +40,11 @@ INatClient::INatClient(HttpClient &http, QObject *parent)
 {
 }
 
+void INatClient::request(const QUrl &url, HttpClient::Handler handler, const QString &bearerToken)
+{
+    m_http.get(url, std::move(handler), bearerToken, m_priority);
+}
+
 void INatClient::resolvePlaces(const QString &query,
                                std::function<void(Outcome<QList<pl::taxonomy::Place>>)> done)
 {
@@ -48,7 +53,7 @@ void INatClient::resolvePlaces(const QString &query,
     q.addQueryItem(QStringLiteral("q"), query);
     url.setQuery(q);
 
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<QList<pl::taxonomy::Place>> out;
         const QJsonArray results = resultsArray(resp, &out.error);
         if (out.ok()) {
@@ -66,7 +71,7 @@ void INatClient::fetchPlaces(const QList<qint64> &inatIds,
     for (qint64 id : inatIds)
         ids << QString::number(id);
     const QUrl url(m_baseUrl + QStringLiteral("/places/") + ids.join(QLatin1Char(',')));
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<QList<pl::taxonomy::Place>> out;
         const QJsonArray results = resultsArray(resp, &out.error);
         if (out.ok()) {
@@ -87,7 +92,7 @@ void INatClient::searchTaxa(const QString &query, const QString &rank,
         q.addQueryItem(QStringLiteral("rank"), rank);
     url.setQuery(q);
 
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<QList<pl::taxonomy::Taxon>> out;
         const QJsonArray results = resultsArray(resp, &out.error);
         if (out.ok()) {
@@ -105,7 +110,7 @@ void INatClient::fetchTaxon(qint64 inatId, std::function<void(Outcome<TaxonDetai
     q.addQueryItem(QStringLiteral("all_names"), QStringLiteral("true"));
     url.setQuery(q);
 
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<TaxonDetail> out;
         const QJsonArray results = resultsArray(resp, &out.error);
         if (!out.ok()) {
@@ -141,7 +146,7 @@ void INatClient::fetchTaxa(const QList<qint64> &inatIds,
 
     QUrl url(m_baseUrl + QStringLiteral("/taxa/") + idStrings.join(QLatin1Char(',')));
 
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<QList<pl::taxonomy::Taxon>> out;
         const QJsonArray results = resultsArray(resp, &out.error);
         if (out.ok()) {
@@ -205,7 +210,7 @@ void INatClient::introducedSpeciesCounts(qint64 taxonId, qint64 placeId, int pag
 void INatClient::getSpeciesCountsPage(const QUrl &url,
                                       std::function<void(Outcome<SpeciesCountsPage>)> done)
 {
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<SpeciesCountsPage> out;
         if (!resp.error.isEmpty()) {
             out.error = resp.error;
@@ -253,7 +258,7 @@ void INatClient::observationCount(qint64 taxonId, qint64 placeId,
     q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("0"));
     url.setQuery(q);
 
-    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+    request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<int> out;
         if (!resp.error.isEmpty()) {
             out.error = resp.error;
@@ -330,7 +335,7 @@ void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, 
 void INatClient::getObservationPage(const QUrl &url,
                                     std::function<void(Outcome<ObservationPage>)> done)
 {
-    m_http.get(
+    request(
         url,
         [done = std::move(done)](HttpResponse resp) {
             Outcome<ObservationPage> out;

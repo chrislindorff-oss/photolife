@@ -28,6 +28,13 @@ class TaxonomyStore;
 // run it again after a tree adds new taxa. Each list's statuses are replaced
 // whole on every run (source "ALA <list id>").
 //
+// The downloaded lists are kept on disk (in `cacheDir`, shared by every
+// catalogue) and downloaded again only when older than kMaxAgeDays or when
+// forced; re-matching after a new tree -- or in a catalogue that hasn't run
+// it yet -- uses the kept copy. With no `cacheDir` every run downloads.
+// Downloads go at background priority unless forced (the user is then
+// watching a progress window).
+//
 // Drive it from the thread that owns the HttpClient / store connection.
 class AlaStatusSync : public QObject
 {
@@ -35,16 +42,22 @@ class AlaStatusSync : public QObject
 
 public:
     static constexpr int kPageSize = 1000;
+    static constexpr int kMaxAgeDays = 30;
     static const QString kBaseUrl;   // https://api.ala.org.au/specieslist/ws
 
-    AlaStatusSync(net::HttpClient &http, TaxonomyStore &store, QObject *parent = nullptr);
+    AlaStatusSync(net::HttpClient &http, TaxonomyStore &store, QString cacheDir = {},
+                  QObject *parent = nullptr);
 
     void setBaseUrl(const QString &url) { m_baseUrl = url; }
-    void start();
+    // Downloads the lists if the kept copy is missing, stale or
+    // `forceDownload`, then matches them against the cached taxa.
+    void start(bool forceDownload = false);
     // Stops after the request in flight; lists already saved stay saved.
     // finished() then reports ok = false with error "cancelled".
     void cancel() { m_cancelled = true; }
     bool isRunning() const { return m_running; }
+    // Where the downloaded lists are kept; empty without a cacheDir.
+    QString cachePath() const;
 
     // The iNaturalist place for an ALA list's region ("Victoria",
     // "Australia", ...), or nullopt for regions PhotoLife doesn't map.
@@ -57,13 +70,21 @@ signals:
     void finished(bool ok, const QString &error, int lists, int matched);
 
 private:
+    struct Item
+    {
+        QStringList names;   // ALA's matched name, then the name as listed
+        QString status;
+    };
     struct List
     {
         QString id;          // dataResourceUid, e.g. "dr655"
         QString name;
         qint64 placeInatId = 0;
+        QList<Item> items;
     };
 
+    bool loadCache();
+    void saveCache() const;
     void fetchNextList();
     void fetchPage();
     void storeList();
@@ -71,19 +92,16 @@ private:
 
     net::HttpClient &m_http;
     TaxonomyStore &m_store;
+    QString m_cacheDir;
     QString m_baseUrl;
     bool m_running = false;
     bool m_cancelled = false;
+    bool m_downloading = false;   // this run fetches the lists (else: from the kept copy)
+    bool m_background = true;     // this run's requests are background priority
     bool checkCancelled();
     QList<List> m_lists;
     int m_listIndex = 0;
     int m_offset = 0;
-    struct Item
-    {
-        QStringList names;   // ALA's matched name, then the name as listed
-        QString status;
-    };
-    QList<Item> m_items;   // the current list's
     QHash<QString, qint64> m_nameIndex;
     int m_matched = 0;
 };

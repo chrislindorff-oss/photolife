@@ -48,6 +48,9 @@ class InatPhotoDownloader;
 namespace sync {
 class SyncService;
 }
+namespace libsync {
+class PhotoSyncService;
+}
 
 // Owns process-wide state: settings, the open database, the thumbnail cache,
 // the scan service, the main window. One instance, created in main() after
@@ -83,6 +86,9 @@ public:
     thumb::ThumbnailCache &thumbnails();
     taxonomy::TaxonomyStore &taxonomyStore();
     net::INatClient &inat();
+    // The same API at background priority, for quiet housekeeping (origins,
+    // place details) that must never hold up a user's tree build or import.
+    net::INatClient &inatBackground();
     // The rate-limited, caching HTTP client iNatClient uses -- for other
     // JSON APIs (e.g. the Atlas of Living Australia).
     net::HttpClient &http();
@@ -97,8 +103,12 @@ public:
     // Whether this machine may change the catalogue: always for a local-only
     // catalogue; in sync mode only while holding the server's edit lock.
     bool catalogueEditable() const;
-    // Points syncService() at the current settings (after they change).
+    // Points syncService() and photoSync() at the current settings (after
+    // they change).
     void configureSync();
+    // Photo sync for a Server catalogue whose photos PhotoLife keeps online
+    // (Settings::CatalogueProfile::syncsPhotos()).
+    libsync::PhotoSyncService &photoSync();
 
 private:
     std::unique_ptr<Settings> m_settings;
@@ -113,6 +123,7 @@ private:
     std::unique_ptr<net::HttpCache> m_httpCache;
     std::unique_ptr<net::HttpClient> m_http;
     std::unique_ptr<net::INatClient> m_inat;
+    std::unique_ptr<net::INatClient> m_inatBackground;
     std::unique_ptr<net::HttpClient> m_geocodeHttp;
     std::unique_ptr<net::GeocodeClient> m_geocoder;
     std::unique_ptr<net::PhotoCache> m_photoCache;
@@ -120,6 +131,7 @@ private:
     std::unique_ptr<net::UpdateChecker> m_updateChecker;
     std::unique_ptr<inat::InatPhotoDownloader> m_inatPhotoDownloader;
     std::unique_ptr<sync::SyncService> m_syncService;
+    std::unique_ptr<libsync::PhotoSyncService> m_photoSync;
     std::unique_ptr<MainWindow> m_mainWindow;
 };
 

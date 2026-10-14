@@ -181,9 +181,7 @@ void ManageCataloguesDialog::editServer()
     m_settings.saveServerProfile(edited);
     reload();
     if (active)
-        QMessageBox::information(this, tr("Edit Server"),
-                                 tr("Saved. Changes to the connection or photo library folder "
-                                    "apply from the next start or sync."));
+        emit activeServerEdited(*p);
 }
 
 void ManageCataloguesDialog::removeServer()

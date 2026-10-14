@@ -200,6 +200,10 @@ void TestCatalogueMaintenance::capturesWithMissingFilesFindsGhostsOnly()
     QCOMPARE(missing.first().missingPaths.size(), 1);
     QVERIFY(missing.first().missingPaths.first().endsWith(QStringLiteral("ghost-old-name.jpg")));
 
+    // A photo kept online only (photo sync) isn't missing.
+    const QString online = m_tmp.filePath(QStringLiteral("Lib/ghost-old-name.jpg"));
+    QVERIFY(maint.capturesWithMissingFiles({online}).isEmpty());
+
     QCOMPARE(maint.forgetCaptures(ids), 1);
     QCOMPARE(count(QStringLiteral("capture")), 2);
 }

@@ -29,11 +29,18 @@ struct HttpResponse
 // than minRequestInterval after the last. Only URLs HttpCache::isCacheable
 // accepts are cached. Lives on and is used from one thread
 // (the network stack it drives is asynchronous, so this need not be a worker).
+//
+// Background requests (quiet housekeeping the user isn't waiting on) are only
+// dispatched while no Normal request is queued, so a long background job
+// never makes a tree build or import wait behind it. They share the one rate
+// limit, since they usually go to the same API.
 class HttpClient : public QObject
 {
     Q_OBJECT
 
 public:
+    enum class Priority { Normal, Background };
+
     HttpClient(std::unique_ptr<Transport> transport, HttpCache *cache,
                QObject *parent = nullptr);
     ~HttpClient() override;
@@ -50,10 +57,11 @@ public:
     // authenticated and an unauthenticated request to the same URL must never
     // share a cached response (e.g. iNaturalist reveals different data, such
     // as true vs. geoprivacy-obscured coordinates, depending on auth).
-    void get(const QUrl &url, Handler handler, const QString &bearerToken = QString());
+    void get(const QUrl &url, Handler handler, const QString &bearerToken = QString(),
+             Priority priority = Priority::Normal);
 
-    int queuedCount() const { return int(m_queue.size()); }
-    bool isBusy() const { return m_inFlight || !m_queue.isEmpty(); }
+    int queuedCount() const { return int(m_queue.size() + m_backgroundQueue.size()); }
+    bool isBusy() const { return m_inFlight || queuedCount() > 0; }
 
 signals:
     void idle();   // queue drained and nothing in flight
@@ -65,6 +73,7 @@ private:
         Handler handler;
         int attempt = 0;
         QString bearerToken;
+        Priority priority = Priority::Normal;
     };
 
     void pump();
@@ -80,7 +89,10 @@ private:
     int m_maxRetries = 3;
     int m_retryBaseMs = 500;
 
-    QQueue<Job> m_queue;
+    QQueue<Job> &queueFor(Priority priority);
+
+    QQueue<Job> m_queue;             // Normal
+    QQueue<Job> m_backgroundQueue;   // Background: only when m_queue is empty
     bool m_inFlight = false;
     qint64 m_lastDispatchMs = 0;
 };

@@ -49,12 +49,39 @@ void ThumbnailCache::setRawLoader(SourceLoader loader)
     m_rawLoader = std::move(loader);
 }
 
-QString ThumbnailCache::diskPath(const QString &contentHash, int longestEdge) const
+QString ThumbnailCache::diskPathFor(const QString &cacheDir, const QString &contentHash,
+                                   int longestEdge)
 {
     const QString shard = contentHash.left(2);
-    return QDir(m_cacheDir)
+    return QDir(cacheDir)
         .filePath(QString::number(longestEdge) + QLatin1Char('/') + shard + QLatin1Char('/')
                   + contentHash + QStringLiteral(".jpg"));
+}
+
+QString ThumbnailCache::diskPath(const QString &contentHash, int longestEdge) const
+{
+    return diskPathFor(m_cacheDir, contentHash, longestEdge);
+}
+
+QImage ThumbnailCache::render(const QString &path, int longestEdge, const SourceLoader &rawLoader)
+{
+    QImage image;
+
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    if (reader.canRead()) {
+        const QSize full = reader.size();
+        if (full.isValid() && (full.width() > longestEdge || full.height() > longestEdge)) {
+            QSize target = full;
+            target.scale(longestEdge, longestEdge, Qt::KeepAspectRatio);
+            reader.setScaledSize(target);
+        }
+        image = reader.read();
+    }
+    if (image.isNull() && rawLoader)
+        image = rawLoader(path, longestEdge);
+
+    return scaleToLongestEdge(std::move(image), longestEdge);
 }
 
 bool ThumbnailCache::isCached(const QString &contentHash, int longestEdge) const
@@ -99,23 +126,7 @@ void ThumbnailCache::schedule(const QString &key, const QString &sourcePath, int
     auto *watcherCtx = this;
 
     (void)QtConcurrent::run([watcherCtx, key, mkey, sourcePath, longestEdge, rawLoader] {
-        QImage image;
-
-        QImageReader reader(sourcePath);
-        reader.setAutoTransform(true);
-        if (reader.canRead()) {
-            const QSize full = reader.size();
-            if (full.isValid() && (full.width() > longestEdge || full.height() > longestEdge)) {
-                QSize target = full;
-                target.scale(longestEdge, longestEdge, Qt::KeepAspectRatio);
-                reader.setScaledSize(target);
-            }
-            image = reader.read();
-        }
-        if (image.isNull() && rawLoader)
-            image = rawLoader(sourcePath, longestEdge);
-
-        image = scaleToLongestEdge(std::move(image), longestEdge);
+        const QImage image = render(sourcePath, longestEdge, rawLoader);
 
         QMetaObject::invokeMethod(
             watcherCtx,

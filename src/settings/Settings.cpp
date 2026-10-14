@@ -1,6 +1,7 @@
 #include "settings/Settings.h"
 
 #include <QDir>
+#include <QJsonDocument>
 #include <QObject>
 #include <QStandardPaths>
 
@@ -30,6 +31,11 @@ constexpr auto kInatUsername = "inat/username";
 constexpr auto kInatApiToken = "inat/apiToken";
 constexpr auto kExportDestFolder = "export/destFolder";
 constexpr auto kExportCollectionFolder = "export/collectionFolder";
+constexpr auto kExportIncludeRaw = "export/includeRaw";
+constexpr auto kExportThumbnailsOnly = "export/thumbnailsOnly";
+constexpr auto kExportRenameFiles = "export/renameFiles";
+constexpr auto kExportFileNamePattern = "export/fileNamePattern";   // JSON
+constexpr auto kExportAuthorName = "export/authorName";
 
 // Qt's QFile/QDir never expand a shell-style leading "~" -- a path typed or
 // hand-edited that way would otherwise be taken completely literally (as a
@@ -124,6 +130,21 @@ std::optional<Settings::CatalogueProfile> Settings::profile(const QString &id) c
     p.pg.pgSslMode = v("pg/sslMode", QStringLiteral("require")).toString();
     p.userName = v("userName").toString();
     p.libraryRoot = v("libraryRoot").toString();
+    p.photoStore = v("photos/store", QString::fromLatin1(kPhotoStoreNone)).toString();
+    p.s3.endpoint = v("photos/s3/endpoint").toString();
+    p.s3.region = v("photos/s3/region", QStringLiteral("auto")).toString();
+    p.s3.bucket = v("photos/s3/bucket").toString();
+    p.s3.prefix = v("photos/s3/prefix").toString();
+    p.s3.accessKey = v("photos/s3/accessKey").toString();
+    p.s3.secretKey = v("photos/s3/secretKey").toString();   // plain text, like pg/password
+    p.drive.clientId = v("photos/drive/clientId").toString();
+    p.drive.clientSecret = v("photos/drive/clientSecret").toString();
+    p.drive.folderId = v("photos/drive/folder").toString();
+    p.drive.refreshToken = v("photos/drive/refreshToken").toString();   // plain text too
+    p.drive.account = v("photos/drive/account").toString();
+    p.photosAllTrees = v("photos/allTrees", true).toBool();
+    for (const QString &id : v("photos/trees").toStringList())
+        p.photoTrees << id.toInt();
     return p;
 }
 
@@ -176,6 +197,23 @@ QString Settings::saveServerProfile(const CatalogueProfile &p)
     set("pg/sslMode", p.pg.pgSslMode);
     set("userName", p.userName.trimmed());
     set("libraryRoot", p.libraryRoot.trimmed());
+    set("photos/store", p.photoStore);
+    set("photos/s3/endpoint", p.s3.endpoint.trimmed());
+    set("photos/s3/region", p.s3.region.trimmed());
+    set("photos/s3/bucket", p.s3.bucket.trimmed());
+    set("photos/s3/prefix", p.s3.prefix.trimmed());
+    set("photos/s3/accessKey", p.s3.accessKey.trimmed());
+    set("photos/s3/secretKey", p.s3.secretKey);
+    set("photos/drive/clientId", p.drive.clientId.trimmed());
+    set("photos/drive/clientSecret", p.drive.clientSecret.trimmed());
+    set("photos/drive/folder", libsync::DriveConfig::folderIdFrom(p.drive.folderId));
+    set("photos/drive/refreshToken", p.drive.refreshToken);
+    set("photos/drive/account", p.drive.account);
+    set("photos/allTrees", p.photosAllTrees);
+    QStringList trees;
+    for (const int id : p.photoTrees)
+        trees << QString::number(id);
+    set("photos/trees", trees);
     return id;
 }
 
@@ -441,6 +479,58 @@ QString Settings::exportCollectionFolder() const
 void Settings::setExportCollectionFolder(const QString &path)
 {
     m_settings.setValue(QLatin1String(kExportCollectionFolder), path);
+}
+
+bool Settings::exportIncludeRaw() const
+{
+    return m_settings.value(QLatin1String(kExportIncludeRaw), true).toBool();
+}
+
+void Settings::setExportIncludeRaw(bool include)
+{
+    m_settings.setValue(QLatin1String(kExportIncludeRaw), include);
+}
+
+bool Settings::exportThumbnailsOnly() const
+{
+    return m_settings.value(QLatin1String(kExportThumbnailsOnly), false).toBool();
+}
+
+void Settings::setExportThumbnailsOnly(bool thumbnailsOnly)
+{
+    m_settings.setValue(QLatin1String(kExportThumbnailsOnly), thumbnailsOnly);
+}
+
+bool Settings::exportRenameFiles() const
+{
+    return m_settings.value(QLatin1String(kExportRenameFiles), false).toBool();
+}
+
+void Settings::setExportRenameFiles(bool rename)
+{
+    m_settings.setValue(QLatin1String(kExportRenameFiles), rename);
+}
+
+collection::FileNamePattern Settings::exportFileNamePattern() const
+{
+    const QByteArray json = m_settings.value(QLatin1String(kExportFileNamePattern)).toByteArray();
+    return collection::FileNamePattern::fromJson(QJsonDocument::fromJson(json).object());
+}
+
+void Settings::setExportFileNamePattern(const collection::FileNamePattern &pattern)
+{
+    m_settings.setValue(QLatin1String(kExportFileNamePattern),
+                        QJsonDocument(pattern.toJson()).toJson(QJsonDocument::Compact));
+}
+
+QString Settings::exportAuthorName() const
+{
+    return m_settings.value(QLatin1String(kExportAuthorName)).toString();
+}
+
+void Settings::setExportAuthorName(const QString &name)
+{
+    m_settings.setValue(QLatin1String(kExportAuthorName), name);
 }
 
 } // namespace pl

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -51,8 +52,9 @@ public:
 
     // Every capture for which no backing file is present on disk any more,
     // ordered by folder then name. Each carries enough to show the user exactly
-    // what would be removed.
-    QList<MissingCapture> capturesWithMissingFiles() const;
+    // what would be removed. Files in `elsewhere` (e.g. photos kept online
+    // only, by photo sync) count as present.
+    QList<MissingCapture> capturesWithMissingFiles(const QSet<QString> &elsewhere = {}) const;
 
     // Recomputes latitude/longitude for every capture with a RAW rendition,
     // using raw::extractGps() (LibRaw's own metadata parser) instead of

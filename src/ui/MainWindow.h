@@ -2,6 +2,8 @@
 
 #include "catalogue/UntreedMatchStore.h"
 #include "coverage/CoverageCalculator.h"
+#include "libsync/PhotoSyncService.h"
+#include "settings/Settings.h"
 #include "sync/SyncService.h"
 #include "ui/ServerBar.h"
 
@@ -151,6 +153,7 @@ private:
     // After an update-mode export: lists files in the collection that this
     // run didn't produce (see ExportOptions::reportUnexpectedFiles).
     void showUnexpectedExportFiles(const collection::ExportSummary &summary);
+    void showExportProblems(const collection::ExportSummary &summary);
     // Starts the pipeline below for the photos the iNaturalist view's
     // Download My Observations page asked for.
     void downloadSelectedInatPhotos(const QList<inat::ImportItem> &items);
@@ -243,6 +246,19 @@ private:
     // "Send these changes?" -- true to go ahead.
     bool confirmSend(bool finishing);
     void logActivity(const sync::SyncService::Outcome &outcome);
+
+    // --- photos kept online by PhotoLife (libsync::PhotoSyncService) ---
+    void setupPhotoSync();
+    void runPhotoSync(libsync::PhotoSyncService::Mode mode, bool userInitiated);
+    void onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &outcome);
+    void updatePhotoStatus();
+    void choosePhotosOnComputer();
+    void applyServerSettings(const Settings::CatalogueProfile &before);
+    // Downloads these photos (absolute paths) now, then calls `then`.
+    void fetchPhotos(const QStringList &paths, std::function<void()> then);
+    // The captures' rendition files that are online only.
+    QStringList onlineOnlyRenditions(const QList<int> &captureIds) const;
+    QStringList onlineOnlyRenditionsOfTree(int projectId) const;
     // First use of a shared catalogue: download it, or publish this one.
     void setUpSharedCatalogue();
     // Restarts PhotoLife (settings saved first), e.g. to open a downloaded
@@ -262,6 +278,9 @@ private:
     // total <= 0 shows a busy (indeterminate) bar -- for phases with no
     // known item count (e.g. resolving a taxon/place, or a single fetch).
     void updateTaskProgress(const QString &phase, int done, int total);
+    // After Cancel: keeps the window up (without its Cancel button) until the
+    // task has actually stopped and endTaskProgress() is called.
+    void showTaskCancelling(const QString &label);
     void endTaskProgress();
 
     // Recomputes the active tree's coverage (panel, tree badges, map
@@ -371,6 +390,8 @@ private:
     taxonomy::ReferencePhotoFetcher *m_refPhotoFetcher = nullptr;
     QAction *m_fetchRefPhotosAction = nullptr;
     QAction *m_exportTreePhotosAction = nullptr;
+    bool m_exportCancelling = false;   // ignore late progress so "Cancelling…" stays up
+    bool m_exportThumbnails = false;   // the running export writes thumbnails, not originals
     ReviewPane *m_reviewPane = nullptr;
     ImageViewer *m_viewer = nullptr;
     HelpWindow *m_helpWindow = nullptr;
@@ -390,6 +411,21 @@ private:
     std::optional<sync::SyncService::Op> m_runningOp;
     std::optional<sync::SyncService::Op> m_queuedOp;   // asked for while counting changes
     QAction *m_syncNowAction = nullptr;
+    QAction *m_syncPhotosAction = nullptr;
+    QLabel *m_photoStatusLabel = nullptr;
+    bool m_photoSyncUserInitiated = false;
+    // A catalogue send waiting for its photos to be uploaded first, and
+    // whether that's done (so runSync() goes ahead with it).
+    std::optional<sync::SyncService::Op> m_opAfterPhotoUpload;
+    bool m_opAfterPhotoUploadUser = false;
+    bool m_photosUploadedForOp = false;
+    QAction *m_photosHereAction = nullptr;
+    QAction *m_stopPhotosAction = nullptr;
+    void stopPhotoSync();
+    bool m_photoTaskProgress = false;     // a photo sync owns the task-progress window
+    std::function<void()> m_afterFetch;   // what waits on fetchPhotos()
+    bool m_selectionFollowUp = false;     // a Check after the tree selection changed
+    bool m_downloadAfterFreeUp = false;
     QAction *m_serverStatusAction = nullptr;
     QAction *m_reviewChangesAction = nullptr;
     QAction *m_discardAction = nullptr;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "collection/FileNamePattern.h"
+
 #include <QMetaType>
 #include <QSet>
 #include <QString>
@@ -13,6 +15,18 @@ namespace pl::collection {
 struct ExportOptions
 {
     bool includeAutoApplied = false;   // besides always-included confirmed matches
+
+    // Copy RAW files as well as JPEGs. When off, only non-RAW files are
+    // copied, so a photo that has only a RAW file is left out entirely.
+    bool includeRaw = true;
+
+    // 0 = copy each photo's original files. Otherwise write one small JPEG
+    // per photo instead, this many pixels on its longest edge, carrying the
+    // original's date/camera/GPS -- made from the photo's JPEG, or from its
+    // RAW file's embedded preview when it has no JPEG (so includeRaw doesn't
+    // apply). Reads already-made thumbnails from thumbnailCacheDir when set.
+    int thumbnailPx = 0;
+    QString thumbnailCacheDir;
     bool scaffoldEmptyFolders = true;  // create every taxon's folder, even ones with no photos
 
     // Empty = every taxon in the tree gets its own folder (today's behavior).
@@ -31,6 +45,13 @@ struct ExportOptions
     // scientific name (empty/identical common names are omitted).
     bool includeCommonName = false;
 
+    // How to name the copied files. Empty = keep each library file's own
+    // name. Otherwise every file of a photo (its RAW and JPEG) gets the same
+    // rendered name, keeping its own extension; two photos in one folder that
+    // would get the same name are told apart with " (2)", " (3)", ...
+    FileNamePattern fileNamePattern;
+    QString authorName;   // for NameToken::Author
+
     // "Update an existing collection": destRoot *is* the collection's root
     // folder, rather than the parent a new "<tree name>" folder is created in.
     bool updateExisting = false;
@@ -47,7 +68,9 @@ struct ExportSummary
     int foldersCreated = 0;
     int photosCopied = 0;
     int photosSkippedExisting = 0;      // already present from a prior export run
-    int photosRenamedForCollision = 0;  // same name, different file -- disambiguated
+    int photosRenamedForCollision = 0;  // same name, different file or photo -- disambiguated
+    int photosFailed = 0;               // couldn't be copied; see failures
+    QStringList failures;            // one line per folder or photo that couldn't be written
     bool cancelled = false;
     QString error;
     QString collectionRoot;          // the folder the collection was written to
@@ -60,8 +83,9 @@ struct ExportSummary
 // <destRoot>/<project's own name>/... (or directly under destRoot when
 // updating an existing collection), one folder per taxon in the tree (any
 // rank), and copies each in-scope capture's rendition files (raw/jpeg) into
-// its matched taxon's own folder, keeping the original filename. Files
-// already present from an earlier run are left alone. Source files are only
+// its matched taxon's own folder, keeping the original filename or naming it
+// by ExportOptions::fileNamePattern. Files already present from an earlier
+// run are left alone. Source files are only
 // ever read, never modified or moved. A successful run leaves a
 // CollectionManifest in the collection root.
 //
@@ -69,13 +93,27 @@ struct ExportSummary
 // taken from a caller-supplied string, since the reference-tree combo box
 // decorates a pruned tree's display text with " (customized)" -- that suffix
 // has no business ending up in a folder name.
+//
+// Before touching anything it checks the collection folder can actually be
+// written to (so an unmounted or offline network/cloud mount fails straight
+// away with a clear error), and it gives up once kMaxConsecutiveFailures
+// folders or copies in a row have failed -- the destination has most likely
+// gone away mid-run. Isolated failures are counted and listed instead.
 class ExportEngine
 {
 public:
     explicit ExportEngine(QString connectionName);
 
+    static constexpr int kMaxConsecutiveFailures = 5;
+
+    enum class Phase {
+        PreparingFolders,     // creating taxon folders; total = folder count
+        CopyingPhotos,        // total = photo count
+        CheckingCollection,   // looking for unexpected files; total = 0 (unknown)
+    };
+
     using CancelFn = std::function<bool()>;
-    using ProgressFn = std::function<void(int done, int total)>;
+    using ProgressFn = std::function<void(Phase phase, int done, int total)>;
 
     ExportSummary run(int projectId, const QString &destRoot, const ExportOptions &options,
                        const CancelFn &cancel = {}, const ProgressFn &progress = {});

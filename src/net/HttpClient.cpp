@@ -16,10 +16,16 @@ HttpClient::HttpClient(std::unique_ptr<Transport> transport, HttpCache *cache, Q
 
 HttpClient::~HttpClient() = default;
 
-void HttpClient::get(const QUrl &url, Handler handler, const QString &bearerToken)
+void HttpClient::get(const QUrl &url, Handler handler, const QString &bearerToken,
+                     Priority priority)
 {
-    m_queue.enqueue({url, std::move(handler), 0, bearerToken});
+    queueFor(priority).enqueue({url, std::move(handler), 0, bearerToken, priority});
     pump();
+}
+
+QQueue<HttpClient::Job> &HttpClient::queueFor(Priority priority)
+{
+    return priority == Priority::Background ? m_backgroundQueue : m_queue;
 }
 
 bool HttpClient::isRetriable(const Transport::Reply &reply)
@@ -42,7 +48,7 @@ void HttpClient::pump()
 {
     if (m_inFlight)
         return;
-    if (m_queue.isEmpty()) {
+    if (m_queue.isEmpty() && m_backgroundQueue.isEmpty()) {
         emit idle();
         return;
     }
@@ -53,7 +59,7 @@ void HttpClient::pump()
                             : std::max<qint64>(0, m_minIntervalMs - (now - m_lastDispatchMs));
 
     m_inFlight = true;
-    Job job = m_queue.dequeue();
+    Job job = !m_queue.isEmpty() ? m_queue.dequeue() : m_backgroundQueue.dequeue();
     QTimer::singleShot(int(wait), this, [this, job = std::move(job)]() mutable {
         dispatch(std::move(job));
     });
@@ -106,7 +112,7 @@ void HttpClient::dispatch(Job job)
             retry.attempt = nextAttempt;
             m_inFlight = false;
             QTimer::singleShot(delayMs, this, [this, retry = std::move(retry)]() mutable {
-                m_queue.prepend(std::move(retry));
+                queueFor(retry.priority).prepend(std::move(retry));
                 pump();
             });
             return;

@@ -36,6 +36,7 @@ signals:
     void testConnectionRequested();
     void activityLogRequested();
     void restoreBackupRequested();
+    void syncPhotosRequested();
 
 private:
     QLabel *m_mode;
@@ -46,6 +47,8 @@ private:
     QLabel *m_versions;
     QLabel *m_changes;
     QLabel *m_library;
+    QLabel *m_photos;
+    QPushButton *m_syncPhotos;
     QLabel *m_backups;
     QPushButton *m_startEditing;
     QPushButton *m_getLatest;

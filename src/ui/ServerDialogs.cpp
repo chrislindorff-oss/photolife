@@ -88,6 +88,11 @@ ServerStatusDialog::ServerStatusDialog(QWidget *parent) : QDialog(parent)
     layout->addWidget(changesBox);
 
     layout->addWidget(section(tr("Photo library folder"), m_library));
+    auto *photosBox = section(tr("Photos online"), m_photos);
+    m_syncPhotos = new QPushButton(tr("Sync Photos"), photosBox);
+    connect(m_syncPhotos, &QPushButton::clicked, this, &ServerStatusDialog::syncPhotosRequested);
+    photosBox->layout()->addWidget(m_syncPhotos);
+    layout->addWidget(photosBox);
     auto *backupsBox = section(tr("Backups"), m_backups);
     auto *restore = new QPushButton(tr("Restore a Backup…"), backupsBox);
     connect(restore, &QPushButton::clicked, this, &ServerStatusDialog::restoreBackupRequested);
@@ -195,6 +200,20 @@ void ServerStatusDialog::setView(const ServerView &v)
 
     m_library->setText(v.libraryRoot.isEmpty() ? tr("Not set — set it in Server Settings.")
                                                 : QDir::toNativeSeparators(v.libraryRoot));
+    if (v.photosEnabled) {
+        QString photos = ServerBar::photosText(v);
+        if (!v.photosKept.isEmpty())
+            photos += QLatin1Char('\n') + tr("Kept on this computer: %1.").arg(v.photosKept);
+        if (v.photosLastSync.isValid())
+            photos += QLatin1Char('\n') + tr("Last photo sync: %1.").arg(describeTime(v.photosLastSync));
+        m_photos->setText(photos);
+    } else {
+        m_photos->setText(tr("Not synced by PhotoLife — the photo library folder is shared some "
+                             "other way. Set up photo storage in Server Settings to have "
+                             "PhotoLife sync the photos itself."));
+    }
+    m_syncPhotos->setVisible(v.photosEnabled);
+    m_syncPhotos->setText(v.photosRunning ? tr("Stop Photo Sync") : tr("Sync Photos"));
     m_backups->setText(v.backups > 0 ? tr("%n backup(s) of earlier catalogues kept beside it.",
                                           nullptr, v.backups)
                                      : tr("None yet."));

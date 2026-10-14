@@ -40,12 +40,14 @@ public:
         ExportEngine engine(db.connectionName());
         summary = engine.run(
             m_projectId, m_destRoot, m_options, [this] { return m_cancel->load(); },
-            [this](int done, int total) { emit progress(done, total); });
+            [this](ExportEngine::Phase phase, int done, int total) {
+                emit progress(int(phase), done, total);
+            });
         emit finished(summary);
     }
 
 signals:
-    void progress(int done, int total);
+    void progress(int phase, int done, int total);
     void finished(pl::collection::ExportSummary summary);
 
 private:
@@ -85,11 +87,16 @@ void ExportService::start(int projectId, const QString &destRoot, ExportOptions 
 
     connect(worker, &Worker::progress, this, &ExportService::progress);
     connect(worker, &Worker::finished, this, &ExportService::onFinished);
-    connect(m_thread, &QThread::finished, this, [this] {
-        m_thread->deleteLater();
-        m_worker->deleteLater();
-        m_thread = nullptr;
-        m_worker = nullptr;
+    // Captures this run's own thread and worker: a new export may already
+    // have started (and replaced m_thread/m_worker) by the time this runs.
+    QThread *thread = m_thread;
+    connect(thread, &QThread::finished, this, [this, thread, worker] {
+        thread->deleteLater();
+        worker->deleteLater();
+        if (m_thread == thread) {
+            m_thread = nullptr;
+            m_worker = nullptr;
+        }
     });
 
     emit started();

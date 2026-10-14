@@ -46,6 +46,7 @@
 #include "ui/CatalogueConnectDialog.h"
 #include "ui/CatalogueSettingsDialog.h"
 #include "ui/CaptureDelegate.h"
+#include "ui/PhotosOnComputerDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/ExportDialog.h"
 #include "ui/HelpWindow.h"
@@ -152,6 +153,13 @@ public:
             emit canceled();
     }
 
+    // Cancel has been asked for; there's nothing more to cancel.
+    void markCancelling()
+    {
+        m_cancellable = false;
+        setCancelButtonText(QString());   // a null text removes the button
+    }
+
 protected:
     void closeEvent(QCloseEvent *event) override
     {
@@ -181,13 +189,17 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         new checklist::ChecklistImporter(m_app.inat(), m_app.taxonomyStore(), this);
     m_treeImporter = new treefile::TreeImporter(m_app.inat(), m_app.taxonomyStore(), this);
     m_originFetcher =
-        new taxonomy::OriginFetcher(m_app.inat(), m_app.taxonomyStore(), this);
+        new taxonomy::OriginFetcher(m_app.inatBackground(), m_app.taxonomyStore(), this);
     connect(m_originFetcher, &taxonomy::OriginFetcher::projectFinished, this,
             [this](int projectId, bool ok, int written) {
                 if (ok && written > 0 && projectId == currentProjectId())
                     refreshCoverage();
             });
-    m_alaSync = new taxonomy::AlaStatusSync(m_app.http(), m_app.taxonomyStore(), this);
+    // Both keep their downloads under one folder shared by every catalogue.
+    const QString sourcesDir =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+            .filePath(QStringLiteral("sources"));
+    m_alaSync = new taxonomy::AlaStatusSync(m_app.http(), m_app.taxonomyStore(), sourcesDir, this);
     connect(m_alaSync, &taxonomy::AlaStatusSync::progress, this,
             [this](int index, int count, const QString &listName) {
                 m_sourceSync.alaIndex = index;
@@ -219,9 +231,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 sourceSyncPartFinished();
             });
     m_apcSync = new taxonomy::ApcOriginSync(
-        m_app.taxonomyStore(),
-        QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
-            .filePath(QStringLiteral("sources")),
+        m_app.taxonomyStore(), sourcesDir,
         QStringLiteral("%1/%2").arg(QString::fromLatin1(kAppName), QString::fromLatin1(kAppVersion))
             .toUtf8(),
         this);
@@ -467,29 +477,52 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
             });
 
     connect(&m_app.exportService(), &collection::ExportService::progress, this,
-            [this](int done, int total) {
-                statusBar()->showMessage(tr("Exporting photo %1 / %2").arg(done).arg(total));
-                updateTaskProgress(tr("Exporting photos…"), done, total);
+            [this](int phase, int done, int total) {
+                if (m_exportCancelling)
+                    return;
+                QString label;
+                switch (collection::ExportEngine::Phase(phase)) {
+                case collection::ExportEngine::Phase::PreparingFolders:
+                    label = tr("Creating folder %1 of %2…").arg(done).arg(total);
+                    break;
+                case collection::ExportEngine::Phase::CopyingPhotos:
+                    label = (m_exportThumbnails ? tr("Making thumbnail %1 of %2…")
+                                                : tr("Copying photo %1 of %2…"))
+                                .arg(done)
+                                .arg(total);
+                    break;
+                case collection::ExportEngine::Phase::CheckingCollection:
+                    label = tr("Checking the collection for other files (%1 so far)…").arg(done);
+                    break;
+                }
+                statusBar()->showMessage(label);
+                updateTaskProgress(label, done, total);
             });
     connect(&m_app.exportService(), &collection::ExportService::finished, this,
             [this](collection::ExportSummary s) {
                 m_exportTreePhotosAction->setEnabled(true);
+                m_exportCancelling = false;
                 endTaskProgress();
                 if (s.cancelled) {
-                    statusBar()->showMessage(tr("Export cancelled."), 6000);
+                    statusBar()->showMessage(
+                        tr("Export cancelled after copying %n photo(s).", nullptr,
+                           s.photosCopied),
+                        6000);
                     return;
                 }
-                if (!s.ok()) {
-                    statusBar()->showMessage(tr("Export failed: %1").arg(s.error), 10000);
-                    return;
+                if (!s.ok() || s.photosFailed > 0 || !s.failures.isEmpty()) {
+                    showExportProblems(s);
+                    if (!s.ok())
+                        return;
                 }
                 statusBar()->showMessage(
                     tr("Exported %1 new photo(s) into %2 new folder(s) (%3 already there, %4 "
-                       "renamed to avoid a clash).")
+                       "renamed to avoid a clash, %5 failed).")
                         .arg(s.photosCopied)
                         .arg(s.foldersCreated)
                         .arg(s.photosSkippedExisting)
-                        .arg(s.photosRenamedForCollision),
+                        .arg(s.photosRenamedForCollision)
+                        .arg(s.photosFailed),
                     10000);
                 if (!s.unexpectedFiles.isEmpty())
                     showUnexpectedExportFiles(s);
@@ -673,7 +706,7 @@ void MainWindow::updateAustralianSourcesNow()
     beginTaskProgress(tr("Updating Threatened & Introduced Status"), [this] {
         m_alaSync->cancel();
         m_apcSync->cancel();
-        updateTaskProgress(tr("Cancelling…"), 0, 0);
+        showTaskCancelling(tr("Cancelling…"));
     });
     updateSourceSyncProgress();
     // Either may already be running in the background; the window then
@@ -720,8 +753,11 @@ void MainWindow::syncAustralianSources(bool force, bool rematchOnly)
         const QDateTime last = m_app.settings().sourceSyncedAt(source);
         return !last.isValid() || last.daysTo(QDateTime::currentDateTime()) > 30;
     };
+    // Unless forced, both re-match from their kept downloads when those are
+    // recent enough -- so a new tree, or a catalogue that hasn't synced
+    // these yet, doesn't download them all again.
     if (force || rematchOnly || due(QStringLiteral("ala")))
-        m_alaSync->start();
+        m_alaSync->start(force);
     if (force || rematchOnly || due(QStringLiteral("apc")))
         m_apcSync->start(force);
 }
@@ -745,7 +781,7 @@ void MainWindow::fetchMissingPlaceDetails()
             ids.append(id);
     }
     for (qsizetype i = 0; i < ids.size(); i += 30) {
-        m_app.inat().fetchPlaces(ids.mid(i, 30), [this](net::Outcome<QList<taxonomy::Place>> out) {
+        m_app.inatBackground().fetchPlaces(ids.mid(i, 30), [this](net::Outcome<QList<taxonomy::Place>> out) {
             if (!out.ok())
                 return;   // offline: try again next launch
             auto &store = m_app.taxonomyStore();
@@ -1809,6 +1845,25 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
     if (!model || !clicked.isValid())
         return;
 
+    // A photo only online comes down first.
+    if (CaptureDelegate::isOnlineOnly(clicked.data(model::CaptureListModel::PreviewPathRole).toString())) {
+        const QStringList files =
+            onlineOnlyRenditions({clicked.data(model::CaptureListModel::IdRole).toInt()});
+        if (QMessageBox::question(this, tr("Photo Only Online"),
+                                  tr("This photo is kept online, not on this computer. Download "
+                                     "it now?\n\nIt then stays on this computer."))
+            != QMessageBox::Yes)
+            return;
+        const QPointer<QAbstractItemModel> guard(model);
+        const QPersistentModelIndex index(clicked);
+        fetchPhotos(files, [this, guard, index] {
+            if (guard && index.isValid()
+                && QFileInfo::exists(index.data(model::CaptureListModel::PreviewPathRole).toString()))
+                openViewer(guard, index);
+        });
+        return;
+    }
+
     QVector<ImageViewer::Item> items;
     int start = 0;
     for (int r = 0; r < model->rowCount(); ++r) {
@@ -1941,10 +1996,28 @@ void MainWindow::updateTaskProgress(const QString &phase, int done, int total)
     m_taskProgress->setLabelText(phase);
     if (total > 0) {
         m_taskProgress->setRange(0, total);
+        // A modal QProgressDialog's setValue() processes events, so the
+        // task's own finished signal can be delivered right here -- and its
+        // handler calls endTaskProgress(), leaving m_taskProgress null.
         m_taskProgress->setValue(done);
+        if (!m_taskProgress)
+            return;
     } else {
         m_taskProgress->setRange(0, 0);   // busy/indeterminate
     }
+    // QProgressDialog hides itself when its Cancel button is pressed, but the
+    // task keeps running until it notices -- stay visible until
+    // endTaskProgress() so the user can see it hasn't stopped yet.
+    if (!m_taskProgress->isVisible())
+        m_taskProgress->show();
+}
+
+void MainWindow::showTaskCancelling(const QString &label)
+{
+    if (!m_taskProgress)
+        return;
+    static_cast<TaskProgressDialog *>(m_taskProgress)->markCancelling();
+    updateTaskProgress(label, 0, 0);
 }
 
 void MainWindow::endTaskProgress()
@@ -2636,7 +2709,7 @@ void MainWindow::beginMatchProgress(const QString &title)
             m_app.scanService().cancel();
         if (m_app.matchService().isRunning())
             m_app.matchService().cancel();
-        updateTaskProgress(tr("Cancelling…"), 0, 0);
+        showTaskCancelling(tr("Cancelling…"));
     });
     updateTaskProgress(m_app.settings().watchedRoots().isEmpty()
                            ? tr("Matching…")
@@ -2811,6 +2884,20 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
         QAction *reveal = menu.addAction(tr("Open in File Manager"));
         reveal->setEnabled(!path.isEmpty());
         connect(reveal, &QAction::triggered, this, [path] { revealInFileManager(path); });
+        QList<int> onlineIds;
+        for (const QModelIndex &s : sel) {
+            if (CaptureDelegate::isOnlineOnly(s.data(model::CaptureListModel::PreviewPathRole).toString()))
+                onlineIds << s.data(model::CaptureListModel::IdRole).toInt();
+        }
+        if (!onlineIds.isEmpty()) {
+            QAction *download = menu.addAction(
+                tr("Download to This Computer (%Ln)", nullptr, int(onlineIds.size())));
+            download->setToolTip(tr("These photos are kept online only; download them and keep "
+                                    "them here"));
+            connect(download, &QAction::triggered, this, [this, onlineIds] {
+                fetchPhotos(onlineOnlyRenditions(onlineIds), {});
+            });
+        }
 
         menu.addSeparator();
         QAction *addBest = menu.addAction(
@@ -3038,8 +3125,9 @@ void MainWindow::removeMissingCaptures()
     scan::CatalogueMaintenance maint(m_app.database().connectionName());
 
     QApplication::setOverrideCursor(Qt::WaitCursor);
+    // Photos kept online only (photo sync) aren't missing.
     const QList<scan::CatalogueMaintenance::MissingCapture> missing =
-        maint.capturesWithMissingFiles();
+        maint.capturesWithMissingFiles(CaptureDelegate::onlineOnly());
     QApplication::restoreOverrideCursor();
 
     if (missing.isEmpty()) {
@@ -3813,9 +3901,27 @@ void MainWindow::exportReferenceTreePhotos()
     ExportDialog dialog(m_app.database(), m_app.thumbnails(), pid, m_projectCombo->currentText(),
                        m_treeModel->visibleTaxonIds(), m_treeModel->photographedOnly(),
                        m_app.settings().exportDestFolder(),
-                       m_app.settings().exportCollectionFolder(), this);
+                       m_app.settings().exportCollectionFolder(),
+                       m_app.settings().exportIncludeRaw(),
+                       m_app.settings().exportThumbnailsOnly(), this);
+    dialog.setFileNaming(m_app.settings().exportRenameFiles(),
+                         m_app.settings().exportFileNamePattern(),
+                         m_app.settings().exportAuthorName());
     if (dialog.exec() != QDialog::Accepted)
         return;
+    collection::ExportOptions options = dialog.options();
+    m_app.settings().setExportIncludeRaw(options.includeRaw);
+    // The naming pattern is kept even when an update used its collection's
+    // own, so the next new collection starts from the user's choice.
+    m_app.settings().setExportRenameFiles(dialog.renamesFiles());
+    m_app.settings().setExportFileNamePattern(dialog.fileNamePattern());
+    m_app.settings().setExportAuthorName(dialog.authorName());
+    // Update mode fixes this to the collection's own choice, so only a new
+    // collection's choice is remembered.
+    if (!dialog.updatesExistingCollection())
+        m_app.settings().setExportThumbnailsOnly(options.thumbnailPx > 0);
+    options.thumbnailCacheDir = m_app.thumbnails().cacheDir();
+    m_exportThumbnails = options.thumbnailPx > 0;
 
     const QString destRoot = dialog.destRoot();
     if (dialog.updatesExistingCollection()) {
@@ -3829,11 +3935,55 @@ void MainWindow::exportReferenceTreePhotos()
         m_app.settings().setExportDestFolder(destRoot);
     }
 
-    m_exportTreePhotosAction->setEnabled(false);
-    statusBar()->showMessage(tr("Exporting photos…"));
-    beginTaskProgress(tr("Exporting Photo Collection"),
-                      [this] { m_app.exportService().cancel(); });
-    m_app.exportService().start(pid, destRoot, dialog.options());
+    auto start = [this, pid, destRoot, options] {
+        m_exportTreePhotosAction->setEnabled(false);
+        m_exportCancelling = false;
+        statusBar()->showMessage(tr("Exporting photos…"));
+        beginTaskProgress(tr("Exporting Photo Collection"), [this] {
+            m_exportCancelling = true;
+            m_app.exportService().cancel();
+            showTaskCancelling(tr("Cancelling — finishing the file currently being copied…"));
+        });
+        updateTaskProgress(tr("Checking the destination folder…"), 0, 0);
+        m_app.exportService().start(pid, destRoot, options);
+    };
+    // Photos only online have to come down first.
+    if (const QStringList online = onlineOnlyRenditionsOfTree(pid); !online.isEmpty()) {
+        const auto answer = QMessageBox::question(
+            this, tr("Export Photo Collection"),
+            tr("%Ln of this tree's photo files are kept online, not on this computer. Download "
+               "them before exporting?\n\nOtherwise the export leaves them out.",
+               nullptr, int(online.size())),
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
+        if (answer == QMessageBox::Cancel)
+            return;
+        if (answer == QMessageBox::Yes) {
+            fetchPhotos(online, start);
+            return;
+        }
+    }
+    start();
+}
+
+void MainWindow::showExportProblems(const collection::ExportSummary &summary)
+{
+    QMessageBox box(QMessageBox::Warning, tr("Export Photo Collection"), QString(),
+                    QMessageBox::Ok, this);
+    if (!summary.ok()) {
+        box.setText(tr("The export didn't finish: %1").arg(summary.error));
+        box.setInformativeText(
+            tr("%n photo(s) were copied before it stopped. Exporting again later picks up "
+               "where it left off — photos already there are skipped.",
+               nullptr, summary.photosCopied));
+    } else {
+        box.setText(tr("%n photo(s) couldn't be copied.", nullptr, summary.photosFailed));
+        box.setInformativeText(
+            tr("Everything else was exported. Exporting again later retries the ones that "
+               "failed — photos already there are skipped."));
+    }
+    if (!summary.failures.isEmpty())
+        box.setDetailedText(summary.failures.join(QLatin1Char('\n')));
+    box.exec();
 }
 
 void MainWindow::showUnexpectedExportFiles(const collection::ExportSummary &summary)
@@ -4028,15 +4178,14 @@ void MainWindow::cancelInatPipeline()
 
     if (m_inatImportService->isRunning()) {
         m_inatImportService->cancel();
-        updateTaskProgress(tr("Cancelling — finishing the photo currently downloading, then "
-                              "adding what's already downloaded to your library…"),
-                           0, 0);
+        showTaskCancelling(tr("Cancelling — finishing the photo currently downloading, then "
+                              "adding what's already downloaded to your library…"));
     } else if (m_matchingDownload && m_app.matchService().isRunning()) {
         m_app.matchService().cancel();
-        updateTaskProgress(tr("Cancelling matching…"), 0, 0);
+        showTaskCancelling(tr("Cancelling matching…"));
     } else if (m_app.scanService().isRunning()) {
         m_app.scanService().cancel();
-        updateTaskProgress(tr("Cancelling the library scan…"), 0, 0);
+        showTaskCancelling(tr("Cancelling the library scan…"));
     }
 }
 
@@ -4420,6 +4569,8 @@ void MainWindow::showStorageUsage()
 void MainWindow::showCatalogueSettings()
 {
     ManageCataloguesDialog dialog(m_app.settings(), this);
+    connect(&dialog, &ManageCataloguesDialog::activeServerEdited, this,
+            &MainWindow::applyServerSettings);
     connect(&dialog, &ManageCataloguesDialog::openRequested, this, [this, &dialog](const QString &id) {
         dialog.accept();
         // After the dialog has closed.
@@ -4445,13 +4596,42 @@ void MainWindow::editServerSettings()
         return;
     }
     settings.saveServerProfile(after);
+    applyServerSettings(before);
+}
+
+// After the open server catalogue's settings were saved -- from Server
+// Settings or Manage Catalogues: use them now, and offer the first photo sync.
+void MainWindow::applyServerSettings(const Settings::CatalogueProfile &before)
+{
+    auto &settings = m_app.settings();
+    const Settings::CatalogueProfile after = settings.activeProfile();
     m_app.configureSync();
+    const bool photoStoreChanged =
+        after.syncsPhotos()
+        && (!before.syncsPhotos() || after.photoStore != before.photoStore
+            || after.s3.endpoint != before.s3.endpoint || after.s3.bucket != before.s3.bucket
+            || after.s3.prefix != before.s3.prefix || after.libraryRoot != before.libraryRoot
+            || after.drive.folderId != before.drive.folderId
+            || after.drive.refreshToken != before.drive.refreshToken);
+    if (photoStoreChanged) {
+        m_serverView.photosPlan.reset();
+        m_serverView.photosError.clear();
+    }
+    updatePhotoStatus();
     const CatalogueDescriptor server = settings.syncServerDescriptor();
     m_serverView.server = tr("%1 on %2").arg(server.pgDbName, server.pgHost);
     m_serverView.me = m_app.syncService().config().identity;
     updateSyncStatus();
     updateCatalogueCorner();
     statusBar()->showMessage(tr("Server settings saved."), 6000);
+    if (photoStoreChanged
+        && QMessageBox::question(
+               this, tr("Sync Photos"),
+               tr("Sync the photos with the photo storage now?\n\nThe first sync checks every "
+                  "photo in the library folder, so it can take a while for a big library. "
+                  "Photos already in both places aren't transferred again."))
+               == QMessageBox::Yes)
+        runPhotoSync(libsync::PhotoSyncService::Mode::Both, true);
 }
 
 void MainWindow::buildCatalogueCorner()
@@ -4635,6 +4815,21 @@ void MainWindow::buildServerMenu(QMenu *menu)
     m_startEditingAction = menu->addAction(tr("&Start Editing"), this, [this] { startEditing(); });
     m_syncNowAction = menu->addAction(tr("S&ync Now"), this, &MainWindow::syncNow);
     m_syncNowAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_S));
+    m_syncPhotosAction = menu->addAction(tr("Sync &Photos"), this, [this] {
+        runPhotoSync(libsync::PhotoSyncService::Mode::Both, true);
+    });
+    m_syncPhotosAction->setToolTip(tr("Upload the photos added or changed on this computer, and "
+                                      "download the ones collaborators have added"));
+    m_syncPhotosAction->setVisible(false);
+    m_stopPhotosAction = menu->addAction(tr("S&top Photo Sync"), this, &MainWindow::stopPhotoSync);
+    m_stopPhotosAction->setToolTip(tr("Stop uploading or downloading photos; the next sync "
+                                      "carries on where this one stopped"));
+    m_stopPhotosAction->setVisible(false);
+    m_photosHereAction = menu->addAction(tr("Photos on This &Computer…"), this,
+                                         &MainWindow::choosePhotosOnComputer);
+    m_photosHereAction->setToolTip(tr("Keep every photo on this computer, or only those of some "
+                                      "reference trees"));
+    m_photosHereAction->setVisible(false);
     m_finishEditingAction = menu->addAction(tr("&Finish Editing (Send && Release)"), this,
                                             &MainWindow::finishEditing);
     m_discardAction = menu->addAction(tr("&Discard My Changes…"), this, &MainWindow::discardChanges);
@@ -4716,6 +4911,7 @@ void MainWindow::setupSync()
         QTimer::singleShot(0, this, [this] { runSync(Op::Check, false); });
 
     connect(m_reviewPane, &ReviewPane::editRequested, this, [this] { ensureCanEdit(); });
+    setupPhotoSync();
     applyEditability();
 }
 
@@ -4739,6 +4935,18 @@ void MainWindow::runSync(Op op, bool userInitiated)
                                      6000);
         return;
     }
+    // Photos before the catalogue that refers to them: collaborators look for
+    // them as soon as they get it.
+    if ((op == Op::Push || op == Op::FinishEditing) && m_app.photoSync().config().enabled()
+        && !std::exchange(m_photosUploadedForOp, false)) {
+        m_opAfterPhotoUpload = op;
+        m_opAfterPhotoUploadUser = userInitiated;
+        if (!m_app.photoSync().isRunning())
+            runPhotoSync(libsync::PhotoSyncService::Mode::Upload, userInitiated);
+        else if (userInitiated)
+            statusBar()->showMessage(tr("Waiting for the photo sync under way to finish…"), 6000);
+        return;
+    }
     m_runningOp = op;
     m_syncUserInitiated = userInitiated;
     if (userInitiated && op != Op::Changes)
@@ -4759,6 +4967,9 @@ void MainWindow::onSyncFinished(const sync::SyncService::Outcome &o)
     if (userInitiated && o.op != Op::Changes)
         endTaskProgress();
     m_runningOp.reset();
+    // Get Latest gets the latest photos too.
+    if (o.op == Op::Check && userInitiated && o.ok)
+        runPhotoSync(libsync::PhotoSyncService::Mode::Download, false);
     auto &settings = m_app.settings();
     const sync::SyncIdentity me = m_app.syncService().config().identity;
     ServerView &v = m_serverView;
@@ -5038,6 +5249,371 @@ void MainWindow::logActivity(const sync::SyncService::Outcome &o)
                  syncOpName(o.op), o.ok, detail, o.error, o.durationMs});
 }
 
+void MainWindow::setupPhotoSync()
+{
+    auto &photos = m_app.photoSync();
+    m_photoStatusLabel = new QLabel(this);
+    m_photoStatusLabel->setToolTip(tr("The photos PhotoLife keeps in sync with the photo storage "
+                                      "(Server ▸ Sync Photos)"));
+    statusBar()->addPermanentWidget(m_photoStatusLabel);
+    connect(&photos, &libsync::PhotoSyncService::progress, this,
+            [this](const QString &phase, int done, int total) {
+                m_serverView.photosPhase =
+                    total > 0 ? tr("%1 (%L2 of %L3)").arg(phase).arg(done).arg(total) : phase;
+                if (m_photoTaskProgress)
+                    updateTaskProgress(phase, done, total);
+                updatePhotoStatus();
+            });
+    connect(&photos, &libsync::PhotoSyncService::finished, this, &MainWindow::onPhotoSyncFinished);
+    const QStringList onlineOnly = libsync::PhotoSyncService::onlineOnlyPaths(photos.config());
+    CaptureDelegate::setOnlineOnly(QSet<QString>(onlineOnly.cbegin(), onlineOnly.cend()));
+    updatePhotoStatus();
+
+    // Fetch what collaborators have added since last time, in the background.
+    if (photos.config().enabled())
+        QTimer::singleShot(3000, this,
+                           [this] { runPhotoSync(libsync::PhotoSyncService::Mode::Download, false); });
+}
+
+void MainWindow::runPhotoSync(libsync::PhotoSyncService::Mode mode, bool userInitiated)
+{
+    using Mode = libsync::PhotoSyncService::Mode;
+    auto &photos = m_app.photoSync();
+    if (!photos.config().enabled())
+        return;
+    if (photos.isRunning()) {
+        if (userInitiated)
+            statusBar()->showMessage(tr("The photos are already syncing."), 6000);
+        return;
+    }
+    m_photoSyncUserInitiated = userInitiated;
+    if ((mode == Mode::Upload && m_opAfterPhotoUpload && userInitiated) || mode == Mode::FreeUp) {
+        m_photoTaskProgress = true;
+        beginTaskProgress(mode == Mode::FreeUp ? tr("Freeing Up Space") : tr("Uploading Photos"), [this] {
+            m_app.photoSync().cancel();
+            showTaskCancelling(tr("Stopping after the current photo…"));
+        });
+    }
+    m_serverView.photosRunning = true;
+    m_serverView.photosStopped = false;
+    m_serverView.photosPhase.clear();
+    photos.run(mode);
+    updatePhotoStatus();
+}
+
+void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o)
+{
+    using Mode = libsync::PhotoSyncService::Mode;
+    const bool userInitiated = std::exchange(m_photoSyncUserInitiated, false);
+    if (std::exchange(m_photoTaskProgress, false))
+        endTaskProgress();
+    ServerView &v = m_serverView;
+    v.photosRunning = false;
+    v.photosPhase.clear();
+    v.photosError = o.ok ? QString() : o.error;
+    v.photosFailed = 0;
+
+    QString detail;
+    QString error = o.error;
+    bool changedHere = false;
+    if (o.result) {
+        const libsync::LibrarySyncResult &r = *o.result;
+        // What's left: whatever this sync didn't try, and whatever failed.
+        libsync::LibraryPlan rest = r.plan;
+        if (o.mode != Mode::Download)
+            rest.toUpload.clear();
+        if (o.mode != Mode::Upload) {
+            rest.toDownload.clear();
+            rest.conflicts.clear();
+        }
+        v.photosPlan = r.cancelled ? std::nullopt : std::optional(rest);
+        v.photosStopped = r.cancelled;
+        v.photosFailed = int(r.failures.size());
+        if (!r.cancelled)
+            v.photosLastSync = o.finishedAt;
+        changedHere = r.downloaded + r.conflicts + r.trashed > 0;
+
+        QStringList parts;
+        if (r.uploaded > 0)
+            parts << tr("uploaded %Ln", nullptr, r.uploaded);
+        if (r.downloaded > 0)
+            parts << tr("downloaded %Ln", nullptr, r.downloaded);
+        if (r.conflicts > 0)
+            parts << tr("%Ln changed in both places (both copies kept)", nullptr, r.conflicts);
+        if (r.trashed > 0)
+            parts << tr("%Ln deleted online (moved to %1)", nullptr, r.trashed)
+                         .arg(QLatin1String(libsync::LibrarySync::kTrashDir));
+        if (r.freed > 0)
+            parts << tr("%Ln removed from this computer to free %1 (still online)", nullptr, r.freed)
+                         .arg(QLocale().formattedDataSize(r.bytesFreed));
+        if (!r.plan.removedHere.isEmpty())
+            parts << tr("%Ln deleted here (kept online)", nullptr, int(r.plan.removedHere.size()));
+        detail = parts.isEmpty() ? tr("Photos up to date") : tr("Photos: %1").arg(parts.join(QStringLiteral(", ")));
+        if (r.cancelled)
+            detail += tr(" — stopped");
+        if (!r.failures.isEmpty())
+            error = tr("%Ln photo(s) couldn't be synced: %1", nullptr, int(r.failures.size()))
+                        .arg(r.failures.mid(0, 5).join(QStringLiteral("; ")));
+    } else if (o.plan) {
+        v.photosPlan = o.plan;
+    }
+
+    if (o.ok) {
+        CaptureDelegate::setOnlineOnly(QSet<QString>(o.onlineOnly.cbegin(), o.onlineOnly.cend()));
+        for (QAbstractItemView *view : {static_cast<QAbstractItemView *>(m_grid),
+                                        static_cast<QAbstractItemView *>(m_taxonGrid),
+                                        static_cast<QAbstractItemView *>(m_bestShotGrid),
+                                        static_cast<QAbstractItemView *>(m_untreedGrid)}) {
+            if (view)
+                view->viewport()->update();
+        }
+    }
+    if (o.thumbnails && o.thumbnails->downloaded > 0)
+        changedHere = true;   // thumbnails to show for photos only online
+
+    if (o.mode != Mode::Check) {
+        const QString action = o.mode == Mode::Upload     ? tr("Upload Photos")
+                               : o.mode == Mode::Download ? tr("Download Photos")
+                               : o.mode == Mode::FreeUp   ? tr("Free Up Space")
+                               : o.mode == Mode::Fetch    ? tr("Download Photos (opened)")
+                                                          : tr("Sync Photos");
+        sync::SyncActivityLog(QDir(QFileInfo(m_app.settings().databasePath()).absolutePath())
+                                  .filePath(QStringLiteral("sync-activity.log")))
+            .append({o.finishedAt.isValid() ? o.finishedAt : QDateTime::currentDateTime(), action,
+                     o.ok && v.photosFailed == 0, detail, error, o.durationMs});
+    }
+
+    if (changedHere) {
+        m_model->reload();
+        m_bestShotModel->reload();
+        m_reviewPane->reload();
+    }
+
+    // A catalogue send waiting on its photos goes ahead once nothing else is
+    // syncing them.
+    auto resumeSend = [this] {
+        if (m_opAfterPhotoUpload && !m_app.photoSync().isRunning())
+            runPhotoSync(libsync::PhotoSyncService::Mode::Upload, m_opAfterPhotoUploadUser);
+    };
+    if (o.mode == Mode::Fetch) {
+        if (o.result && !o.result->failures.isEmpty())
+            QMessageBox::warning(this, tr("Download Photos"),
+                                 tr("Some photos couldn't be downloaded:\n\n%1")
+                                     .arg(o.result->failures.mid(0, 8).join(QLatin1Char('\n'))));
+        updatePhotoStatus();
+        if (const auto then = std::exchange(m_afterFetch, {}))
+            then();
+        resumeSend();
+        return;
+    }
+    if (o.mode == Mode::Check && std::exchange(m_selectionFollowUp, false)) {
+        updatePhotoStatus();
+        if (!o.ok || !o.plan) {
+            QMessageBox::warning(this, tr("Photos on This Computer"),
+                                 tr("Couldn't check the photo storage: %1").arg(o.error));
+            resumeSend();
+            return;
+        }
+        const libsync::LibraryPlan &plan = *o.plan;
+        if (!plan.freeable.isEmpty()
+            && QMessageBox::question(
+                   this, tr("Free Up Space"),
+                   tr("%Ln photo file(s) on this computer (%1) aren't in the reference trees you "
+                      "keep, and are safely online. Delete these copies from this computer to "
+                      "free up the space?\n\nThey stay online, and download again if you open "
+                      "them or tick their trees.",
+                      nullptr, int(plan.freeable.size()))
+                       .arg(QLocale().formattedDataSize(plan.freeableBytes)))
+                   == QMessageBox::Yes) {
+            m_downloadAfterFreeUp = !plan.toDownload.isEmpty();
+            runPhotoSync(Mode::FreeUp, true);
+            return;
+        }
+        if (!plan.toDownload.isEmpty())
+            runPhotoSync(Mode::Download, true);
+        resumeSend();
+        return;
+    }
+    if (o.mode == Mode::FreeUp && std::exchange(m_downloadAfterFreeUp, false)) {
+        statusBar()->showMessage(detail, 10000);
+        runPhotoSync(Mode::Download, true);
+        updatePhotoStatus();
+        return;
+    }
+
+    if (m_opAfterPhotoUpload) {
+        if (o.mode != Mode::Upload && o.mode != Mode::Both) {
+            // A background sync was under way: now the upload the send waits on.
+            runPhotoSync(Mode::Upload, m_opAfterPhotoUploadUser);
+            updatePhotoStatus();
+            return;
+        }
+        const Op op = *std::exchange(m_opAfterPhotoUpload, std::nullopt);
+        const bool user = m_opAfterPhotoUploadUser;
+        bool proceed = true;
+        if (o.result && o.result->cancelled) {
+            proceed = false;
+        } else if (!o.ok || v.photosFailed > 0) {
+            proceed = QMessageBox::question(
+                          this, syncOpTitle(op),
+                          tr("Some photos couldn't be uploaded, so collaborators can't get them "
+                             "yet — PhotoLife tries again at the next sync.\n\n%1\n\nSend the "
+                             "catalogue anyway?")
+                              .arg(error))
+                      == QMessageBox::Yes;
+        }
+        if (proceed) {
+            m_photosUploadedForOp = true;
+            runSync(op, user);
+        } else {
+            m_closeAfterSync = false;
+            m_switchAfterSync.clear();
+        }
+    } else if (userInitiated) {
+        if (!o.ok || v.photosFailed > 0)
+            QMessageBox::warning(this, tr("Sync Photos"), detail.isEmpty() ? error : detail + QStringLiteral("\n\n") + error);
+        else
+            statusBar()->showMessage(detail, 10000);
+    }
+    updatePhotoStatus();
+}
+
+void MainWindow::updatePhotoStatus()
+{
+    ServerView &v = m_serverView;
+    const auto &config = m_app.photoSync().config();
+    v.photosEnabled = config.enabled();
+    v.photosOnlineOnly = int(CaptureDelegate::onlineOnly().size());
+    v.photosKept = config.allTrees ? tr("every photo")
+                                   : tr("the photos of %Ln reference tree(s)", nullptr,
+                                        int(config.trees.size()));
+    if (m_syncPhotosAction) {
+        m_syncPhotosAction->setVisible(v.photosEnabled);
+        m_syncPhotosAction->setEnabled(!v.photosRunning);
+    }
+    if (m_stopPhotosAction) {
+        m_stopPhotosAction->setVisible(v.photosEnabled);
+        m_stopPhotosAction->setEnabled(v.photosRunning);
+    }
+    if (m_photosHereAction) {
+        m_photosHereAction->setVisible(v.photosEnabled);
+        m_photosHereAction->setEnabled(!v.photosRunning);
+    }
+    if (m_photoStatusLabel) {
+        m_photoStatusLabel->setText(ServerBar::photosText(v));
+        m_photoStatusLabel->setVisible(v.photosEnabled);
+    }
+    if (m_statusDialog)
+        m_statusDialog->setView(v);
+}
+
+void MainWindow::stopPhotoSync()
+{
+    if (!m_app.photoSync().isRunning())
+        return;
+    m_app.photoSync().cancel();
+    m_serverView.photosPhase = tr("stopping after the current photo…");
+    updatePhotoStatus();
+}
+
+void MainWindow::choosePhotosOnComputer()
+{
+    auto &settings = m_app.settings();
+    Settings::CatalogueProfile profile = settings.activeProfile();
+    if (!profile.syncsPhotos())
+        return;
+    if (m_app.photoSync().isRunning()) {
+        QMessageBox::information(this, tr("Photos on This Computer"),
+                                 tr("Wait for the photo sync under way to finish first."));
+        return;
+    }
+    PhotosOnComputerDialog dialog(
+        libsync::PhotoSelection::treeStats(m_app.database().connectionName()),
+        profile.photosAllTrees, profile.photoTrees, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    profile.photosAllTrees = dialog.allTrees();
+    profile.photoTrees = dialog.tickedTrees();
+    settings.saveServerProfile(profile);
+    m_app.configureSync();
+    updatePhotoStatus();
+    // See what that means: photos to fetch, and copies here that can go.
+    m_selectionFollowUp = true;
+    runPhotoSync(libsync::PhotoSyncService::Mode::Check, true);
+}
+
+void MainWindow::fetchPhotos(const QStringList &paths, std::function<void()> then)
+{
+    auto &photos = m_app.photoSync();
+    if (paths.isEmpty()) {
+        if (then)
+            then();
+        return;
+    }
+    if (photos.isRunning()) {
+        QMessageBox::information(this, tr("Download Photos"),
+                                 tr("The photos are syncing at the moment — try again when "
+                                    "that's finished."));
+        return;
+    }
+    m_afterFetch = std::move(then);
+    m_photoTaskProgress = true;
+    beginTaskProgress(tr("Downloading Photos"), [this] {
+        m_app.photoSync().cancel();
+        showTaskCancelling(tr("Stopping after the current photo…"));
+    });
+    m_serverView.photosRunning = true;
+    if (!photos.fetch(paths)) {
+        m_photoTaskProgress = false;
+        m_serverView.photosRunning = false;
+        endTaskProgress();
+        m_afterFetch = {};
+    }
+    updatePhotoStatus();
+}
+
+QStringList MainWindow::onlineOnlyRenditions(const QList<int> &captureIds) const
+{
+    QStringList out;
+    if (captureIds.isEmpty() || CaptureDelegate::onlineOnly().isEmpty())
+        return out;
+    QStringList ids;
+    for (const int id : captureIds)
+        ids << QString::number(id);
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    if (!q.exec(QStringLiteral("SELECT path FROM rendition WHERE capture_id IN (%1)")
+                    .arg(ids.join(QLatin1Char(',')))))
+        return out;
+    while (q.next()) {
+        const QString path = q.value(0).toString();
+        if (CaptureDelegate::isOnlineOnly(path))
+            out << path;
+    }
+    return out;
+}
+
+QStringList MainWindow::onlineOnlyRenditionsOfTree(int projectId) const
+{
+    QStringList out;
+    if (CaptureDelegate::onlineOnly().isEmpty())
+        return out;
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral(
+        "SELECT r.path FROM rendition r WHERE r.capture_id IN ("
+        " SELECT m.capture_id FROM capture_match m"
+        " JOIN project_taxon pt ON pt.taxon_id = m.taxon_id"
+        " WHERE pt.project_id = ? AND m.status IN ('auto', 'confirmed'))"));
+    q.addBindValue(projectId);
+    if (!q.exec())
+        return out;
+    while (q.next()) {
+        const QString path = q.value(0).toString();
+        if (CaptureDelegate::isOnlineOnly(path))
+            out << path;
+    }
+    return out;
+}
+
 bool MainWindow::confirmSend(bool finishing)
 {
     if (!m_app.settings().syncConfirmSend())
@@ -5192,6 +5768,12 @@ void MainWindow::showServerStatus()
                 &MainWindow::showActivityLog);
         connect(m_statusDialog, &ServerStatusDialog::restoreBackupRequested, this,
                 &MainWindow::restoreBackup);
+        connect(m_statusDialog, &ServerStatusDialog::syncPhotosRequested, this, [this] {
+            if (m_app.photoSync().isRunning())
+                stopPhotoSync();
+            else
+                runPhotoSync(libsync::PhotoSyncService::Mode::Both, true);
+        });
     }
     m_statusDialog->setView(m_serverView);
     m_statusDialog->show();

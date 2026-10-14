@@ -302,7 +302,7 @@ void ProjectBuilder::fetchSpeciesPage(int page)
             ++m_speciesSeen;
             ++written;
             if (written % kYieldEvery == 0 || written == pageCount) {
-                emit progress(tr("Uploading to catalogue (%1 of %2 total resolved)")
+                emit progress(tr("Saving species to the catalogue (%1 of %2)")
                                   .arg(m_speciesSeen)
                                   .arg(m_speciesTotal),
                               written, pageCount);

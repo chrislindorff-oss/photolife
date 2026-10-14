@@ -146,6 +146,9 @@ private:
     bool resetIdentities(const QList<QString> &tables);
     bool bumpVersion(qint64 expected, const SyncIdentity &who, bool requireLock);
     bool setLocalVersion(qint64 version);
+    // Records `version` in the snapshot at `path` too: Discard copies the
+    // snapshot back over the catalogue, version and all.
+    bool setSnapshotVersion(const QString &path, qint64 version);
     struct Diff
     {
         QList<QVariantList> upserts;

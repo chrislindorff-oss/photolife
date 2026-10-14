@@ -27,6 +27,7 @@ private slots:
     void migratesEachOldSettingsShape_data();
     void migratesEachOldSettingsShape();
     void removingTheActiveServerFallsBackToLocal();
+    void photoStorageRoundTrip();
     void windowStateRoundTrip();
     void captureCaptionFieldsDefaultsToNameOnly();
     void captureCaptionFieldsRoundTrip();
@@ -274,6 +275,44 @@ void TestSettings::removingTheActiveServerFallsBackToLocal()
     QCOMPARE(s.profiles().size(), 1);
     s.setActiveProfile(QStringLiteral("no-such-server"));
     QVERIFY(s.activeProfile().isLocal());
+}
+
+void TestSettings::photoStorageRoundTrip()
+{
+    Settings s;
+    Settings::CatalogueProfile p;
+    p.server = true;
+    p.name = QStringLiteral("Club");
+    p.libraryRoot = QStringLiteral("/photos");
+    const QString plain = s.saveServerProfile(p);
+    QCOMPARE(s.profile(plain)->photoStore, QString::fromLatin1(Settings::kPhotoStoreNone));
+    QVERIFY(!s.profile(plain)->syncsPhotos());
+
+    p.id.clear();
+    p.name = QStringLiteral("Club with R2");
+    p.photoStore = QString::fromLatin1(Settings::kPhotoStoreS3);
+    p.s3.endpoint = QStringLiteral("https://acct.r2.cloudflarestorage.com");
+    p.s3.region = QStringLiteral("auto");
+    p.s3.bucket = QStringLiteral("club-photos");
+    p.s3.prefix = QStringLiteral("orchids");
+    p.s3.accessKey = QStringLiteral("AKID");
+    p.s3.secretKey = QStringLiteral("s3cr3t");
+    const auto back = s.profile(s.saveServerProfile(p));
+    QVERIFY(back && back->syncsPhotos());
+    QCOMPARE(back->s3.endpoint, p.s3.endpoint);
+    QCOMPARE(back->s3.bucket, p.s3.bucket);
+    QCOMPARE(back->s3.prefix, p.s3.prefix);
+    QCOMPARE(back->s3.accessKey, p.s3.accessKey);
+    QCOMPARE(back->s3.secretKey, p.s3.secretKey);
+    QVERIFY(back->s3.isComplete());
+    QVERIFY(back->photosAllTrees);
+
+    Settings::CatalogueProfile some = *back;
+    some.photosAllTrees = false;
+    some.photoTrees = {3, 7};
+    const auto again = s.profile(s.saveServerProfile(some));
+    QVERIFY(!again->photosAllTrees);
+    QCOMPARE(again->photoTrees, (QList<int>{3, 7}));
 }
 
 QTEST_GUILESS_MAIN(TestSettings)

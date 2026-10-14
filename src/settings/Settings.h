@@ -1,6 +1,9 @@
 #pragma once
 
+#include "collection/FileNamePattern.h"
 #include "db/CatalogueDescriptor.h"
+#include "libsync/DriveConfig.h"
+#include "libsync/S3Config.h"
 
 #include <QSettings>
 #include <QDateTime>
@@ -30,6 +33,10 @@ public:
     // The catalogue settings below -- databasePath(), watchedRoots(), the
     // sync ones, sourceSyncedAt() -- are the ACTIVE profile's.
 
+    static constexpr const char *kPhotoStoreNone = "none";
+    static constexpr const char *kPhotoStoreS3 = "s3";
+    static constexpr const char *kPhotoStoreDrive = "gdrive";
+
     struct CatalogueProfile
     {
         QString id;                  // "local", or a server's id
@@ -38,6 +45,17 @@ public:
         CatalogueDescriptor pg;      // server: its connection
         QString userName;            // server: your name there
         QString libraryRoot;         // server: this machine's photo library folder
+        // server: where the shared photos are kept online, if PhotoLife syncs
+        // them itself ("none": collaborators share the folder some other way).
+        QString photoStore = QString::fromLatin1(kPhotoStoreNone);
+        libsync::S3Config s3;        // photoStore == "s3"
+        libsync::DriveConfig drive;  // photoStore == "gdrive"
+        // Which photos this computer keeps: all, or only those of these
+        // reference trees (project ids) -- see libsync::PhotoSelection.
+        bool photosAllTrees = true;
+        QList<int> photoTrees;
+
+        bool syncsPhotos() const { return server && photoStore != QLatin1String(kPhotoStoreNone); }
 
         bool isLocal() const { return !server; }
     };
@@ -151,6 +169,26 @@ public:
     // the same dialog -- the collection itself, not its parent. Empty until used.
     QString exportCollectionFolder() const;
     void setExportCollectionFolder(const QString &path);
+
+    // Whether the same dialog's "Include RAW files" box was last ticked.
+    // True until the user has changed it.
+    bool exportIncludeRaw() const;
+    void setExportIncludeRaw(bool include);
+
+    // Whether the same dialog last exported thumbnails rather than the
+    // original files. False until the user has changed it.
+    bool exportThumbnailsOnly() const;
+    void setExportThumbnailsOnly(bool thumbnailsOnly);
+
+    // The same dialog's file-naming choices: whether files were last renamed
+    // by a pattern, the pattern itself (kept while renaming is off, so it
+    // isn't lost), and the author name used in it. Off and empty until set.
+    bool exportRenameFiles() const;
+    void setExportRenameFiles(bool rename);
+    collection::FileNamePattern exportFileNamePattern() const;
+    void setExportFileNamePattern(const collection::FileNamePattern &pattern);
+    QString exportAuthorName() const;
+    void setExportAuthorName(const QString &name);
 
 private:
     // The active server's id, or empty for the Local catalogue.

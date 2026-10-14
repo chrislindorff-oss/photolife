@@ -13,6 +13,7 @@ class TestHelpWindow : public QObject
 private slots:
     void loadsBundledHelp();
     void showPageScrollsToAnchor();
+    void catalogueDiagramIsBundledAndShown();
 };
 
 void TestHelpWindow::loadsBundledHelp()
@@ -33,6 +34,21 @@ void TestHelpWindow::showPageScrollsToAnchor()
     window.showPage(QStringLiteral("shortcuts"));   // must not crash on a known anchor
     window.showPage(QStringLiteral("does-not-exist"));
     QVERIFY(true);
+}
+
+void TestHelpWindow::catalogueDiagramIsBundledAndShown()
+{
+    const QImage image(QStringLiteral(":/help/catalogues.png"));
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), QSize(2800, 1680));
+
+    // The page refers to it, and the help viewer finds it from there.
+    HelpWindow window;
+    auto *browser = window.findChild<QTextBrowser *>();
+    QVERIFY(browser->toHtml().contains(QStringLiteral("catalogues.png")));
+    const QVariant loaded =
+        browser->loadResource(QTextDocument::ImageResource, QUrl(QStringLiteral("catalogues.png")));
+    QVERIFY(loaded.isValid());
 }
 
 QTEST_MAIN(TestHelpWindow)

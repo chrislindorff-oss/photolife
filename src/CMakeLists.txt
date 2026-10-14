@@ -9,7 +9,9 @@ qt_add_library(photolife_core STATIC
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
     collection/CollectionManifest.h collection/CollectionManifest.cpp
     collection/ExportEngine.h collection/ExportEngine.cpp
+    collection/FileNamePattern.h collection/FileNamePattern.cpp
     collection/ExportService.h collection/ExportService.cpp
+    collection/ThumbnailWriter.h collection/ThumbnailWriter.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
@@ -27,6 +29,19 @@ qt_add_library(photolife_core STATIC
     inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
     inat/InatSpeciesListFetcher.h inat/InatSpeciesListFetcher.cpp
     inat/SpeciesComparison.h inat/SpeciesComparison.cpp
+    libsync/BlockingHttp.h  libsync/BlockingHttp.cpp
+    libsync/DriveConfig.h
+    libsync/GoogleAuth.h    libsync/GoogleAuth.cpp
+    libsync/GoogleDriveStore.h libsync/GoogleDriveStore.cpp
+    libsync/LibraryState.h  libsync/LibraryState.cpp
+    libsync/LibraryStore.h
+    libsync/LibrarySync.h   libsync/LibrarySync.cpp
+    libsync/PhotoSelection.h libsync/PhotoSelection.cpp
+    libsync/PhotoSyncService.h libsync/PhotoSyncService.cpp
+    libsync/ThumbnailSync.h libsync/ThumbnailSync.cpp
+    libsync/S3Config.h
+    libsync/S3Store.h       libsync/S3Store.cpp
+    libsync/SigV4.h         libsync/SigV4.cpp
     lightroom/LightroomCatalogReader.h lightroom/LightroomCatalogReader.cpp
     lightroom/LightroomImportEngine.h lightroom/LightroomImportEngine.cpp
     lightroom/LightroomImporter.h lightroom/LightroomImporter.cpp
@@ -86,6 +101,7 @@ qt_add_library(photolife_core STATIC
     ui/CaptureDelegate.h    ui/CaptureDelegate.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
     ui/ExportDialog.h       ui/ExportDialog.cpp
+    ui/FileNamingDialog.h   ui/FileNamingDialog.cpp
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/InatCoordinateConfirmDialog.h ui/InatCoordinateConfirmDialog.cpp
@@ -98,6 +114,7 @@ qt_add_library(photolife_core STATIC
     ui/ManageCataloguesDialog.h ui/ManageCataloguesDialog.cpp
     ui/MapView.h            ui/MapView.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
+    ui/PhotosOnComputerDialog.h ui/PhotosOnComputerDialog.cpp
     ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp
     ui/ReferencePhotoDialog.h ui/ReferencePhotoDialog.cpp
     ui/ReviewPane.h         ui/ReviewPane.cpp
@@ -224,6 +241,7 @@ qt_add_resources(photolife_core "photolife_help"
     BASE "${CMAKE_SOURCE_DIR}/resources"
     FILES
         "${CMAKE_SOURCE_DIR}/resources/help/help.html"
+        "${CMAKE_SOURCE_DIR}/resources/help/catalogues.png"
 )
 
 # Application-wide QSS theme (see src/ui/Theme.cpp, which loads this at

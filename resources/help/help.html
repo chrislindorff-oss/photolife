@@ -206,8 +206,9 @@ month:</p>
       naturalised in a state counts as introduced there; one native there (even if
       also naturalised in parts of it) counts as native.</li>
 </ul>
-<p>Only species already in your trees are matched, so after building a new tree
-PhotoLife re-matches automatically. <b>Reference Tree &rarr; Update Threatened &amp;
+<p>Only species already in your trees are matched, so after building or importing a tree
+PhotoLife re-matches automatically, using the lists it has already downloaded (both are
+kept on disk and shared by all your catalogues).<b>Reference Tree &rarr; Update Threatened &amp;
 Introduced Status (Australia)</b> forces a fresh download of both, showing a progress
 window (list by list for the ALA, megabytes for the APC) that you can cancel; anything
 already saved is kept.</p>
@@ -368,10 +369,43 @@ tree's matched photos into a folder structure that mirrors the tree &mdash; a ti
 copy to share or back up. Your originals stay where they are. You can include
 automatic matches or just the ones you've confirmed, create folders for taxa you
 haven't photographed yet, match exactly what the tree is currently showing, and put
-common names in folder names. A preview shows which photos will be copied.</p>
+common names in folder names. Untick <b>Include RAW files</b> to copy only JPEGs and
+keep the collection small; photos that have only a RAW file are then left out. Or
+choose <b>Thumbnails only</b> to write a small 256&nbsp;px JPEG for each photo instead of
+its original files &mdash; made from its JPEG, or from its RAW file when there's no JPEG,
+and keeping its date taken, camera and GPS location. A collection keeps whichever it
+was first exported with. A preview shows which photos will be copied.</p>
+<h3 id="export-naming">Naming the exported files</h3>
+<p>Copies keep their original filenames unless you tick <b>Rename the copied files
+using a naming pattern</b>. <b>Naming Pattern&hellip;</b> opens a tool for building your
+own naming protocol from parts: scientific name, common name, date taken, time taken,
+year, town, state, country (from the photo's GPS location), author, the original
+filename, a sequence number and any fixed text you type. Put the parts in order, choose
+the separator and date format, and the preview shows the names a few of your own photos
+would get, for example <code>Caladenia_carnea_2020-01-09_Anglesea_001.jpg</code>.</p>
+<ul>
+  <li>A part a photo has no value for, such as a common name or a location, is left out
+      of that photo's name.</li>
+  <li>A photo's RAW and JPEG get the same name, each with its own extension.</li>
+  <li><b>Sequence number</b> numbers photos that would otherwise share a name (001, 002,
+      &hellip;) in date order. If two photos in a folder still end up with the same name,
+      the second gets &ldquo;&nbsp;(2)&rdquo;.</li>
+  <li><b>Author</b> is the name you type in the tool. The same name is used for every
+      file.</li>
+  <li>Only the copies are named this way. Your library photos keep their own names.</li>
+</ul>
+<p>A collection keeps the naming pattern it was first exported with, so updating it
+doesn't add second copies under new names. When an update renumbers photos, copies
+already in the collection are recognised by their content.</p>
 <p>Choose <b>Update an existing collection</b> to add new photos to a collection you
 exported before; PhotoLife checks it's the right folder, skips photos already there,
 and lists any files in the collection it didn't put there.</p>
+<p>Before copying anything, PhotoLife checks the destination can be written to, so a
+drive that's unplugged or a network or cloud mount that's offline is reported straight
+away. If the destination stops responding partway through, the export stops and says
+so. Photos that couldn't be copied are listed, and exporting again later picks up where
+it left off. Cloud-drive mounts (such as rclone) need to be online to export to; to
+work offline, export to a local folder and sync that folder to the cloud separately.</p>
 
 <h2 id="inat">iNaturalist tools</h2>
 <p>The <b>iNaturalist</b> view (toolbar, <b>View</b> menu or <b>iNaturalist Tools</b>
@@ -472,10 +506,15 @@ photos, folders and review queue:</p>
   <li><b>Your Local catalogue</b> &mdash; your own photo library on your drives. Not
       shared and never synced.</li>
   <li><b>Server catalogues</b> &mdash; shared with collaborators through a Postgres
-      server, with the photos on a shared platform such as Google Drive or OpenDrive. Each
+      server, with the photos in a storage bucket PhotoLife syncs or a folder you share some
+      other way (see <a href="#photo-storage">Sharing the photos</a>). Each
       has a working copy on your computer (so PhotoLife stays fast) that syncs with the
       server only when you ask. You can belong to several.</li>
 </ul>
+<p align="center"><img src="catalogues.png" width="700"
+alt="How Local and Server catalogues, photo library folders and online photo storage link together"><br>
+<i>Left: a Local catalogue. Right: a Server catalogue, where the catalogue and the photos
+each have a copy online and one on every computer.</i></p>
 <p>The top right of the window always says which catalogue is open &mdash; <i>Local
 catalogue</i> with a <i>LOCAL CATALOGUE</i> badge, or <i>Server: name</i> with the server
 badge &mdash; and so does the window title. Click it (or <b>File &rarr; Switch
@@ -530,6 +569,95 @@ merge.</p>
   <li>Photos outside your library folder can't be opened by the others; a sync that
       sends any says how many.</li>
 </ul>
+<h3 id="photo-storage">Sharing the photos</h3>
+<p>The server holds the catalogue, not the photos. Each person needs the photos in their
+own photo library folder, and there are two ways to get them there (<b>Server &rarr; Server
+Settings&hellip; &rarr; Photo storage</b>):</p>
+<ul>
+  <li><b>Shared some other way</b> &mdash; you keep the folder in step yourself, for example
+      with a cloud-drive app. PhotoLife just reads the folder.</li>
+  <li><b>PhotoLife syncs them</b> &mdash; the photos are kept in an S3-compatible storage
+      bucket (Cloudflare R2, Backblaze B2, Amazon S3&hellip;), and PhotoLife keeps a full
+      copy in your photo library folder. Scans and thumbnails work at local-disk speed, and
+      everything works offline. Enter the bucket's endpoint, region, bucket name and an
+      access key, then <b>Test Photo Storage</b>. Everyone uses the same bucket (and
+      folder in it, if any), each with their own key if you like.</li>
+  <li><b>PhotoLife syncs them &mdash; a shared Google Drive folder</b> &mdash; the same, but
+      the photos are kept in a Google Drive folder shared with everyone, as ordinary folders
+      and files you can also see on the Drive website (under <i>library</i>, with
+      thumbnails under <i>thumbs</i>). No mounting or Drive app is needed.</li>
+</ul>
+<p><b>Setting up Google Drive</b> (once, by one person):</p>
+<ol>
+  <li>In <a href="https://console.cloud.google.com/">Google Cloud Console</a>, create a
+      project, enable the <b>Google Drive API</b>, and set up the <b>OAuth consent
+      screen</b>. Add each collaborator's Google account as a test user &mdash; or, if
+      you're all in one Google Workspace, make it <i>Internal</i>.</li>
+  <li>Under <b>Credentials</b>, create an <b>OAuth client ID</b> of type <b>Desktop
+      app</b>, and share its client ID and secret with the group. For a desktop app the
+      secret isn't really secret; sign-ins are protected another way (PKCE).</li>
+  <li>Create the shared folder in Drive and share it (as Editor) with everyone.</li>
+</ol>
+<p>Then each person, in <b>Server Settings &rarr; Photo storage</b>, enters the client ID
+and secret, pastes the folder's link, clicks <b>Sign In with Google&hellip;</b> and
+approves in the browser, then <b>Test Photo Storage</b>. Until Google reviews the OAuth
+client, it works only for the listed test users, and each sign-in lasts 7 days &mdash;
+when it runs out, PhotoLife says so and you sign in again (an <i>Internal</i> Workspace
+client doesn't have this limit). For a large library, an S3-compatible bucket is simpler
+to run.</p>
+<p>When PhotoLife syncs the photos:</p>
+<ul>
+  <li><b>Sync</b> and <b>Finish Editing</b> upload your new and changed photos <i>before</i>
+      sending the catalogue, so the others can always get every photo it refers to. If some
+      can't be uploaded, PhotoLife asks before sending the catalogue anyway.</li>
+  <li>New photos from the others download in the background when PhotoLife starts and
+      after <b>Get Latest</b>. <b>Server &rarr; Sync Photos</b> does both directions at any
+      time. The status bar and Server Status show how many are waiting.</li>
+  <li>Photos are compared by content, so a first sync of a folder that's already in both
+      places (say, one you used to share with a cloud drive) transfers nothing that already
+      matches.</li>
+  <li>A photo changed both here and online is kept twice: yours under its name and theirs
+      beside it as <i>name (from Alex).jpg</i>.</li>
+  <li>Nothing is ever deleted online. A photo deleted online is moved from your folder to
+      <tt>.photolife-trash</tt> inside it, by date, rather than deleted. A photo you delete
+      here stays online and isn't downloaded again unless someone changes it.</li>
+  <li>Downloads are checked against the bucket's checksum before they replace anything,
+      and an interrupted sync carries on where it stopped next time.</li>
+  <li>You can stop a photo sync at any time: <b>Server &rarr; Stop Photo Sync</b>, the
+      <b>Stop Photo Sync</b> button in Server Status, or <b>Cancel</b> in the upload window
+      before a Sync. Every photo already transferred stays done; the next sync (Sync Photos,
+      or your next Sync) carries on with the rest. A photo stopped half-way is sent again
+      from its start. If you stop the upload before a Sync, the catalogue isn't sent
+      either, so it never refers to photos the others can't get.</li>
+  <li>Only photos (JPEG, PNG, TIFF and RAW files) are synced; sidecar and other files
+      aren't.</li>
+</ul>
+<h3 id="photos-here">Keeping only some photos on this computer</h3>
+<p>A big shared library doesn't have to fit on every computer. <b>Server &rarr; Photos on
+This Computer&hellip;</b> keeps either every photo, or only the photos of the reference
+trees you tick &mdash; each listed with how many photos it has and how much space they
+take. Everyone chooses for themselves; it changes nothing for the others.</p>
+<ul>
+  <li>A photo belongs to a tree when it's matched (automatically or confirmed) to a taxon
+      in that tree, so a photo can be in several trees. It's kept if it's in any tree you
+      tick.</li>
+  <li>Photos still waiting for review, photos matched to taxa that aren't in any tree, and
+      photos you've downloaded by opening them are always kept. A RAW and its JPEG always
+      go together.</li>
+  <li>The rest stay <b>online only</b>: they still appear everywhere with their thumbnails
+      and an <i>ONLINE</i> badge. Opening one offers to download it, right-click &rarr;
+      <b>Download to This Computer</b> fetches a selection, and exporting a tree offers to
+      download its online-only photos first.</li>
+  <li>After you untick trees, PhotoLife offers to <b>free up space</b> by deleting the
+      copies here of photos you no longer keep. Only copies that are unchanged and safely
+      online are deleted; tick the tree again and they download again.</li>
+  <li>Your own new photos are always uploaded, whichever trees you keep, and
+      <b>Library &rarr; Remove Photos With Missing Files&hellip;</b> never counts online-only photos as
+      missing.</li>
+</ul>
+<p>Cloudflare R2 has no charge for downloads, so it suits a library several people
+download in full. The access key and secret are stored in your OS settings, not
+encrypted, like the catalogue password.</p>
 
 <h2 id="files">Where PhotoLife keeps things</h2>
 <p>The catalogue database, thumbnail cache, reference-photo cache and map-tile cache

@@ -294,6 +294,20 @@ bool CatalogueSync::setLocalVersion(qint64 version)
     return true;
 }
 
+bool CatalogueSync::setSnapshotVersion(const QString &path, qint64 version)
+{
+    if (!attach(path, QStringLiteral("nextbase")))
+        return false;
+    QSqlQuery q(QSqlDatabase::database(m_local, false));
+    q.prepare(QStringLiteral("UPDATE nextbase.catalogue_sync SET version = ? WHERE id = 1"));
+    q.addBindValue(version);
+    const bool ok = q.exec();
+    if (!ok)
+        fail(q.lastError().text());
+    detach(QStringLiteral("nextbase"));
+    return ok;
+}
+
 bool CatalogueSync::snapshotTo(const QString &path)
 {
     const QString tmp = path + QStringLiteral(".tmp");
@@ -607,6 +621,11 @@ std::optional<CatalogueSync::PushResult> CatalogueSync::push(const QString &base
 
     result.newVersion = base + 1;
     // The frozen copy is exactly what the server now has: it's the new base.
+    // It was taken before the push, so it still says the old version.
+    if (!setSnapshotVersion(next, result.newVersion)) {
+        fail(QStringLiteral("sent, but could not update the sync snapshot: %1").arg(m_error));
+        return std::nullopt;
+    }
     QFile::remove(basePath);
     if (!QFile::rename(next, basePath) || !setLocalVersion(result.newVersion)) {
         fail(QStringLiteral("sent, but could not update the sync snapshot"));
@@ -704,6 +723,10 @@ std::optional<CatalogueSync::PushResult> CatalogueSync::publish(const QString &b
     }
     detach(QStringLiteral("snap"));
     result.newVersion = state->version + 1;
+    if (!setSnapshotVersion(next, result.newVersion)) {
+        fail(QStringLiteral("published, but could not save the sync snapshot: %1").arg(m_error));
+        return std::nullopt;
+    }
     QFile::remove(basePath);
     if (!QFile::rename(next, basePath) || !setLocalVersion(result.newVersion)) {
         fail(QStringLiteral("published, but could not save the sync snapshot"));

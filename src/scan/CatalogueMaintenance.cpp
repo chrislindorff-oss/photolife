@@ -114,7 +114,8 @@ int CatalogueMaintenance::purgeFolder(const QString &rootPath)
     return foldersRemoved > 0 ? captureCount : 0;
 }
 
-QList<CatalogueMaintenance::MissingCapture> CatalogueMaintenance::capturesWithMissingFiles() const
+QList<CatalogueMaintenance::MissingCapture>
+CatalogueMaintenance::capturesWithMissingFiles(const QSet<QString> &elsewhere) const
 {
     m_error.clear();
     QList<MissingCapture> out;
@@ -153,7 +154,7 @@ QList<CatalogueMaintenance::MissingCapture> CatalogueMaintenance::capturesWithMi
         const QString path = q.value(3).toString();
         if (path.isEmpty())
             continue;
-        if (QFileInfo::exists(path))
+        if (elsewhere.contains(path) || QFileInfo::exists(path))
             anyPresent = true;
         else
             pending.missingPaths.append(path);

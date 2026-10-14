@@ -49,6 +49,7 @@ class TestHttpClient : public QObject
 private slots:
     void servesSuccessfulBody();
     void serialisesAndRateLimits();
+    void backgroundRequestsWaitForNormalOnes();
     void usesEtagAndServesCachedBodyOn304();
     void retriesTransientFailureThenSucceeds();
     void doesNotRetryClientError();
@@ -105,6 +106,38 @@ void TestHttpClient::serialisesAndRateLimits()
     // Three requests, two >=120 ms gaps between dispatches.
     QVERIFY2(clock.elapsed() >= 220, qPrintable(QString::number(clock.elapsed())));
     QCOMPARE(raw->received.size(), 3);
+}
+
+void TestHttpClient::backgroundRequestsWaitForNormalOnes()
+{
+    auto transport = std::make_unique<FakeTransport>();
+    FakeTransport *raw = transport.get();
+    transport->responder = [](const Transport::Request &, int) {
+        return okReply(QByteArrayLiteral("x"));
+    };
+
+    HttpClient client(std::move(transport), nullptr);
+    client.setMinRequestIntervalMs(0);
+
+    int completed = 0;
+    auto get = [&](const QString &path, HttpClient::Priority priority) {
+        client.get(QUrl(QStringLiteral("https://example.test/") + path),
+                   [&](HttpResponse) { ++completed; }, QString(), priority);
+    };
+    // bg1 is dispatched at once (nothing else queued); the rest queue behind it.
+    get(QStringLiteral("bg1"), HttpClient::Priority::Background);
+    get(QStringLiteral("bg2"), HttpClient::Priority::Background);
+    get(QStringLiteral("n1"), HttpClient::Priority::Normal);
+    get(QStringLiteral("bg3"), HttpClient::Priority::Background);
+    get(QStringLiteral("n2"), HttpClient::Priority::Normal);
+    QCOMPARE(client.queuedCount(), 4);
+
+    QTRY_COMPARE(completed, 5);
+    QStringList order;
+    for (const auto &r : raw->received)
+        order << r.url.path().mid(1);
+    QCOMPARE(order, (QStringList{QStringLiteral("bg1"), QStringLiteral("n1"), QStringLiteral("n2"),
+                                 QStringLiteral("bg2"), QStringLiteral("bg3")}));
 }
 
 void TestHttpClient::usesEtagAndServesCachedBodyOn304()

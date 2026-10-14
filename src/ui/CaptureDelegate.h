@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QSet>
 #include <QStyledItemDelegate>
 
 namespace pl {
@@ -35,6 +36,12 @@ public:
 
     void paint(QPainter *painter, const QStyleOptionViewItem &option,
               const QModelIndex &index) const override;
+
+    // Photos kept online but not on this computer (absolute paths), badged
+    // ONLINE in every grid. Set by MainWindow after each photo sync.
+    static void setOnlineOnly(QSet<QString> paths);
+    static bool isOnlineOnly(const QString &path);
+    static const QSet<QString> &onlineOnly();
 };
 
 } // namespace pl

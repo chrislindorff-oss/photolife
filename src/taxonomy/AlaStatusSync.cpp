@@ -3,9 +3,14 @@
 #include "net/HttpClient.h"
 #include "taxonomy/TaxonomyStore.h"
 
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -34,9 +39,79 @@ QJsonDocument parseJson(const net::HttpResponse &resp, QString *error)
 
 } // namespace
 
-AlaStatusSync::AlaStatusSync(net::HttpClient &http, TaxonomyStore &store, QObject *parent)
-    : QObject(parent), m_http(http), m_store(store), m_baseUrl(kBaseUrl)
+AlaStatusSync::AlaStatusSync(net::HttpClient &http, TaxonomyStore &store, QString cacheDir,
+                             QObject *parent)
+    : QObject(parent), m_http(http), m_store(store), m_cacheDir(std::move(cacheDir)),
+      m_baseUrl(kBaseUrl)
 {
+}
+
+QString AlaStatusSync::cachePath() const
+{
+    return m_cacheDir.isEmpty() ? QString()
+                                : QDir(m_cacheDir).filePath(QStringLiteral("ala-lists.json"));
+}
+
+// The kept copy of the lists, if there is one young enough to use.
+bool AlaStatusSync::loadCache()
+{
+    const QString path = cachePath();
+    if (path.isEmpty())
+        return false;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    const QDateTime fetchedAt =
+        QDateTime::fromString(root.value(QStringLiteral("fetchedAt")).toString(), Qt::ISODate);
+    if (!fetchedAt.isValid() || fetchedAt.daysTo(QDateTime::currentDateTimeUtc()) > kMaxAgeDays)
+        return false;
+
+    QList<List> lists;
+    for (const QJsonValue &lv : root.value(QStringLiteral("lists")).toArray()) {
+        const QJsonObject l = lv.toObject();
+        List list{l.value(QStringLiteral("id")).toString(), l.value(QStringLiteral("name")).toString(),
+                  l.value(QStringLiteral("place")).toInteger(), {}};
+        for (const QJsonValue &iv : l.value(QStringLiteral("items")).toArray()) {
+            const QJsonObject it = iv.toObject();
+            QStringList names;
+            for (const QJsonValue &n : it.value(QStringLiteral("names")).toArray())
+                names << n.toString();
+            list.items.append({names, it.value(QStringLiteral("status")).toString()});
+        }
+        if (!list.id.isEmpty() && list.placeInatId > 0)
+            lists.append(list);
+    }
+    if (lists.isEmpty())
+        return false;
+    m_lists = lists;
+    return true;
+}
+
+void AlaStatusSync::saveCache() const
+{
+    const QString path = cachePath();
+    if (path.isEmpty() || !QDir().mkpath(m_cacheDir))
+        return;
+    QJsonArray lists;
+    for (const List &list : m_lists) {
+        QJsonArray items;
+        for (const Item &item : list.items)
+            items.append(QJsonObject{{QStringLiteral("names"), QJsonArray::fromStringList(item.names)},
+                                     {QStringLiteral("status"), item.status}});
+        lists.append(QJsonObject{{QStringLiteral("id"), list.id},
+                                 {QStringLiteral("name"), list.name},
+                                 {QStringLiteral("place"), list.placeInatId},
+                                 {QStringLiteral("items"), items}});
+    }
+    const QJsonObject root{
+        {QStringLiteral("fetchedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+        {QStringLiteral("lists"), lists}};
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return;
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    file.commit();   // not fatal if it fails: the next run just downloads again
 }
 
 std::optional<qint64> AlaStatusSync::placeForRegion(const QString &region)
@@ -60,7 +135,7 @@ std::optional<qint64> AlaStatusSync::placeForRegion(const QString &region)
     return *it;
 }
 
-void AlaStatusSync::start()
+void AlaStatusSync::start(bool forceDownload)
 {
     if (m_running)
         return;
@@ -69,7 +144,21 @@ void AlaStatusSync::start()
     m_lists.clear();
     m_listIndex = 0;
     m_matched = 0;
+    m_background = !forceDownload;
 
+    m_downloading = forceDownload || !loadCache();
+    if (!m_downloading) {
+        // Matched on a later turn, so finished() never fires inside start().
+        m_nameIndex = m_store.leafTaxaByFoldedName();
+        QTimer::singleShot(0, this, [this] {
+            if (!checkCancelled())
+                fetchNextList();
+        });
+        return;
+    }
+
+    const auto priority =
+        m_background ? net::HttpClient::Priority::Background : net::HttpClient::Priority::Normal;
     QUrl url(m_baseUrl + QStringLiteral("/speciesList"));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("isThreatened"), QStringLiteral("eq:true"));
@@ -103,21 +192,29 @@ void AlaStatusSync::start()
         }
         m_nameIndex = m_store.leafTaxaByFoldedName();
         fetchNextList();
-    });
+    }, QString(), priority);
 }
 
 void AlaStatusSync::fetchNextList()
 {
     if (m_listIndex >= m_lists.size()) {
+        if (m_downloading)
+            saveCache();
         m_running = false;
         m_nameIndex.clear();
         emit finished(true, QString(), int(m_lists.size()), m_matched);
         return;
     }
-    m_offset = 0;
-    m_items.clear();
     emit progress(m_listIndex, int(m_lists.size()), m_lists.at(m_listIndex).name);
-    fetchPage();
+    if (m_downloading) {
+        m_offset = 0;
+        m_lists[m_listIndex].items.clear();
+        fetchPage();
+        return;
+    }
+    // From the kept copy: one list per event-loop turn, so the window stays
+    // responsive and Cancel is noticed.
+    storeList();
 }
 
 bool AlaStatusSync::checkCancelled()
@@ -164,7 +261,7 @@ void AlaStatusSync::fetchPage()
                 }
             }
             if (!names.isEmpty() && !status.isEmpty())
-                m_items.append({names, status});
+                m_lists[m_listIndex].items.append({names, status});
         }
         if (items.size() == kPageSize) {
             m_offset += kPageSize;
@@ -172,14 +269,15 @@ void AlaStatusSync::fetchPage()
             return;
         }
         storeList();
-    });
+    }, QString(), m_background ? net::HttpClient::Priority::Background
+                               : net::HttpClient::Priority::Normal);
 }
 
 void AlaStatusSync::storeList()
 {
     const List &list = m_lists.at(m_listIndex);
     QList<TaxonomyStore::SourcedFact> rows;
-    for (const Item &item : std::as_const(m_items)) {
+    for (const Item &item : list.items) {
         for (const QString &name : item.names) {
             const auto it = m_nameIndex.constFind(TaxonomyStore::foldListName(name));
             if (it != m_nameIndex.constEnd()) {
@@ -196,7 +294,14 @@ void AlaStatusSync::storeList()
     }
     m_matched += written;
     ++m_listIndex;
-    fetchNextList();
+    if (m_downloading) {
+        fetchNextList();
+        return;
+    }
+    QTimer::singleShot(0, this, [this] {
+        if (!checkCancelled())
+            fetchNextList();
+    });
 }
 
 void AlaStatusSync::fail(const QString &error)

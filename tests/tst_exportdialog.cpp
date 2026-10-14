@@ -13,6 +13,7 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/ExportDialog.h"
+#include "ui/FileNamingDialog.h"
 
 using namespace pl;
 
@@ -32,6 +33,12 @@ private slots:
     void offersTheCollectionWhenItsParentIsChosen();
     void requiresConfirmationForAnUnrecognisedFolder();
     void refusesAMissingFolder();
+    void includeRawFollowsTheCheckbox();
+    void thumbnailsOnlyDisablesRawAndSetsTheSize();
+    void updateLocksThumbnailsToTheCollection();
+    void newCollectionUsesTheUsersNamingPattern();
+    void updateLocksNamingToTheCollection();
+    void namingDialogRoundTripsAPattern();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -44,6 +51,7 @@ private:
     std::unique_ptr<ExportDialog> openUpdate(const QString &folder);
     static bool okEnabled(ExportDialog &d);
     static QCheckBox *checkBox(ExportDialog &d, const QString &textStart);
+    static QRadioButton *radio(ExportDialog &d, const QString &textStart);
     QString makeDir(const QString &relative);
 };
 
@@ -88,6 +96,15 @@ QCheckBox *TestExportDialog::checkBox(ExportDialog &d, const QString &textStart)
     for (QCheckBox *c : d.findChildren<QCheckBox *>()) {
         if (c->text().startsWith(textStart))
             return c;
+    }
+    return nullptr;
+}
+
+QRadioButton *TestExportDialog::radio(ExportDialog &d, const QString &textStart)
+{
+    for (QRadioButton *r : d.findChildren<QRadioButton *>()) {
+        if (r->text().startsWith(textStart))
+            return r;
     }
     return nullptr;
 }
@@ -189,6 +206,137 @@ void TestExportDialog::refusesAMissingFolder()
 {
     auto d = openUpdate(m_tmp.filePath(QStringLiteral("does-not-exist")));
     QVERIFY(!okEnabled(*d));
+}
+
+void TestExportDialog::includeRawFollowsTheCheckbox()
+{
+    // Starts from the remembered choice passed in...
+    ExportDialog off(*m_db, *m_thumbs, m_projectId, QStringLiteral("Test Tree"),
+                     QList<qint64>{1}, false, QString(), QString(), false);
+    QCheckBox *offBox = checkBox(off, QStringLiteral("Include RAW files"));
+    QVERIFY(offBox);
+    QVERIFY(!offBox->isChecked());
+    QVERIFY(!off.options().includeRaw);
+
+    // ...and the checkbox decides what's exported.
+    offBox->setChecked(true);
+    QVERIFY(off.options().includeRaw);
+
+    ExportDialog on(*m_db, *m_thumbs, m_projectId, QStringLiteral("Test Tree"),
+                    QList<qint64>{1}, false, QString(), QString());
+    QVERIFY(checkBox(on, QStringLiteral("Include RAW files"))->isChecked());
+    QVERIFY(on.options().includeRaw);
+}
+
+void TestExportDialog::thumbnailsOnlyDisablesRawAndSetsTheSize()
+{
+    ExportDialog d(*m_db, *m_thumbs, m_projectId, QStringLiteral("Test Tree"), QList<qint64>{1},
+                   false, QString(), QString());
+    QVERIFY(radio(d, QStringLiteral("Original files"))->isChecked());
+    QCOMPARE(d.options().thumbnailPx, 0);
+
+    radio(d, QStringLiteral("Thumbnails only"))->click();
+    QVERIFY(!checkBox(d, QStringLiteral("Include RAW files"))->isEnabled());
+    QCOMPARE(d.options().thumbnailPx, thumb::ThumbnailCache::kGridPx);
+
+    // The remembered choice is where it starts.
+    ExportDialog remembered(*m_db, *m_thumbs, m_projectId, QStringLiteral("Test Tree"),
+                            QList<qint64>{1}, false, QString(), QString(), true, true);
+    QVERIFY(radio(remembered, QStringLiteral("Thumbnails only"))->isChecked());
+    QCOMPARE(remembered.options().thumbnailPx, thumb::ThumbnailCache::kGridPx);
+}
+
+void TestExportDialog::updateLocksThumbnailsToTheCollection()
+{
+    const QString folder = makeDir(QStringLiteral("thumbs/Test Tree"));
+    collection::CollectionManifest m;
+    m.projectId = m_projectId;
+    m.projectName = QStringLiteral("Test Tree");
+    m.thumbnailPx = thumb::ThumbnailCache::kGridPx;
+    m.updatedAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(m.write(folder));
+
+    auto d = openUpdate(folder);
+    QRadioButton *thumbnails = radio(*d, QStringLiteral("Thumbnails only"));
+    QVERIFY(thumbnails->isChecked());
+    QVERIFY(!thumbnails->isEnabled());
+    QVERIFY(!radio(*d, QStringLiteral("Original files"))->isEnabled());
+    QCOMPARE(d->options().thumbnailPx, thumb::ThumbnailCache::kGridPx);
+}
+
+void TestExportDialog::newCollectionUsesTheUsersNamingPattern()
+{
+    collection::FileNamePattern pattern;
+    pattern.parts = {{collection::NameToken::ScientificName, {}},
+                     {collection::NameToken::Author, {}}};
+
+    ExportDialog d(*m_db, *m_thumbs, m_projectId, QStringLiteral("Test Tree"), QList<qint64>{1},
+                   false, m_tmp.path(), QString());
+    d.setFileNaming(true, pattern, QStringLiteral("C Lee"));
+    QCheckBox *rename = checkBox(d, QStringLiteral("&Rename"));
+    QVERIFY(rename->isChecked());
+    QVERIFY(rename->isEnabled());
+    QCOMPARE(d.options().fileNamePattern, pattern);
+    QCOMPARE(d.options().authorName, QStringLiteral("C Lee"));
+
+    // Unticked: original names, but the pattern is kept for next time.
+    rename->setChecked(false);
+    QVERIFY(d.options().fileNamePattern.isEmpty());
+    QCOMPARE(d.fileNamePattern(), pattern);
+    QVERIFY(!d.renamesFiles());
+}
+
+void TestExportDialog::updateLocksNamingToTheCollection()
+{
+    collection::FileNamePattern collectionPattern;
+    collectionPattern.parts = {{collection::NameToken::ScientificName, {}},
+                               {collection::NameToken::Sequence, {}}};
+    const QString folder = makeDir(QStringLiteral("named/Test Tree"));
+    collection::CollectionManifest m;
+    m.projectId = m_projectId;
+    m.projectName = QStringLiteral("Test Tree");
+    m.fileNamePattern = collectionPattern;
+    m.authorName = QStringLiteral("A Author");
+    m.updatedAt = QDateTime::currentDateTimeUtc();
+    QVERIFY(m.write(folder));
+
+    collection::FileNamePattern userPattern;
+    userPattern.parts = {{collection::NameToken::DateTaken, {}}};
+    auto d = openUpdate(folder);
+    d->setFileNaming(true, userPattern, QStringLiteral("Someone Else"));
+
+    QCheckBox *rename = checkBox(*d, QStringLiteral("&Rename"));
+    QVERIFY(rename->isChecked());
+    QVERIFY(!rename->isEnabled());
+    QCOMPARE(d->options().fileNamePattern, collectionPattern);
+    QCOMPARE(d->options().authorName, QStringLiteral("A Author"));
+    QCOMPARE(d->fileNamePattern(), userPattern);   // the user's own choice is untouched
+
+    // A collection from before naming patterns kept the original names.
+    const QString older = makeDir(QStringLiteral("older/Test Tree"));
+    m.fileNamePattern = {};
+    QVERIFY(m.write(older));
+    d->findChild<QLineEdit *>()->setText(older);
+    QVERIFY(!rename->isChecked());
+    QVERIFY(d->options().fileNamePattern.isEmpty());
+}
+
+void TestExportDialog::namingDialogRoundTripsAPattern()
+{
+    // No pattern yet: starts from the default.
+    FileNamingDialog fresh(*m_db, m_projectId, {}, QString());
+    QCOMPARE(fresh.pattern(), FileNamingDialog::defaultPattern());
+
+    collection::FileNamePattern pattern;
+    pattern.parts = {{collection::NameToken::Text, QStringLiteral("ref")},
+                     {collection::NameToken::Country, {}},
+                     {collection::NameToken::TimeTaken, {}}};
+    pattern.separator = QStringLiteral("~");   // not one of the dialog's choices
+    pattern.dateFormat = QStringLiteral("yy.MM.dd");
+    pattern.spacesToSeparator = true;
+    FileNamingDialog d(*m_db, m_projectId, pattern, QStringLiteral("  C Lee "));
+    QCOMPARE(d.pattern(), pattern);
+    QCOMPARE(d.authorName(), QStringLiteral("C Lee"));
 }
 
 QTEST_MAIN(TestExportDialog)

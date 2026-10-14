@@ -1,5 +1,7 @@
 #pragma once
 
+#include "collection/FileNamePattern.h"
+
 #include <QDateTime>
 #include <QString>
 
@@ -20,6 +22,11 @@ struct CollectionManifest
     int projectId = 0;
     QString projectName;
     bool includeCommonName = false;
+    int thumbnailPx = 0;   // ExportOptions::thumbnailPx the collection was built with
+    // How files were named (empty = original filenames) and the author used
+    // in those names. An update reuses both, so names stay the same.
+    FileNamePattern fileNamePattern;
+    QString authorName;
     QDateTime createdAt;
     QDateTime updatedAt;
 

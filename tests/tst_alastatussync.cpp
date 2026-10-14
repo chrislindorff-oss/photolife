@@ -1,11 +1,13 @@
 #include <QtTest>
 
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QTemporaryDir>
 
 #include "FakeTransport.h"
 #include "db/Database.h"
@@ -60,6 +62,7 @@ private slots:
     void recordsAuthoritativeStateListsForCachedTaxa();
     void mapsRegionsToINaturalistPlaces();
     void cancelStopsTheRun();
+    void rematchesFromKeptListsWithoutDownloading();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -208,6 +211,56 @@ void TestAlaStatusSync::cancelStopsTheRun()
     QVERIFY(!sync.isRunning());
     QCOMPARE(m_transport->received.size(), 1);   // no list items were fetched
     QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM taxon_status")), 0);
+}
+
+void TestAlaStatusSync::rematchesFromKeptListsWithoutDownloading()
+{
+    const QJsonArray page{item(QStringLiteral("Caladenia amoena"), QStringLiteral("Endangered")),
+                          item(QStringLiteral("Pterostylis newcomer"), QStringLiteral("Vulnerable"))};
+    auto owned = std::make_unique<FakeTransport>();
+    owned->responder = [&](const Transport::Request &r, int) {
+        if (r.url.toString().contains(QStringLiteral("/speciesList?")))
+            return FakeTransport::ok(lists());
+        return FakeTransport::ok(QJsonDocument(page).toJson());
+    };
+    m_transport = owned.get();
+    m_http = std::make_unique<HttpClient>(std::move(owned), nullptr);
+    m_http->setMinRequestIntervalMs(0);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AlaStatusSync sync(*m_http, *m_store, dir.path());
+    sync.setBaseUrl(QStringLiteral("https://api.test/specieslist/ws"));
+    QSignalSpy spy(&sync, &AlaStatusSync::finished);
+
+    sync.start();   // nothing kept yet: downloads, and keeps the lists
+    QVERIFY(spy.wait(10000));
+    QVERIFY2(spy.at(0).at(0).toBool(), qPrintable(spy.at(0).at(1).toString()));
+    QCOMPARE(m_transport->received.size(), 2);   // lists + one page
+    QVERIFY(QFile::exists(sync.cachePath()));
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM taxon_status")), 1);
+
+    // A new tree brings a listed species: re-matched from the kept copy.
+    Taxon t;
+    t.inatId = 5;
+    t.rank = QStringLiteral("species");
+    t.name = QStringLiteral("Pterostylis newcomer");
+    m_store->upsertTaxon(t);
+    sync.start();
+    QVERIFY(spy.wait(10000));
+    QVERIFY2(spy.at(1).at(0).toBool(), qPrintable(spy.at(1).at(1).toString()));
+    QCOMPARE(spy.at(1).at(2).toInt(), 1);
+    QCOMPARE(spy.at(1).at(3).toInt(), 2);
+    QCOMPARE(m_transport->received.size(), 2);   // no requests
+    QCOMPARE(scalar(QStringLiteral(
+                 "SELECT COUNT(*) FROM taxon_status ts JOIN taxon t ON t.id = ts.taxon_id "
+                 "WHERE t.inat_id = 5 AND ts.status = 'Vulnerable' AND ts.place_inat_id = 7830")),
+             1);
+
+    sync.start(true);   // forced: downloads again
+    QVERIFY(spy.wait(10000));
+    QVERIFY(spy.at(2).at(0).toBool());
+    QCOMPARE(m_transport->received.size(), 4);
 }
 
 QTEST_GUILESS_MAIN(TestAlaStatusSync)

@@ -21,6 +21,7 @@
 #include "scan/ScanService.h"
 #include "settings/Settings.h"
 #include "sync/SyncService.h"
+#include "libsync/PhotoSyncService.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/MainWindow.h"
@@ -62,6 +63,7 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
     qInfo() << "Catalogue:" << m_settings->activeProfile().name;
 
     m_syncService = std::make_unique<sync::SyncService>();
+    m_photoSync = std::make_unique<libsync::PhotoSyncService>();
     configureSync();
     // A catalogue staged last session -- downloaded from the shared server,
     // a discard, or a restored backup -- replaces this one now, before
@@ -117,6 +119,8 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
                                      .toUtf8();
     m_http->setUserAgent(userAgent);
     m_inat = std::make_unique<net::INatClient>(*m_http);
+    m_inatBackground = std::make_unique<net::INatClient>(*m_http);
+    m_inatBackground->setPriority(net::HttpClient::Priority::Background);
 
     // A second, independently-throttled HttpClient for Nominatim: its usage
     // policy (max 1 request/second) is stricter than -- and unrelated to --
@@ -201,6 +205,11 @@ net::INatClient &Application::inat()
     return *m_inat;
 }
 
+net::INatClient &Application::inatBackground()
+{
+    return *m_inatBackground;
+}
+
 net::HttpClient &Application::http()
 {
     return *m_http;
@@ -249,6 +258,31 @@ void Application::configureSync()
     config.identity = {m_settings->syncUserName(), QSysInfo::machineHostName()};
     config.libraryRoot = m_settings->libraryRoot();
     m_syncService->setConfig(config);
+
+    const Settings::CatalogueProfile profile = m_settings->activeProfile();
+    libsync::PhotoSyncService::Config photos;
+    if (profile.syncsPhotos()) {
+        photos.store = profile.photoStore;
+        photos.s3 = profile.s3;
+        photos.drive = profile.drive;
+        photos.libraryRoot = profile.libraryRoot;
+        photos.statePath = libsync::PhotoSyncService::statePathFor(m_settings->databasePath());
+        photos.who = m_settings->syncUserName();
+        photos.databasePath = m_settings->databasePath();
+        // The thumbnail cache's folder (configureSync() first runs before the
+        // cache itself is made).
+        photos.thumbnailDir =
+            QDir(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation))
+                .filePath(QStringLiteral("thumbnails"));
+        photos.allTrees = profile.photosAllTrees;
+        photos.trees = profile.photoTrees;
+    }
+    m_photoSync->setConfig(photos);
+}
+
+libsync::PhotoSyncService &Application::photoSync()
+{
+    return *m_photoSync;
 }
 
 } // namespace pl

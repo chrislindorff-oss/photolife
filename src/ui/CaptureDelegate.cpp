@@ -143,6 +143,8 @@ void CaptureDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
     }
     if (index.data(model::CaptureListModel::HasGpsRole).toBool())
         badges << QStringLiteral("GEO");
+    if (isOnlineOnly(index.data(model::CaptureListModel::PreviewPathRole).toString()))
+        badges << QStringLiteral("ONLINE");
 
     if (!badges.isEmpty()) {
         QFont font = painter->font();
@@ -206,6 +208,29 @@ void CaptureDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         }
         painter->restore();
     }
+}
+
+namespace {
+QSet<QString> &onlineOnlyPaths()
+{
+    static QSet<QString> paths;
+    return paths;
+}
+} // namespace
+
+void CaptureDelegate::setOnlineOnly(QSet<QString> paths)
+{
+    onlineOnlyPaths() = std::move(paths);
+}
+
+bool CaptureDelegate::isOnlineOnly(const QString &path)
+{
+    return !path.isEmpty() && onlineOnlyPaths().contains(path);
+}
+
+const QSet<QString> &CaptureDelegate::onlineOnly()
+{
+    return onlineOnlyPaths();
 }
 
 } // namespace pl

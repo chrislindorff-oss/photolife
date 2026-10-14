@@ -79,6 +79,31 @@ QString ServerBar::modeText(const ServerView &v)
     return v.checked ? tr("VIEWING") : tr("VIEWING — checking server…");
 }
 
+QString ServerBar::photosText(const ServerView &v)
+{
+    if (!v.photosEnabled)
+        return {};
+    if (v.photosRunning)
+        return v.photosPhase.isEmpty() ? tr("Photos: syncing…") : tr("Photos: %1").arg(v.photosPhase);
+    if (!v.photosError.isEmpty())
+        return tr("Photos: couldn't sync — %1").arg(v.photosError);
+    if (v.photosStopped)
+        return tr("Photos: stopped — Sync Photos carries on where it left off");
+    if (!v.photosPlan)
+        return tr("Photos: not checked yet");
+    const libsync::LibraryPlan &p = *v.photosPlan;
+    QStringList parts;
+    if (const int down = int(p.toDownload.size() + p.conflicts.size()); down > 0)
+        parts << tr("%Ln to download", nullptr, down);
+    if (const int up = int(p.toUpload.size()); up > 0)
+        parts << tr("%Ln to upload", nullptr, up);
+    if (v.photosFailed > 0)
+        parts << tr("%Ln couldn't be synced", nullptr, v.photosFailed);
+    if (v.photosOnlineOnly > 0)
+        parts << tr("%Ln online only", nullptr, v.photosOnlineOnly);
+    return parts.isEmpty() ? tr("Photos: up to date") : tr("Photos: %1").arg(parts.join(QStringLiteral(", ")));
+}
+
 QColor ServerBar::modeColor(const ServerView &v)
 {
     const ThemeColors &t = themeColors(currentThemeVariant());

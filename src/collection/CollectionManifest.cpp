@@ -30,6 +30,11 @@ std::optional<CollectionManifest> CollectionManifest::read(const QString &collec
     m.projectId = obj.value(QStringLiteral("projectId")).toInt();
     m.projectName = obj.value(QStringLiteral("projectName")).toString();
     m.includeCommonName = obj.value(QStringLiteral("includeCommonName")).toBool();
+    m.thumbnailPx = obj.value(QStringLiteral("thumbnailPx")).toInt();   // absent: originals
+    // Absent: an older collection, which kept the original filenames.
+    m.fileNamePattern =
+        FileNamePattern::fromJson(obj.value(QStringLiteral("fileNamePattern")).toObject());
+    m.authorName = obj.value(QStringLiteral("authorName")).toString();
     m.createdAt = QDateTime::fromString(obj.value(QStringLiteral("createdAt")).toString(),
                                         Qt::ISODate);
     m.updatedAt = QDateTime::fromString(obj.value(QStringLiteral("updatedAt")).toString(),
@@ -44,6 +49,11 @@ bool CollectionManifest::write(const QString &collectionRoot) const
     obj.insert(QStringLiteral("projectId"), projectId);
     obj.insert(QStringLiteral("projectName"), projectName);
     obj.insert(QStringLiteral("includeCommonName"), includeCommonName);
+    obj.insert(QStringLiteral("thumbnailPx"), thumbnailPx);
+    if (!fileNamePattern.isEmpty()) {
+        obj.insert(QStringLiteral("fileNamePattern"), fileNamePattern.toJson());
+        obj.insert(QStringLiteral("authorName"), authorName);
+    }
     obj.insert(QStringLiteral("createdAt"), createdAt.toUTC().toString(Qt::ISODate));
     obj.insert(QStringLiteral("updatedAt"), updatedAt.toUTC().toString(Qt::ISODate));
 

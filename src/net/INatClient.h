@@ -1,5 +1,6 @@
 #pragma once
 
+#include "net/HttpClient.h"
 #include "taxonomy/TaxonomyTypes.h"
 
 #include <QDate>
@@ -12,8 +13,6 @@
 class QUrl;
 
 namespace pl::net {
-
-class HttpClient;
 
 // The result of one API call: either a value or an error string.
 template <typename T>
@@ -83,6 +82,11 @@ public:
     // for why an authenticated call never touches the conditional-GET cache.
     void setAccessToken(const QString &token) { m_accessToken = token; }
     QString accessToken() const { return m_accessToken; }
+
+    // The HttpClient priority of every call this client makes: Background for
+    // a second client over the same HttpClient that quiet housekeeping uses,
+    // so it never holds up what the user is waiting for.
+    void setPriority(HttpClient::Priority priority) { m_priority = priority; }
 
     // GET /v1/places/autocomplete?q=
     void resolvePlaces(const QString &query,
@@ -155,8 +159,10 @@ private:
     void getSpeciesCountsPage(const QUrl &url,
                               std::function<void(Outcome<SpeciesCountsPage>)> done);
     void getObservationPage(const QUrl &url, std::function<void(Outcome<ObservationPage>)> done);
+    void request(const QUrl &url, HttpClient::Handler handler, const QString &bearerToken = {});
 
     HttpClient &m_http;
+    HttpClient::Priority m_priority = HttpClient::Priority::Normal;
     QString m_baseUrl = QStringLiteral("https://api.inaturalist.org/v1");
     QString m_accessToken;
 };

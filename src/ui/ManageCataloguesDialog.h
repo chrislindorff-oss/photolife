@@ -1,5 +1,7 @@
 #pragma once
 
+#include "settings/Settings.h"
+
 #include <QDialog>
 
 class QPushButton;
@@ -24,6 +26,9 @@ public:
 
 signals:
     void openRequested(const QString &profileId);
+    // The open catalogue's server settings were changed and saved; `before`
+    // is how they were. MainWindow puts them to use straight away.
+    void activeServerEdited(const pl::Settings::CatalogueProfile &before);
 
 private:
     void reload();
