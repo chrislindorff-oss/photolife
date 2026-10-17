@@ -36,6 +36,8 @@ constexpr auto kExportThumbnailsOnly = "export/thumbnailsOnly";
 constexpr auto kExportRenameFiles = "export/renameFiles";
 constexpr auto kExportFileNamePattern = "export/fileNamePattern";   // JSON
 constexpr auto kExportAuthorName = "export/authorName";
+constexpr auto kContactSheetOptions = "export/contactSheet/options";   // JSON
+constexpr auto kContactSheetFolder = "export/contactSheet/folder";
 
 // Qt's QFile/QDir never expand a shell-style leading "~" -- a path typed or
 // hand-edited that way would otherwise be taken completely literally (as a
@@ -531,6 +533,28 @@ QString Settings::exportAuthorName() const
 void Settings::setExportAuthorName(const QString &name)
 {
     m_settings.setValue(QLatin1String(kExportAuthorName), name);
+}
+
+collection::ContactSheetOptions Settings::contactSheetOptions() const
+{
+    const QByteArray json = m_settings.value(QLatin1String(kContactSheetOptions)).toByteArray();
+    return collection::ContactSheetOptions::fromJson(QJsonDocument::fromJson(json).object());
+}
+
+void Settings::setContactSheetOptions(const collection::ContactSheetOptions &options)
+{
+    m_settings.setValue(QLatin1String(kContactSheetOptions),
+                        QJsonDocument(options.toJson()).toJson(QJsonDocument::Compact));
+}
+
+QString Settings::contactSheetFolder() const
+{
+    return m_settings.value(QLatin1String(kContactSheetFolder)).toString();
+}
+
+void Settings::setContactSheetFolder(const QString &path)
+{
+    m_settings.setValue(QLatin1String(kContactSheetFolder), path);
 }
 
 } // namespace pl

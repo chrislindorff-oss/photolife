@@ -82,6 +82,8 @@ private slots:
     void lockDecidesWhoMayPush();
     void pathsOutsideTheRootAreKeptAndCounted_data() { backends(); }
     void pathsOutsideTheRootAreKeptAndCounted();
+    void changingTheRootResendsMovedPaths_data() { backends(); }
+    void changingTheRootResendsMovedPaths();
     void pullRefusesAnotherSchemaVersion_data() { backends(); }
     void pullRefusesAnotherSchemaVersion();
     void pathMappingRoundTrips();
@@ -391,6 +393,49 @@ void TestCatalogueSync::pathsOutsideTheRootAreKeptAndCounted()
     QCOMPARE(scalar(m_server->connectionName(),
                     QStringLiteral("SELECT COUNT(*) FROM rendition WHERE path = '/mnt/usb/IMG_2.CR2'")),
              1);
+}
+
+// The library root moved to another folder of the catalogue after the last
+// sync: unchanged rows are re-sent under the new root, and the old root
+// folder's "lib:/" never collides with the new one's.
+void TestCatalogueSync::changingTheRootResendsMovedPaths()
+{
+    if (!openServer())
+        QSKIP("set PHOTOLIFE_TEST_PG_DSN to run against Postgres");
+    auto alice = openLocal(QStringLiteral("alice"));
+    const QString c = alice->connectionName();
+    populate(c, kAliceRoot);
+    const QString oldRoot = QStringLiteral("/mnt/drive/Old Sync");
+    exec(c, QStringLiteral("INSERT INTO folder (id, path, parent_id, name, depth) VALUES "
+                           "(10, '%1', NULL, 'Old Sync', 0)").arg(oldRoot));
+    {
+        CatalogueSync before = syncFor(*alice, oldRoot);
+        QVERIFY2(before.publish(base(QStringLiteral("alice")), kAlice), qPrintable(before.error()));
+    }
+    QCOMPARE(scalar(m_server->connectionName(),
+                    QStringLiteral("SELECT id FROM folder WHERE path = 'lib:/'")), 10);
+
+    CatalogueSync a = syncFor(*alice, kAliceRoot);
+    QCOMPARE(*a.pendingChanges(base(QStringLiteral("alice"))), 7);   // 3 folders, 3 renditions, an alias
+    const auto pushed = a.push(base(QStringLiteral("alice")), kAlice);
+    QVERIFY2(pushed, qPrintable(a.error()));
+    QCOMPARE(scalar(m_server->connectionName(),
+                    QStringLiteral("SELECT id FROM folder WHERE path = 'lib:/'")), 1);
+    QCOMPARE(scalar(m_server->connectionName(),
+                    QStringLiteral("SELECT COUNT(*) FROM folder WHERE path = '%1'").arg(oldRoot)), 1);
+    QCOMPARE(scalar(m_server->connectionName(),
+                    QStringLiteral("SELECT COUNT(*) FROM rendition WHERE path LIKE 'lib:/Orchids/%'")),
+             3);
+    QCOMPARE(*a.pendingChanges(base(QStringLiteral("alice"))), 0);   // the new root is recorded
+
+    // Removing the old root folder now is an ordinary change.
+    exec(c, QStringLiteral("DELETE FROM folder WHERE id = 10"));
+    QVERIFY2(a.push(base(QStringLiteral("alice")), kAlice), qPrintable(a.error()));
+
+    auto bob = openLocal(QStringLiteral("bob"));
+    CatalogueSync b = syncFor(*bob, kBobRoot);
+    QVERIFY2(b.pull(), qPrintable(b.error()));
+    QCOMPARE(dump(bob->connectionName(), kBobRoot), dump(c, kAliceRoot));
 }
 
 void TestCatalogueSync::pullRefusesAnotherSchemaVersion()

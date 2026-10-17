@@ -25,6 +25,10 @@ struct ThumbnailSyncResult
 // computer that leaves some photos online only can still browse them:
 // computers that have a photo upload its thumbnail, the others download it
 // straight into their thumbnail cache.
+//
+// A photo no bigger than kOwnThumbnailBytes is about the size its thumbnail
+// would be, so it gets none online: a computer without it downloads the photo
+// itself and makes the thumbnail from that.
 class ThumbnailSync
 {
 public:
@@ -32,6 +36,21 @@ public:
     using CancelFn = std::function<bool()>;
 
     static constexpr int kSize = thumb::ThumbnailCache::kGridPx;
+    static constexpr qint64 kOwnThumbnailBytes = 64 * 1024;
+
+    // A photo on this computer.
+    struct Local
+    {
+        QString path;     // absolute
+        QString sha256;
+        qint64 size = 0;
+    };
+    // A photo only online.
+    struct Online
+    {
+        QString sha256;
+        RemoteEntry photo;
+    };
 
     ThumbnailSync(LibraryStore &store, QString cacheDir,
                   thumb::ThumbnailCache::SourceLoader rawLoader = {});
@@ -42,14 +61,17 @@ public:
 
     static QString nameFor(const QString &sha256);
 
-    // Uploads the thumbnails missing online for `here` (absolute path,
-    // SHA-256) -- from the cache if it has them, else rendered -- and
-    // downloads the ones missing from the cache for `onlineOnly` (SHA-256s).
-    // nullopt if the store can't be listed.
-    std::optional<ThumbnailSyncResult> run(const QList<QPair<QString, QString>> &here,
-                                           const QStringList &onlineOnly);
+    // Uploads the thumbnails missing online for `here` -- from the cache if
+    // it has them, else rendered -- and puts the ones missing from the cache
+    // for `onlineOnly` into it. nullopt if the store can't be listed.
+    std::optional<ThumbnailSyncResult> run(const QList<Local> &here, const QList<Online> &onlineOnly);
 
 private:
+    // The thumbnail for the photo at `path`: from the cache, else rendered
+    // (and cached). Empty if none can be made. Safe on worker threads.
+    QByteArray thumbnailFor(const QString &path, const QString &sha256) const;
+    bool cache(const QString &sha256, const QByteArray &jpeg) const;
+
     LibraryStore &m_store;
     QString m_cacheDir;
     thumb::ThumbnailCache::SourceLoader m_rawLoader;

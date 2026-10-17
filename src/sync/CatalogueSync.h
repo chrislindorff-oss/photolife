@@ -143,6 +143,7 @@ private:
     bool sendRows(const Table &table, const QList<QVariantList> &rows, bool upsert,
                   int *outsideRoot);
     bool deleteRows(const Table &table, const QList<QVariantList> &keys);
+    bool freePaths(const Table &table, const QList<QVariantList> &rows);
     bool resetIdentities(const QList<QString> &tables);
     bool bumpVersion(qint64 expected, const SyncIdentity &who, bool requireLock);
     bool setLocalVersion(qint64 version);
@@ -153,11 +154,16 @@ private:
     {
         QList<QVariantList> upserts;
         QList<QVariantList> deletes;   // primary-key values
+        bool remapped = false;         // upserts' paths are already in server form
     };
     // Rows of schema `newer` that differ from schema `older` (both attached
-    // to, or the main schema of, the local connection).
+    // to, or the main schema of, the local connection). `olderRoot` is the
+    // library root `older` was synced under, when it differs from ours.
     std::optional<QList<std::pair<const Table *, Diff>>> diff(const QString &newer,
-                                                             const QString &older);
+                                                             const QString &older,
+                                                             const std::optional<QString> &olderRoot);
+    // The library root recorded in the snapshot attached as `alias`.
+    std::optional<QString> snapshotRoot(const QString &alias) const;
     bool attach(const QString &path, const QString &alias);
     void detach(const QString &alias);
     bool fail(const QString &message);

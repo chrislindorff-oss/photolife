@@ -4,8 +4,10 @@
 #include <QList>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace pl::libsync {
@@ -59,6 +61,26 @@ public:
                                               const QString &uploadedBy,
                                               const ByteProgress &progress = {}) = 0;
 
+    // Parallel transfers: how many workers to run, each with its own clone()
+    // -- a copy that already knows what this one has listed (file ids,
+    // folders, the sign-in), to use on another thread. A store that can't be
+    // cloned returns nullptr and transfers one at a time.
+    virtual int parallelTransfers() const { return 1; }
+    virtual std::unique_ptr<LibraryStore> clone() const { return nullptr; }
+
+    // Before parallel uploads: makes whatever the uploads of `relPaths` (and
+    // of thumbnails) would otherwise create on the fly -- folders -- so the
+    // workers never race to create the same one, reporting how many of those
+    // are done. False on failure.
+    using CountProgress = std::function<void(int done, int total)>;
+    virtual bool prepareUploads(const QStringList &relPaths, const CountProgress &progress = {})
+    {
+        Q_UNUSED(relPaths);
+        Q_UNUSED(progress);
+        return true;
+    }
+    virtual bool prepareThumbnails() { return true; }
+
     // Small JPEG thumbnails kept beside the photos, named "<sha256>_<px>",
     // so photos that are only online can still be browsed.
     virtual std::optional<QSet<QString>> listThumbnails() = 0;
@@ -67,6 +89,7 @@ public:
 
 protected:
     bool cancelled() const { return m_cancel && m_cancel(); }
+    CancelFn cancelFn() const { return m_cancel; }
 
 private:
     CancelFn m_cancel;

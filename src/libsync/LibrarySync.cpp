@@ -1,5 +1,6 @@
 #include "libsync/LibrarySync.h"
 
+#include "libsync/Parallel.h"
 #include "scan/FileScanner.h"
 
 #include <QCryptographicHash>
@@ -124,7 +125,7 @@ bool LibrarySync::hashFile(const QString &path, QString *md5, QString *sha256)
     return true;
 }
 
-std::optional<LibrarySync::LocalFile> LibrarySync::describeLocal(const QString &relPath)
+std::optional<LibrarySync::LocalFile> LibrarySync::describeLocal(const QString &relPath) const
 {
     const QFileInfo info(absPath(relPath));
     if (!info.isFile())
@@ -310,10 +311,8 @@ std::optional<LibraryPlan> LibrarySync::plan(const LibrarySyncOptions &options)
     return plan;
 }
 
-bool LibrarySync::moveToTrash(const QString &relPath, QString *why)
+bool LibrarySync::moveToTrash(const QString &relPath, QString *why) const
 {
-    if (m_trashStamp.isEmpty())
-        m_trashStamp = QDate::currentDate().toString(Qt::ISODate);
     const QString trashRoot = m_root + QLatin1Char('/') + QLatin1String(kTrashDir)
                               + QLatin1Char('/') + m_trashStamp;
     QString target = trashRoot + QLatin1Char('/') + relPath;
@@ -329,73 +328,93 @@ bool LibrarySync::moveToTrash(const QString &relPath, QString *why)
 // Downloads `remote` to `relPath` (which may differ, for a conflict copy):
 // into a partial file, checked against the store's hash, then into place --
 // moving aside whatever was there.
-bool LibrarySync::fetch(const RemoteEntry &remote, const QString &relPath, LocalFile *saved,
-                        QString *why)
+LibrarySync::Fetched LibrarySync::fetchWith(LibraryStore &store, const RemoteEntry &remote,
+                                            const QString &relPath) const
 {
+    Fetched out;
     const QString target = absPath(relPath);
     const QString partial = target + QLatin1String(kPartialSuffix);
     if (!QDir().mkpath(QFileInfo(target).path())) {
-        *why = QStringLiteral("couldn't create its folder");
-        return false;
+        out.why = QStringLiteral("couldn't create its folder");
+        return out;
     }
-    if (!m_store.download(remote, partial)) {
+    if (!store.download(remote, partial)) {
         QFile::remove(partial);
-        *why = m_store.error();
-        return false;
+        out.why = store.error();
+        return out;
     }
     QString md5;
     QString sha256;
     if (!hashFile(partial, &md5, &sha256)) {
         QFile::remove(partial);
-        *why = QStringLiteral("couldn't read the downloaded file");
-        return false;
+        out.why = QStringLiteral("couldn't read the downloaded file");
+        return out;
     }
     if ((!remote.md5.isEmpty() && md5 != remote.md5)
         || (remote.md5.isEmpty() && !remote.sha256.isEmpty() && sha256 != remote.sha256)) {
         QFile::remove(partial);
-        *why = QStringLiteral("the download was damaged (its checksum doesn't match)");
-        return false;
+        out.why = QStringLiteral("the download was damaged (its checksum doesn't match)");
+        return out;
     }
-    if (QFileInfo::exists(target) && !moveToTrash(relPath, why)) {
+    if (QFileInfo::exists(target) && !moveToTrash(relPath, &out.why)) {
         QFile::remove(partial);
-        return false;
+        return out;
     }
     if (!QFile::rename(partial, target)) {
         QFile::remove(partial);
-        *why = QStringLiteral("couldn't put the downloaded file in place");
-        return false;
+        out.why = QStringLiteral("couldn't put the downloaded file in place");
+        return out;
     }
     const QFileInfo info(target);
-    *saved = LocalFile{relPath, info.size(), mtimeOf(info), md5, sha256};
-    return true;
+    out.file = LocalFile{relPath, info.size(), mtimeOf(info), md5, sha256};
+    out.ok = true;
+    return out;
+}
+
+LibrarySync::Sent LibrarySync::sendWith(LibraryStore &store, const LocalFile &known,
+                                        const QString &who) const
+{
+    // Re-check: the file may have changed since it was hashed.
+    Sent out;
+    out.file = known;
+    const QFileInfo info(absPath(known.relPath));
+    if (!info.isFile()) {
+        out.why = QStringLiteral("it's gone from this computer");
+        return out;
+    }
+    if (known.md5.isEmpty() || info.size() != known.size || mtimeOf(info) != known.mtime) {
+        const auto fresh = describeLocal(known.relPath);
+        if (!fresh) {
+            out.why = QStringLiteral("couldn't read it");
+            return out;
+        }
+        out.file = *fresh;
+    }
+    out.entry = store.upload(absPath(known.relPath), known.relPath, out.file.md5, out.file.sha256, who);
+    if (!out.entry)
+        out.why = store.error();
+    return out;
+}
+
+void LibrarySync::recordSent(const Sent &sent)
+{
+    const LocalFile &f = sent.file;
+    const SyncedFile synced{f.relPath, f.md5, f.sha256, f.size, f.mtime, sent.entry->version, true};
+    m_state.put(synced);
+    m_base.insert(f.relPath, synced);
+    m_local.insert(f.relPath, f);
 }
 
 bool LibrarySync::send(const QString &relPath, const QString &who, QString *why)
 {
-    // Re-check: the file may have changed since it was hashed.
-    LocalFile f = m_local.value(relPath);
-    const QFileInfo info(absPath(relPath));
-    if (!info.isFile()) {
-        *why = QStringLiteral("it's gone from this computer");
+    LocalFile known = m_local.value(relPath);
+    known.relPath = relPath;
+    const Sent sent = sendWith(m_store, known, who);
+    if (!sent.entry) {
+        *why = sent.why;
         return false;
     }
-    if (f.md5.isEmpty() || info.size() != f.size || mtimeOf(info) != f.mtime) {
-        const auto fresh = describeLocal(relPath);
-        if (!fresh) {
-            *why = QStringLiteral("couldn't read it");
-            return false;
-        }
-        f = *fresh;
-    }
-    const auto uploaded = m_store.upload(absPath(relPath), relPath, f.md5, f.sha256, who);
-    if (!uploaded) {
-        *why = m_store.error();
-        return false;
-    }
-    const SyncedFile synced{relPath, f.md5, f.sha256, f.size, f.mtime, uploaded->version, true};
-    m_state.put(synced);
-    m_base.insert(relPath, synced);
-    m_local.insert(relPath, f);
+    recordSent(sent);
     return true;
 }
 
@@ -408,6 +427,8 @@ std::optional<LibrarySyncResult> LibrarySync::run(const LibrarySyncOptions &opti
     LibrarySyncResult result;
     result.plan = *planned;
     const LibraryPlan &p = result.plan;
+    if (m_trashStamp.isEmpty())
+        m_trashStamp = QDate::currentDate().toString(Qt::ISODate);
     auto failed = [&](const QString &rel, const QString &why) {
         // A transfer cut short by cancelling isn't a failure: it's simply
         // done again by the next sync.
@@ -423,35 +444,74 @@ std::optional<LibrarySyncResult> LibrarySync::run(const LibrarySyncOptions &opti
         return result.cancelled;
     };
 
-    // Uploads first: collaborators can only fetch what's online.
-    for (int i = 0; i < p.toUpload.size() && !stop(); ++i) {
-        report(QStringLiteral("Uploading photos"), i, int(p.toUpload.size()));
-        const QString &rel = p.toUpload.at(i);
-        QString why;
-        if (send(rel, options.who, &why)) {
-            ++result.uploaded;
-            result.bytesUp += m_local.value(rel).size;
+    const std::function<bool()> stopFn = [this] { return isCancelled(); };
+
+    // Uploads first: collaborators can only fetch what's online. Folders are
+    // made first, so parallel uploads never race to make the same one.
+    if (!p.toUpload.isEmpty()) {
+        report(QStringLiteral("Uploading photos"), 0, int(p.toUpload.size()));
+        QStringList folders = p.toUpload;
+        for (const RemoteEntry &r : p.conflicts)
+            folders << r.relPath;
+        report(QStringLiteral("Creating folders online"), 0, 0);
+        const bool prepared = m_store.prepareUploads(folders, [this](int done, int total) {
+            report(QStringLiteral("Creating folders online"), done, total);
+        });
+        report(QStringLiteral("Uploading photos"), 0, int(p.toUpload.size()));
+        if (!prepared) {
+            for (const QString &rel : p.toUpload)
+                failed(rel, m_store.error());
         } else {
-            failed(rel, why);
+            QList<LocalFile> jobs;
+            for (const QString &rel : p.toUpload) {
+                LocalFile f = m_local.value(rel);
+                f.relPath = rel;
+                jobs << f;
+            }
+            int finished = 0;
+            forEachTransfer<Sent>(
+                m_store, int(jobs.size()), stopFn,
+                [&](LibraryStore &store, int i) { return sendWith(store, jobs.at(i), options.who); },
+                [&](int, Sent &&sent) {
+                    report(QStringLiteral("Uploading photos"), ++finished, int(jobs.size()));
+                    if (sent.entry) {
+                        recordSent(sent);
+                        ++result.uploaded;
+                        result.bytesUp += sent.file.size;
+                    } else {
+                        failed(sent.file.relPath, sent.why);
+                    }
+                });
         }
     }
 
-    for (int i = 0; i < p.toDownload.size() && !stop(); ++i) {
-        report(QStringLiteral("Downloading photos"), i, int(p.toDownload.size()));
-        const RemoteEntry &r = p.toDownload.at(i);
-        LocalFile saved;
-        QString why;
-        if (fetch(r, r.relPath, &saved, &why)) {
-            const SyncedFile synced{r.relPath, saved.md5, saved.sha256, saved.size, saved.mtime,
-                                    r.version, true};
-            m_state.put(synced);
-            m_base.insert(r.relPath, synced);
-            ++result.downloaded;
-            result.bytesDown += saved.size;
-        } else {
-            failed(r.relPath, why);
-        }
+    if (!p.toDownload.isEmpty() && !stop()) {
+        report(QStringLiteral("Downloading photos"), 0, int(p.toDownload.size()));
+        int finished = 0;
+        forEachTransfer<Fetched>(
+            m_store, int(p.toDownload.size()), stopFn,
+            [&](LibraryStore &store, int i) {
+                const RemoteEntry &r = p.toDownload.at(i);
+                return fetchWith(store, r, r.relPath);
+            },
+            [&](int i, Fetched &&got) {
+                report(QStringLiteral("Downloading photos"), ++finished, int(p.toDownload.size()));
+                const RemoteEntry &r = p.toDownload.at(i);
+                if (got.ok) {
+                    const LocalFile &saved = got.file;
+                    const SyncedFile synced{r.relPath, saved.md5, saved.sha256, saved.size,
+                                            saved.mtime, r.version, true};
+                    m_state.put(synced);
+                    m_base.insert(r.relPath, synced);
+                    ++result.downloaded;
+                    result.bytesDown += saved.size;
+                } else {
+                    failed(r.relPath, got.why);
+                }
+            });
     }
+
+    stop();   // a cancel during the transfers above
 
     // Conflicts: theirs is saved beside ours, then both go online.
     for (int i = 0; i < p.conflicts.size() && !stop(); ++i) {
@@ -460,13 +520,14 @@ std::optional<LibrarySyncResult> LibrarySync::run(const LibrarySyncOptions &opti
         if (r.uploadedBy.isEmpty())
             m_store.describe(r);   // best effort, for the copy's name
         const QString copy = conflictPath(r.relPath, r.uploadedBy);
-        LocalFile saved;
-        QString why;
-        if (!fetch(r, copy, &saved, &why)) {
-            failed(r.relPath, why);
+        const Fetched got = fetchWith(m_store, r, copy);
+        if (!got.ok) {
+            failed(r.relPath, got.why);
             continue;
         }
+        const LocalFile &saved = got.file;
         m_local.insert(copy, saved);
+        QString why;
         if (!send(r.relPath, options.who, &why) || !send(copy, r.uploadedBy, &why)) {
             failed(r.relPath, why);
             continue;
@@ -525,15 +586,12 @@ LibrarySyncResult LibrarySync::fetch(const QStringList &relPaths)
 {
     LibrarySyncResult result;
     m_error.clear();
+    if (m_trashStamp.isEmpty())
+        m_trashStamp = QDate::currentDate().toString(Qt::ISODate);
     m_base = m_state.load();
     const QHash<QString, RemoteEntry> remote = m_state.remote();
-    for (int i = 0; i < relPaths.size(); ++i) {
-        if (isCancelled()) {
-            result.cancelled = true;
-            break;
-        }
-        report(QStringLiteral("Downloading photos"), i, int(relPaths.size()));
-        const QString &rel = relPaths.at(i);
+    QList<RemoteEntry> jobs;
+    for (const QString &rel : relPaths) {
         const auto r = remote.constFind(rel);
         if (r == remote.constEnd()) {
             result.failures << QStringLiteral("%1: %2").arg(rel, QStringLiteral("it isn't online"));
@@ -549,22 +607,30 @@ LibrarySyncResult LibrarySync::fetch(const QStringList &relPaths)
                 rel, QStringLiteral("a different copy is already here; Sync Photos sorts it out"));
             continue;
         }
-        LocalFile saved;
-        QString why;
-        if (fetch(*r, rel, &saved, &why)) {
-            const SyncedFile synced{rel, saved.md5, saved.sha256, saved.size, saved.mtime,
-                                    r->version, true};
-            m_state.put(synced);
-            m_base.insert(rel, synced);
-            ++result.downloaded;
-            result.bytesDown += saved.size;
-        } else if (isCancelled()) {
-            result.cancelled = true;
-            break;
-        } else {
-            result.failures << QStringLiteral("%1: %2").arg(rel, why);
-        }
+        jobs << *r;
     }
+
+    report(QStringLiteral("Downloading photos"), 0, int(jobs.size()));
+    int finished = 0;
+    forEachTransfer<Fetched>(
+        m_store, int(jobs.size()), [this] { return isCancelled(); },
+        [&](LibraryStore &store, int i) { return fetchWith(store, jobs.at(i), jobs.at(i).relPath); },
+        [&](int i, Fetched &&got) {
+            report(QStringLiteral("Downloading photos"), ++finished, int(jobs.size()));
+            const RemoteEntry &r = jobs.at(i);
+            if (got.ok) {
+                const SyncedFile synced{r.relPath, got.file.md5, got.file.sha256, got.file.size,
+                                        got.file.mtime, r.version, true};
+                m_state.put(synced);
+                m_base.insert(r.relPath, synced);
+                ++result.downloaded;
+                result.bytesDown += got.file.size;
+            } else if (!isCancelled()) {
+                result.failures << QStringLiteral("%1: %2").arg(r.relPath, got.why);
+            }
+        });
+    if (isCancelled())
+        result.cancelled = true;
     report(QStringLiteral("Done"), 1, 1);
     return result;
 }

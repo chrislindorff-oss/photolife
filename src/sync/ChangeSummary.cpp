@@ -165,7 +165,8 @@ const Spec kSpecs[] = {
 
 #undef PHOTO
 
-const QSet<QString> kSkipped = {QStringLiteral("schema_migrations"), QStringLiteral("catalogue_sync")};
+const QSet<QString> kSkipped = {QStringLiteral("schema_migrations"), QStringLiteral("catalogue_sync"),
+                                QStringLiteral("sync_snapshot")};
 
 QString quoted(const QString &id)
 {

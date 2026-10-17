@@ -79,6 +79,9 @@ public:
         QString attribution;
     };
 
+    // The rows currently listed, in display order.
+    const QList<Row> &rows() const { return m_rows; }
+
     // Parameters that fully determine which rows a query returns -- shared by
     // the synchronous (reload()) and asynchronous (background-thread) paths.
     struct QueryParams

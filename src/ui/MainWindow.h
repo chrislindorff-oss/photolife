@@ -150,6 +150,7 @@ private:
     void maybeFetchReferencePhotos();
     void fetchReferencePhotos();
     void exportReferenceTreePhotos();
+    void exportReferenceContactSheet();
     // After an update-mode export: lists files in the collection that this
     // run didn't produce (see ExportOptions::reportUnexpectedFiles).
     void showUnexpectedExportFiles(const collection::ExportSummary &summary);
@@ -386,6 +387,7 @@ private:
     model::ReferencePhotoModel *m_refPhotoModel = nullptr;
     QListView *m_refPhotoGrid = nullptr;
     QLabel *m_refPhotoStatus = nullptr;
+    QPushButton *m_refPhotoExportButton = nullptr;
     QWidget *m_refPhotoPage = nullptr;
     taxonomy::ReferencePhotoFetcher *m_refPhotoFetcher = nullptr;
     QAction *m_fetchRefPhotosAction = nullptr;

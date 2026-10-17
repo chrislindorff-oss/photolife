@@ -64,8 +64,10 @@ void TestPhotoCache::unreachableUrlStaysNullAndIsNotRetriedForever()
     const QString url = QStringLiteral("http://127.0.0.1:9/nope.jpg");
     QSignalSpy spy(&cache, &PhotoCache::ready);
     QVERIFY(cache.photo(url).isNull());
+    QVERIFY(!cache.hasFailed(url));   // queued, not failed yet
     QVERIFY(spy.wait(5000));
     QCOMPARE(spy.at(0).at(0).toString(), url);
+    QVERIFY(cache.hasFailed(url));
     QVERIFY(cache.photo(url).isNull());   // still null, no crash, no infinite retry
 }
 

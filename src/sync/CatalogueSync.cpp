@@ -20,7 +20,13 @@ namespace {
 
 // Tables that are bookkeeping, not catalogue content.
 const QSet<QString> kSkippedTables = {QStringLiteral("schema_migrations"),
-                                      QStringLiteral("catalogue_sync")};
+                                      QStringLiteral("catalogue_sync"),
+                                      QStringLiteral("sync_snapshot")};
+
+// Where a sync snapshot records the library root its paths were sent to the
+// server with (see diff()). Only snapshots need it, but Discard copies one
+// back over the catalogue, so the catalogue may have it too -- unused there.
+constexpr auto kSnapshotTable = "sync_snapshot";
 
 // The columns holding absolute photo-library paths (see PathMapping). A
 // folder-scoped learned name keeps its folder's path as its scope ('global'
@@ -54,6 +60,36 @@ QString normalisedRoot(QString root)
     while (root.size() > 1 && root.endsWith(QLatin1Char('/')))
         root.chop(1);
     return root;
+}
+
+QString sqlString(QString s)
+{
+    s.replace(QLatin1Char('\''), QLatin1String("''"));
+    return QLatin1Char('\'') + s + QLatin1Char('\'');
+}
+
+// PathMapping::toServer() in SQL: `column` as it's stored on the server when
+// the library root is `root`.
+QString serverPathExpr(const QString &column, const QString &root)
+{
+    if (root.isEmpty())
+        return column;
+#ifdef Q_OS_WIN
+    const QString path = QStringLiteral("replace(%1, '\\', '/')").arg(column);
+    auto folded = [](const QString &e) { return QStringLiteral("lower(%1)").arg(e); };
+#else
+    const QString path = column;
+    auto folded = [](const QString &e) { return e; };
+#endif
+    // Concatenated, not arg()'d: the root may contain '%'.
+    const QString prefix = sqlString(QLatin1String(PathMapping::kPrefix));
+    const QString head = QStringLiteral("substr(") + path + QStringLiteral(", 1, ")
+                         + QString::number(root.size() + 1) + QLatin1Char(')');
+    return QStringLiteral("CASE WHEN ") + folded(path) + QStringLiteral(" = ") + folded(sqlString(root))
+           + QStringLiteral(" THEN ") + prefix + QStringLiteral(" WHEN ") + folded(head)
+           + QStringLiteral(" = ") + folded(sqlString(root + QLatin1Char('/'))) + QStringLiteral(" THEN ")
+           + prefix + QStringLiteral(" || substr(") + path + QStringLiteral(", ")
+           + QString::number(root.size() + 2) + QStringLiteral(") ELSE ") + column + QStringLiteral(" END");
 }
 
 Qt::CaseSensitivity pathCase()
@@ -318,10 +354,31 @@ bool CatalogueSync::snapshotTo(const QString &path)
     escaped.replace(QLatin1Char('\''), QLatin1String("''"));
     if (!q.exec(QStringLiteral("VACUUM INTO '%1'").arg(escaped)))
         return fail(QStringLiteral("could not save the sync snapshot: %1").arg(q.lastError().text()));
+    // The root the snapshot's paths are on the server under.
+    if (!attach(tmp, QStringLiteral("snaproot")))
+        return false;
+    const bool recorded =
+        q.exec(QStringLiteral("CREATE TABLE IF NOT EXISTS snaproot.%1 (library_root TEXT)").arg(kSnapshotTable))
+        && q.exec(QStringLiteral("DELETE FROM snaproot.%1").arg(kSnapshotTable))
+        && q.exec(QStringLiteral("INSERT INTO snaproot.%1 (library_root) VALUES (%2)")
+                      .arg(kSnapshotTable, sqlString(m_paths.libraryRoot())));
+    const QString error = q.lastError().text();
+    q.finish();
+    detach(QStringLiteral("snaproot"));
+    if (!recorded)
+        return fail(QStringLiteral("could not save the sync snapshot: %1").arg(error));
     QFile::remove(path);
     if (!QFile::rename(tmp, path))
         return fail(QStringLiteral("could not save the sync snapshot to %1").arg(path));
     return true;
+}
+
+std::optional<QString> CatalogueSync::snapshotRoot(const QString &alias) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_local, false));
+    if (q.exec(QStringLiteral("SELECT library_root FROM %1.%2").arg(alias, kSnapshotTable)) && q.next())
+        return normalisedRoot(q.value(0).toString());
+    return std::nullopt;   // a snapshot from before roots were recorded
 }
 
 // --- sending ------------------------------------------------------------------
@@ -407,6 +464,31 @@ bool CatalogueSync::deleteRows(const Table &table, const QList<QVariantList> &ke
     return true;
 }
 
+// Gives the rows about to be updated placeholder paths, so that paths moving
+// between rows (as when the library root changes) never collide with a
+// unique path not yet updated.
+bool CatalogueSync::freePaths(const Table &table, const QList<QVariantList> &rows)
+{
+    if (table.pathColumns.isEmpty() || table.pk != QStringList{QStringLiteral("id")})
+        return true;
+    const int idColumn = int(table.columns.indexOf(QStringLiteral("id")));
+    QStringList sets;
+    for (int c : table.pathColumns) {
+        sets << QStringLiteral("%1 = CASE WHEN %1 IS NULL THEN NULL ELSE 'pending:' || id END")
+                    .arg(quoted(table.columns.at(c)));
+    }
+    for (qsizetype i = 0; i < rows.size(); i += kKeysPerDelete) {
+        QStringList ids;
+        for (const QVariantList &row : rows.mid(i, kKeysPerDelete))
+            ids << literal(row.at(idColumn));
+        if (!execServer(QStringLiteral("UPDATE %1 SET %2 WHERE id IN (%3)")
+                            .arg(quoted(table.name), sets.join(QStringLiteral(", ")),
+                                 ids.join(QLatin1Char(',')))))
+            return fail(QStringLiteral("%1: %2").arg(table.name, m_error));
+    }
+    return true;
+}
+
 // After explicit ids were inserted, move each identity sequence past them so
 // rows the server creates itself never collide.
 bool CatalogueSync::resetIdentities(const QList<QString> &tables)
@@ -482,8 +564,11 @@ void CatalogueSync::detach(const QString &alias)
 }
 
 std::optional<QList<std::pair<const CatalogueSync::Table *, CatalogueSync::Diff>>>
-CatalogueSync::diff(const QString &newer, const QString &older)
+CatalogueSync::diff(const QString &newer, const QString &older, const std::optional<QString> &olderRoot)
 {
+    // Paths are compared as the server stores them: under a changed library
+    // root a row whose local path is the same can still need sending.
+    const bool remap = olderRoot && *olderRoot != m_paths.libraryRoot();
     QSqlDatabase db = QSqlDatabase::database(m_local, false);
     QList<std::pair<const Table *, Diff>> diffs;
     for (const Table &t : std::as_const(m_tables)) {
@@ -491,12 +576,19 @@ CatalogueSync::diff(const QString &newer, const QString &older)
         QStringList pkPositions;
         for (const QString &k : t.pk)
             pkPositions << QString::number(t.columns.indexOf(k) + 1);
-        const QString cols = columnList(t.columns);
+        QStringList newerCols, olderCols;
+        for (int c = 0; c < t.columns.size(); ++c) {
+            const QString col = quoted(t.columns.at(c));
+            const bool mapped = remap && t.pathColumns.contains(c);
+            newerCols << (mapped ? serverPathExpr(col, m_paths.libraryRoot()) : col);
+            olderCols << (mapped ? serverPathExpr(col, *olderRoot) : col);
+        }
         QSqlQuery q(db);
         q.setForwardOnly(true);
-        if (!q.exec(QStringLiteral("SELECT %1 FROM %4.%2 EXCEPT SELECT %1 FROM %5.%2 ORDER BY %3")
-                        .arg(cols, quoted(t.name), pkPositions.join(QLatin1Char(',')), newer,
-                             older))) {
+        if (!q.exec(QStringLiteral("SELECT %1 FROM %4.%2 EXCEPT SELECT %6 FROM %5.%2 ORDER BY %3")
+                        .arg(newerCols.join(QStringLiteral(", ")), quoted(t.name),
+                             pkPositions.join(QLatin1Char(',')), newer, older,
+                             olderCols.join(QStringLiteral(", "))))) {
             fail(QStringLiteral("%1: %2").arg(t.name, q.lastError().text()));
             return std::nullopt;
         }
@@ -518,6 +610,7 @@ CatalogueSync::diff(const QString &newer, const QString &older)
                 key << q.value(c);
             d.deletes << key;
         }
+        d.remapped = remap && !t.pathColumns.isEmpty();
         if (!d.upserts.isEmpty() || !d.deletes.isEmpty())
             diffs.append({&t, d});
     }
@@ -534,7 +627,8 @@ std::optional<int> CatalogueSync::pendingChanges(const QString &basePath)
     }
     if (!attach(basePath, QStringLiteral("base")))
         return std::nullopt;
-    const auto diffs = diff(QStringLiteral("main"), QStringLiteral("base"));
+    const auto diffs = diff(QStringLiteral("main"), QStringLiteral("base"),
+                            snapshotRoot(QStringLiteral("base")));
     detach(QStringLiteral("base"));
     if (!diffs)
         return std::nullopt;
@@ -568,7 +662,8 @@ std::optional<CatalogueSync::PushResult> CatalogueSync::push(const QString &base
         detach(QStringLiteral("snap"));
         return std::nullopt;
     }
-    const auto diffs = diff(QStringLiteral("snap"), QStringLiteral("base"));
+    const auto diffs = diff(QStringLiteral("snap"), QStringLiteral("base"),
+                            snapshotRoot(QStringLiteral("base")));
     detach(QStringLiteral("snap"));
     detach(QStringLiteral("base"));
     auto discardNext = [&] { QFile::remove(next); };
@@ -607,6 +702,8 @@ std::optional<CatalogueSync::PushResult> CatalogueSync::push(const QString &base
     }
     QList<QString> inserted;
     for (const auto &[table, diff] : *diffs) {
+        if (diff.remapped && !freePaths(*table, diff.upserts))
+            return abort();
         if (!sendRows(*table, diff.upserts, true, &result.outsideRoot))
             return abort();
         if (!diff.upserts.isEmpty())

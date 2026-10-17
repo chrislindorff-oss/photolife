@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QThread>
+#include <QUuid>
 
 namespace pl::libsync {
 
@@ -12,7 +13,7 @@ namespace {
 
 const QString kFolderMime = QStringLiteral("application/vnd.google-apps.folder");
 const QString kFileFields = QStringLiteral(
-    "id,name,mimeType,size,md5Checksum,headRevisionId,appProperties,lastModifyingUser(displayName)");
+    "id,name,mimeType,parents,size,md5Checksum,headRevisionId,appProperties,lastModifyingUser(displayName)");
 
 QJsonObject json(const QByteArray &body)
 {
@@ -176,13 +177,84 @@ bool GoogleDriveStore::testConnection()
     return true;
 }
 
+std::unique_ptr<LibraryStore> GoogleDriveStore::clone() const
+{
+    auto copy = std::make_unique<GoogleDriveStore>(m_config);
+    copy->setCancel(cancelFn());
+    copy->m_accessToken = m_accessToken;
+    copy->m_tokenExpiry = m_tokenExpiry;
+    copy->m_retryDelayMs = m_retryDelayMs;
+    copy->m_foldersPerListing = m_foldersPerListing;
+    copy->m_folders = m_folders;
+    copy->m_files = m_files;
+    copy->m_listed = m_listed;
+    copy->m_thumbsFolder = m_thumbsFolder;
+    copy->m_thumbs = m_thumbs;
+    copy->m_thumbsListed = m_thumbsListed;
+    return copy;
+}
+
+bool GoogleDriveStore::prepareUploads(const QStringList &relPaths, const CountProgress &progress)
+{
+    QSet<QString> dirs;
+    for (const QString &rel : relPaths) {
+        const int slash = rel.lastIndexOf(QLatin1Char('/'));
+        if (!m_files.contains(rel))
+            dirs.insert(slash < 0 ? QString() : rel.left(slash));
+    }
+    // Only the ones not online yet -- and their parents, also missing.
+    QSet<QString> missing;
+    for (QString dir : std::as_const(dirs)) {
+        while (!m_folders.contains(dir) && !missing.contains(dir)) {
+            missing.insert(dir);
+            if (dir.isEmpty())
+                break;
+            const int slash = dir.lastIndexOf(QLatin1Char('/'));
+            dir = slash < 0 ? QString() : dir.left(slash);
+        }
+    }
+    QStringList sorted(missing.cbegin(), missing.cend());
+    sorted.sort();   // parents first
+    for (int i = 0; i < sorted.size(); ++i) {
+        if (cancelled()) {
+            m_error = QStringLiteral("Cancelled");
+            return false;
+        }
+        if (progress)
+            progress(i, int(sorted.size()));
+        if (!folderFor(sorted.at(i), true))
+            return false;
+    }
+    return true;
+}
+
+bool GoogleDriveStore::prepareThumbnails()
+{
+    if (!m_thumbsListed && !listThumbnails())
+        return false;
+    return thumbsFolder(true).has_value();
+}
+
 std::optional<QList<QJsonObject>> GoogleDriveStore::children(const QString &folderId,
                                                              const QString &filter)
 {
+    return childrenOf({folderId}, filter);
+}
+
+// The files and folders directly in any of `folderIds` (each with its
+// "parents"), in one listing.
+std::optional<QList<QJsonObject>> GoogleDriveStore::childrenOf(const QStringList &folderIds,
+                                                               const QString &filter)
+{
     QList<QJsonObject> out;
     QString pageToken;
+    QStringList parents;
+    for (const QString &id : folderIds)
+        parents << QStringLiteral("%1 in parents").arg(quoted(id));
     do {
-        QString q = QStringLiteral("%1 in parents and trashed = false").arg(quoted(folderId));
+        QString q = (parents.size() == 1 ? parents.first()
+                                         : QLatin1Char('(') + parents.join(QStringLiteral(" or ")) + QLatin1Char(')'))
+                    + QStringLiteral(" and trashed = false");
         if (!filter.isEmpty())
             q += QStringLiteral(" and ") + filter;
         QList<QPair<QString, QString>> query{
@@ -223,7 +295,11 @@ std::optional<QString> GoogleDriveStore::subfolder(const QString &parentId, cons
         return found->first().value(QStringLiteral("id")).toString();
     if (!create)
         return QString();
+    return createFolder(parentId, name);
+}
 
+std::optional<QString> GoogleDriveStore::createFolder(const QString &parentId, const QString &name)
+{
     Call call;
     call.verb = "POST";
     call.url = apiUrl(QStringLiteral("/drive/v3/files"),
@@ -261,7 +337,10 @@ std::optional<QString> GoogleDriveStore::folderFor(const QString &relDir, bool c
     }
     const QString name = relDir.isEmpty() ? QStringLiteral("library")
                                           : relDir.mid(relDir.lastIndexOf(QLatin1Char('/')) + 1);
-    const auto id = subfolder(parentId, name, create);
+    // After a full listing, a folder that isn't known isn't there: no need
+    // to look before making it (one request, not two).
+    const auto id = m_listed && create && !relDir.isEmpty() ? createFolder(parentId, name)
+                                                            : subfolder(parentId, name, create);
     if (id && !id->isEmpty())
         m_folders.insert(relDir, *id);
     return id;
@@ -292,6 +371,7 @@ std::optional<QList<RemoteEntry>> GoogleDriveStore::list()
 {
     m_folders.clear();
     m_files.clear();
+    m_listed = false;
     QList<RemoteEntry> out;
     const auto root = folderFor(QString(), false);
     if (!root)
@@ -299,29 +379,53 @@ std::optional<QList<RemoteEntry>> GoogleDriveStore::list()
     if (root->isEmpty())
         return out;   // nothing uploaded yet
 
-    QList<QString> pending{QString()};
-    while (!pending.isEmpty()) {
-        const QString dir = pending.takeFirst();
-        const auto files = children(m_folders.value(dir));
-        if (!files)
-            return std::nullopt;
-        for (const QJsonObject &file : *files) {
-            const QString name = file.value(QStringLiteral("name")).toString();
-            if (name.isEmpty() || name.contains(QLatin1Char('/')))
-                continue;
-            const QString rel = dir.isEmpty() ? name : dir + QLatin1Char('/') + name;
-            if (file.value(QStringLiteral("mimeType")).toString() == kFolderMime) {
-                if (!m_folders.contains(rel)) {
-                    m_folders.insert(rel, file.value(QStringLiteral("id")).toString());
-                    pending.append(rel);
+    // A level of the tree at a time, many folders per listing.
+    QStringList level{QString()};
+    while (!level.isEmpty()) {
+        QStringList nextLevel;
+        for (qsizetype i = 0; i < level.size(); i += m_foldersPerListing) {
+            QHash<QString, QString> dirOf;   // folder id -> its path
+            QStringList ids;
+            for (const QString &dir : level.mid(i, m_foldersPerListing)) {
+                const QString id = m_folders.value(dir);
+                dirOf.insert(id, dir);
+                ids << id;
+            }
+            const auto files = childrenOf(ids);
+            if (!files)
+                return std::nullopt;
+            for (const QJsonObject &file : *files) {
+                const QString name = file.value(QStringLiteral("name")).toString();
+                if (name.isEmpty() || name.contains(QLatin1Char('/')))
+                    continue;
+                // A file in two listed folders (Drive allows it) counts in the first.
+                QString dir;
+                bool found = false;
+                for (const QJsonValue &parent : file.value(QStringLiteral("parents")).toArray()) {
+                    if (const auto it = dirOf.constFind(parent.toString()); it != dirOf.constEnd()) {
+                        dir = *it;
+                        found = true;
+                        break;
+                    }
                 }
-            } else if (!m_files.contains(rel)) {
-                const RemoteEntry entry = entryFrom(file, rel);
-                m_files.insert(rel, entry.remoteId);
-                out.append(entry);
+                if (!found)
+                    continue;
+                const QString rel = dir.isEmpty() ? name : dir + QLatin1Char('/') + name;
+                if (file.value(QStringLiteral("mimeType")).toString() == kFolderMime) {
+                    if (!m_folders.contains(rel)) {
+                        m_folders.insert(rel, file.value(QStringLiteral("id")).toString());
+                        nextLevel.append(rel);
+                    }
+                } else if (!m_files.contains(rel)) {
+                    const RemoteEntry entry = entryFrom(file, rel);
+                    m_files.insert(rel, entry.remoteId);
+                    out.append(entry);
+                }
             }
         }
+        level = nextLevel;
     }
+    m_listed = true;
     return out;
 }
 
@@ -369,16 +473,18 @@ bool GoogleDriveStore::download(const RemoteEntry &entry, const QString &localPa
     return true;
 }
 
-// A resumable upload: the metadata first, then the content to the session
-// URL Drive hands back -- one request for any size of file.
+// Small files go up in one multipart request (metadata and content
+// together); bigger ones as a resumable upload: the metadata first, then the
+// content to the session URL Drive hands back.
 std::optional<QJsonObject> GoogleDriveStore::sendContent(const QString &existingId,
                                                          const QString &parentId,
                                                          const QString &name, QIODevice *content,
                                                          const QJsonObject &appProperties,
                                                          const ByteProgress &progress)
 {
+    const bool single = content->size() <= kSingleRequestUploadBytes;
     const QList<QPair<QString, QString>> query{
-        {QStringLiteral("uploadType"), QStringLiteral("resumable")},
+        {QStringLiteral("uploadType"), single ? QStringLiteral("multipart") : QStringLiteral("resumable")},
         {QStringLiteral("supportsAllDrives"), QStringLiteral("true")},
         {QStringLiteral("fields"), QStringLiteral("id,size,md5Checksum,headRevisionId")}};
     QJsonObject meta{{QStringLiteral("appProperties"), appProperties}};
@@ -392,6 +498,24 @@ std::optional<QJsonObject> GoogleDriveStore::sendContent(const QString &existing
         start.verb = "PATCH";
         start.url = apiUrl(QStringLiteral("/upload/drive/v3/files/") + existingId, query);
     }
+
+    if (single) {
+        content->seek(0);
+        const QByteArray boundary = "photolife-" + QUuid::createUuid().toByteArray(QUuid::Id128);
+        start.headers = {{"Content-Type", "multipart/related; boundary=" + boundary}};
+        start.body = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+                     + QJsonDocument(meta).toJson(QJsonDocument::Compact) + "\r\n--" + boundary
+                     + "\r\nContent-Type: application/octet-stream\r\n\r\n" + content->readAll()
+                     + "\r\n--" + boundary + "--\r\n";
+        const auto done = send(start, progress);
+        const QJsonObject file = json(done.body);
+        if (!done.ok() || file.value(QStringLiteral("id")).toString().isEmpty()) {
+            fail(QStringLiteral("Couldn't upload %1").arg(name), done);
+            return std::nullopt;
+        }
+        return file;
+    }
+
     start.headers = {{"Content-Type", "application/json; charset=UTF-8"},
                      {"X-Upload-Content-Type", "application/octet-stream"},
                      {"X-Upload-Content-Length", QByteArray::number(content->size())}};

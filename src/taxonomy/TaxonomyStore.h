@@ -338,6 +338,12 @@ public:
     // -- for "every photo of taxa carrying conservation status X".
     QList<LeafPhoto> projectLeafPhotos(int projectId, const QList<qint64> &taxonInatIds) const;
 
+    // For each of `taxonInatIds`, the name of its nearest ancestor of `rank`
+    // ("family", "order", "genus"...), by the shared taxon cache's
+    // parent_inat_id chain. Taxa with no such ancestor cached are left out.
+    QHash<qint64, QString> ancestorNamesAtRank(const QList<qint64> &taxonInatIds,
+                                               const QString &rank) const;
+
     // iNat ids of the project's leaf-rank taxa that have no reference photo URL
     // cached yet (ReferencePhotoFetcher's work list).
     QList<qint64> projectLeafTaxaMissingPhoto(int projectId) const;

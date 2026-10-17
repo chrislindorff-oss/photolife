@@ -1,5 +1,6 @@
 #pragma once
 
+#include "collection/ContactSheetWriter.h"
 #include "collection/FileNamePattern.h"
 #include "db/CatalogueDescriptor.h"
 #include "libsync/DriveConfig.h"
@@ -189,6 +190,14 @@ public:
     void setExportFileNamePattern(const collection::FileNamePattern &pattern);
     QString exportAuthorName() const;
     void setExportAuthorName(const QString &name);
+
+    // The Reference Photos "Export Contact Sheet (PDF)…" dialog's last
+    // choices (all but the title and subtitle, which follow the tree), and
+    // the folder its last PDF was saved in. Defaults / empty until used.
+    collection::ContactSheetOptions contactSheetOptions() const;
+    void setContactSheetOptions(const collection::ContactSheetOptions &options);
+    QString contactSheetFolder() const;
+    void setContactSheetFolder(const QString &path);
 
 private:
     // The active server's id, or empty for the Local catalogue.

@@ -27,6 +27,8 @@ private slots:
     void setScopeReloadsAsynchronously();
     void rapidSetScopeCallsOnlyApplyTheLatest();
     void taxonSetScopeSelectsExactSpeciesAndClearsOnPlainScope();
+    void rowsMatchTheListedSpecies();
+    void ancestorNamesAtRankWalksUpTheParentChain();
 
 private:
     std::unique_ptr<QTemporaryDir> m_dbDir;
@@ -149,6 +151,49 @@ void TestReferencePhotoModel::taxonSetScopeSelectsExactSpeciesAndClearsOnPlainSc
     model.setScope(0);
     QVERIFY(spy.wait(2000));
     QCOMPARE(model.speciesCount(), 2);
+}
+
+void TestReferencePhotoModel::rowsMatchTheListedSpecies()
+{
+    ReferencePhotoModel model(*m_db, *m_photos, this);
+    model.setProject(m_project);
+    const QList<ReferencePhotoModel::Row> rows = model.rows();
+    QCOMPARE(rows.size(), 2);
+    QCOMPARE(rows.at(0).name, QStringLiteral("Diuris pardina"));
+    QCOMPARE(rows.at(1).name, QStringLiteral("Diuris punctata"));
+}
+
+void TestReferencePhotoModel::ancestorNamesAtRankWalksUpTheParentChain()
+{
+    TaxonomyStore store(m_db->connectionName());
+
+    Taxon family;
+    family.inatId = 4000;
+    family.rank = QStringLiteral("family");
+    family.rankLevel = 30;
+    family.name = QStringLiteral("Orchidaceae");
+    QVERIFY(store.upsertTaxon(family) > 0);
+
+    Taxon genus;   // re-parent the seeded genus under the family
+    genus.inatId = 60815;
+    genus.parentInatId = 4000;
+    genus.rank = QStringLiteral("genus");
+    genus.rankLevel = 20;
+    genus.name = QStringLiteral("Diuris");
+    QVERIFY(store.upsertTaxon(genus) > 0);
+
+    const QHash<qint64, QString> families =
+        store.ancestorNamesAtRank({900, 901, 60815, 12345}, QStringLiteral("family"));
+    QCOMPARE(families.size(), 3);   // 12345 isn't cached
+    QCOMPARE(families.value(900), QStringLiteral("Orchidaceae"));
+    QCOMPARE(families.value(60815), QStringLiteral("Orchidaceae"));
+
+    const QHash<qint64, QString> genera =
+        store.ancestorNamesAtRank({900, 901, 60815}, QStringLiteral("genus"));
+    QCOMPARE(genera.size(), 2);   // a taxon isn't its own ancestor
+    QCOMPARE(genera.value(901), QStringLiteral("Diuris"));
+
+    QVERIFY(store.ancestorNamesAtRank({900}, QStringLiteral("order")).isEmpty());
 }
 
 QTEST_MAIN(TestReferencePhotoModel)

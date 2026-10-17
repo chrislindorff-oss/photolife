@@ -43,6 +43,9 @@ public:
     int tokenRequests = 0;
     int pageSize = 2;          // small, so paging is exercised
     int failNext = 0;          // answer this many API requests with 503
+    int listings = 0;          // files.list requests
+    int resumableUploads = 0;  // uploads that took a session (two requests)
+    int multipartUploads = 0;  // uploads in one request
     QString lastAuthCode;
     QString lastVerifier;
 
@@ -109,7 +112,8 @@ private:
     {
         QJsonObject o{{QStringLiteral("id"), f.id},
                       {QStringLiteral("name"), f.name},
-                      {QStringLiteral("mimeType"), f.mimeType}};
+                      {QStringLiteral("mimeType"), f.mimeType},
+                      {QStringLiteral("parents"), QJsonArray{f.parent}}};
         if (f.mimeType != kFolderMime) {
             o.insert(QStringLiteral("size"), QString::number(f.data.size()));
             o.insert(QStringLiteral("md5Checksum"), md5(f.data));
@@ -145,6 +149,7 @@ private:
         const QList<QByteArray> lines = buf.left(end).split('\n');
         qint64 length = 0;
         QByteArray auth;
+        QByteArray contentType;
         for (const QByteArray &line : lines.mid(1)) {
             const int colon = line.indexOf(':');
             const QByteArray name = line.left(colon).trimmed().toLower();
@@ -153,17 +158,57 @@ private:
                 length = value.toLongLong();
             else if (name == "authorization")
                 auth = value;
+            else if (name == "content-type")
+                contentType = value;
         }
         if (buf.size() < end + 4 + length)
             return;
         const QByteArray body = buf.mid(end + 4, length);
         const QList<QByteArray> request = lines.first().trimmed().split(' ');
         m_buffers.remove(s);
-        handle(s, request.value(0), QUrl::fromEncoded(request.value(1)), auth, body);
+        handle(s, request.value(0), QUrl::fromEncoded(request.value(1)), auth, contentType, body);
+    }
+
+    // The JSON metadata and the content of a multipart/related upload.
+    static std::pair<QJsonObject, QByteArray> multipart(const QByteArray &contentType,
+                                                        const QByteArray &body)
+    {
+        const QByteArray boundary = "--" + contentType.mid(contentType.indexOf("boundary=") + 9);
+        QList<QByteArray> parts;
+        for (qsizetype at = body.indexOf(boundary); at >= 0;) {
+            const qsizetype next = body.indexOf(boundary, at + boundary.size());
+            if (next < 0)
+                break;
+            QByteArray part = body.mid(at + boundary.size(), next - at - boundary.size());
+            part = part.mid(part.indexOf("\r\n\r\n") + 4);
+            part.chop(2);   // the CRLF before the next boundary
+            parts << part;
+            at = next;
+        }
+        return {QJsonDocument::fromJson(parts.value(0)).object(), parts.value(1)};
+    }
+
+    void store(QTcpSocket *s, const QString &existingId, const QJsonObject &meta, const QByteArray &data)
+    {
+        File f;
+        if (!existingId.isEmpty()) {
+            f = files.value(existingId);
+        } else {
+            f.id = QStringLiteral("F%1").arg(m_nextId++, 4, 10, QLatin1Char('0'));
+            f.name = meta.value(QStringLiteral("name")).toString();
+            f.mimeType = QStringLiteral("image/jpeg");
+            f.parent = meta.value(QStringLiteral("parents")).toArray().first().toString();
+        }
+        f.data = data;
+        ++f.revision;
+        if (meta.contains(QStringLiteral("appProperties")))
+            f.appProperties = meta.value(QStringLiteral("appProperties")).toObject();
+        files.insert(f.id, f);
+        replyJson(s, 200, resource(f));
     }
 
     void handle(QTcpSocket *s, const QByteArray &verb, const QUrl &url, const QByteArray &auth,
-                const QByteArray &body)
+                const QByteArray &contentType, const QByteArray &body)
     {
         const QString path = url.path();
         const QUrlQuery query(url);
@@ -227,11 +272,15 @@ private:
                 else if (m.captured(1) == QLatin1String("mimeType"))
                     mime = value;
             }
-            static const QRegularExpression parentRe(QStringLiteral("^'([^']+)' in parents"));
-            const QString parent = parentRe.match(q("q")).captured(1);
+            ++listings;
+            // "('<a>' in parents or '<b>' in parents ...) and ..."
+            static const QRegularExpression parentRe(QStringLiteral("'([^']+)' in parents"));
+            QSet<QString> parents;
+            for (auto it = parentRe.globalMatch(q("q")); it.hasNext();)
+                parents.insert(it.next().captured(1));
             QList<File> hits;
             for (const File &f : std::as_const(files)) {
-                if (f.parent == parent && (name.isEmpty() || f.name == name)
+                if (parents.contains(f.parent) && (name.isEmpty() || f.name == name)
                     && (mime.isEmpty() || f.mimeType == mime))
                     hits << f;
             }
@@ -269,7 +318,15 @@ private:
             replyJson(s, 200, resource(f));
             return;
         }
+        if (const auto m = uploadRe.match(path);
+            m.hasMatch() && (verb == "POST" || verb == "PATCH") && q("uploadType") == QLatin1String("multipart")) {
+            ++multipartUploads;
+            const auto [meta, data] = multipart(contentType, body);
+            store(s, m.captured(1), meta, data);
+            return;
+        }
         if (const auto m = uploadRe.match(path); m.hasMatch() && (verb == "POST" || verb == "PATCH")) {
+            ++resumableUploads;
             const QString sid = QString::number(m_nextId++);
             m_sessions.insert(sid, Session{m.captured(1), QJsonDocument::fromJson(body).object()});
             replyJson(s, 200, {}, "Location: " + base().toUtf8() + "/upload-session/" + sid.toUtf8() + "\r\n");
@@ -277,21 +334,7 @@ private:
         }
         if (const auto m = sessionRe.match(path); m.hasMatch() && verb == "PUT") {
             const Session session = m_sessions.take(m.captured(1));
-            File f;
-            if (!session.existingId.isEmpty()) {
-                f = files.value(session.existingId);
-            } else {
-                f.id = QStringLiteral("F%1").arg(m_nextId++, 4, 10, QLatin1Char('0'));
-                f.name = session.meta.value(QStringLiteral("name")).toString();
-                f.mimeType = QStringLiteral("image/jpeg");
-                f.parent = session.meta.value(QStringLiteral("parents")).toArray().first().toString();
-            }
-            f.data = body;
-            ++f.revision;
-            if (session.meta.contains(QStringLiteral("appProperties")))
-                f.appProperties = session.meta.value(QStringLiteral("appProperties")).toObject();
-            files.insert(f.id, f);
-            replyJson(s, 200, resource(f));
+            store(s, session.existingId, session.meta, body);
             return;
         }
         replyJson(s, 404, {{QStringLiteral("error"),
@@ -444,6 +487,71 @@ private slots:
         QCOMPARE(drive.tokenRequests, 2);   // once per store
     }
 
+    // A tree of folders is listed a level at a time, many folders a
+    // request; small files go up in one request, big ones in two.
+    void listsManyFoldersPerRequestAndUploadsSmallFilesInOne()
+    {
+        FakeDrive drive;
+        drive.pageSize = 1000;
+        QTemporaryDir dir;
+        {
+            GoogleDriveStore store(drive.config());
+            store.setRetryDelayMs(0);
+            QVERIFY(store.list());
+            for (int i = 0; i < 12; ++i) {
+                const QByteArray d = "photo " + QByteArray::number(i);
+                QVERIFY2(store.upload(writeFile(dir.filePath(QStringLiteral("p")), d),
+                                      QStringLiteral("Family %1/Genus/p%2.jpg").arg(i % 6).arg(i),
+                                      md5Hex(d), shaHex(d), QStringLiteral("Alice")),
+                         qPrintable(store.error()));
+            }
+            QCOMPARE(drive.multipartUploads, 12);
+            QCOMPARE(drive.resumableUploads, 0);
+            const QByteArray big(int(GoogleDriveStore::kSingleRequestUploadBytes) + 1, 'x');
+            QVERIFY2(store.upload(writeFile(dir.filePath(QStringLiteral("big")), big),
+                                  QStringLiteral("big.jpg"), md5Hex(big), shaHex(big),
+                                  QStringLiteral("Alice")),
+                     qPrintable(store.error()));
+            QCOMPARE(drive.resumableUploads, 1);
+        }
+
+        GoogleDriveStore fresh(drive.config());
+        fresh.setFoldersPerListing(4);
+        drive.listings = 0;
+        const auto listed = fresh.list();
+        QVERIFY2(listed, qPrintable(fresh.error()));
+        QCOMPARE(listed->size(), 13);
+        // Finding library/ (1), listing it (1), its 6 families (2, at 4 a
+        // request) and their 6 genera (2) -- not one request per folder.
+        QCOMPARE(drive.listings, 6);
+        QSet<QString> paths;
+        for (const RemoteEntry &e : *listed)
+            paths.insert(e.relPath);
+        QVERIFY(paths.contains(QStringLiteral("Family 5/Genus/p11.jpg")));
+        QVERIFY(paths.contains(QStringLiteral("big.jpg")));
+        // Listed, so missing folders are made without asking first: one
+        // request each, parents before children, counted as they go.
+        drive.listings = 0;
+        QList<int> progress;
+        QVERIFY2(fresh.prepareUploads({QStringLiteral("New/Deep/x.jpg"), QStringLiteral("New/y.jpg"),
+                                       QStringLiteral("Family 1/Genus/p1.jpg")},
+                                      [&](int done, int) { progress << done; }),
+                 qPrintable(fresh.error()));
+        QCOMPARE(drive.listings, 0);
+        QCOMPARE(progress, (QList<int>{0, 1}));
+        int made = 0;
+        for (const FakeDrive::File &f : std::as_const(drive.files)) {
+            if (f.name == QLatin1String("New") || f.name == QLatin1String("Deep"))
+                ++made;
+        }
+        QCOMPARE(made, 2);
+        const QByteArray d = "deep";
+        QVERIFY(fresh.upload(writeFile(dir.filePath(QStringLiteral("d")), d), QStringLiteral("New/Deep/x.jpg"),
+                             md5Hex(d), shaHex(d), QStringLiteral("Alice")));
+        QCOMPARE(drive.listings, 0);
+        QVERIFY(drive.byPath(QStringLiteral("library/New/Deep/x.jpg")));
+    }
+
     void thumbnails()
     {
         FakeDrive drive;
@@ -486,6 +594,10 @@ private slots:
         QTemporaryDir bob;
         writeFile(alice.filePath(QStringLiteral("Birds/robin.jpg")), "robin");
         writeFile(alice.filePath(QStringLiteral("Birds/robin.nef")), "robin raw");
+        // Enough for every worker, in folders that don't exist yet.
+        for (int i = 0; i < 20; ++i)
+            writeFile(alice.filePath(QStringLiteral("Frogs/Family %1/f%2.jpg").arg(i % 3).arg(i)),
+                      "frog " + QByteArray::number(i));
         {
             GoogleDriveStore store(drive.config());
             LibraryState state(QStringLiteral(":memory:"));
@@ -494,8 +606,15 @@ private slots:
             const auto r = sync.run({true, true, QStringLiteral("Alice"), {}});
             QVERIFY2(r, qPrintable(sync.error()));
             QVERIFY2(r->failures.isEmpty(), qPrintable(r->failures.join(QLatin1Char('\n'))));
-            QCOMPARE(r->uploaded, 2);
+            QCOMPARE(r->uploaded, 22);
         }
+        // Each folder made once, though four workers uploaded into them.
+        int frogFamilies = 0;
+        for (const FakeDrive::File &f : std::as_const(drive.files)) {
+            if (f.mimeType == kFolderMime && f.name.startsWith(QLatin1String("Family ")))
+                ++frogFamilies;
+        }
+        QCOMPARE(frogFamilies, 3);
         // Someone adds one through the Drive website.
         drive.files.insert(QStringLiteral("W1"),
                            FakeDrive::File{QStringLiteral("W1"), QStringLiteral("wren.jpg"),
@@ -510,7 +629,7 @@ private slots:
             const auto r = sync.run({true, true, QStringLiteral("Bob"), {}});
             QVERIFY2(r, qPrintable(sync.error()));
             QVERIFY2(r->failures.isEmpty(), qPrintable(r->failures.join(QLatin1Char('\n'))));
-            QCOMPARE(r->downloaded, 3);
+            QCOMPARE(r->downloaded, 23);
             QFile f(bob.filePath(QStringLiteral("Birds/wren.jpg")));
             QVERIFY(f.open(QIODevice::ReadOnly));
             QCOMPARE(f.readAll(), QByteArray("wren"));

@@ -78,7 +78,9 @@ struct LibrarySyncResult
 //  - deleted online, unchanged here -> moved to <root>/.photolife-trash/<date>/
 //  - deleted here                   -> left online, and not downloaded again
 //
-// Nothing is ever deleted online. Downloads land in a ".photolife-partial"
+// Transfers run several at a time when the store allows (see
+// LibraryStore::parallelTransfers()); the state is only ever written from
+// the calling thread. Nothing is ever deleted online. Downloads land in a ".photolife-partial"
 // file, are checked against the store's hash, then renamed into place; the
 // state is saved after every file, so an interrupted sync just carries on.
 // Only the files the scanner would catalogue (images and RAWs, outside hidden
@@ -131,13 +133,32 @@ private:
         QString sha256;
     };
 
+    // One upload, as done by a worker: what was sent, or why not.
+    struct Sent
+    {
+        LocalFile file;
+        std::optional<RemoteEntry> entry;
+        QString why;
+    };
+    // One download, likewise.
+    struct Fetched
+    {
+        LocalFile file;
+        bool ok = false;
+        QString why;
+    };
+
     QString absPath(const QString &relPath) const;
     QList<LocalFile> walk();
-    bool hashFile(const QString &path, QString *md5, QString *sha256);
-    std::optional<LocalFile> describeLocal(const QString &relPath);
+    static bool hashFile(const QString &path, QString *md5, QString *sha256);
+    std::optional<LocalFile> describeLocal(const QString &relPath) const;
     bool sameContent(const LocalFile &local, const RemoteEntry &remote) const;
-    bool moveToTrash(const QString &relPath, QString *why);
-    bool fetch(const RemoteEntry &remote, const QString &relPath, LocalFile *saved, QString *why);
+    bool moveToTrash(const QString &relPath, QString *why) const;
+    // Safe on worker threads: they touch only the files and `store`.
+    Fetched fetchWith(LibraryStore &store, const RemoteEntry &remote, const QString &relPath) const;
+    Sent sendWith(LibraryStore &store, const LocalFile &known, const QString &who) const;
+    // Records a finished upload (on the calling thread).
+    void recordSent(const Sent &sent);
     bool send(const QString &relPath, const QString &who, QString *why);
     bool isCancelled() const { return m_cancel && m_cancel(); }
     void report(const QString &phase, int done, int total);

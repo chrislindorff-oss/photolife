@@ -591,21 +591,60 @@ private slots:
         const QByteArray data = alice.read(QStringLiteral("robin.jpg"));
         const QString sha = shaOf(data);
 
+        // Recorded as bigger than a thumbnail: it gets one online.
+        const qint64 big = ThumbnailSync::kOwnThumbnailBytes + 1;
+        const QString robin = alice.path(QStringLiteral("robin.jpg"));
         ThumbnailSync up(store, aliceCache.path());
-        const auto sent = up.run({{alice.path(QStringLiteral("robin.jpg")), sha}}, {});
+        const auto sent = up.run({{robin, sha, big}}, {});
         QVERIFY(sent);
         QCOMPARE(sent->uploaded, 1);
         QVERIFY(store.thumbs.contains(ThumbnailSync::nameFor(sha)));
         // Kept in Alice's cache too, and not uploaded twice.
         QVERIFY(QFileInfo::exists(pl::thumb::ThumbnailCache::diskPathFor(aliceCache.path(), sha, ThumbnailSync::kSize)));
-        QCOMPARE(up.run({{alice.path(QStringLiteral("robin.jpg")), sha}}, {})->uploaded, 0);
+        QCOMPARE(up.run({{robin, sha, big}}, {})->uploaded, 0);
 
         ThumbnailSync down(store, bobCache.path());
-        const auto got = down.run({}, {sha, QStringLiteral("no-such-hash")});
+        const auto got = down.run({}, {{sha, {}}, {QStringLiteral("no-such-hash"), {}}});
         QVERIFY(got);
         QCOMPARE(got->downloaded, 1);
+        QCOMPARE(store.downloads, 0);   // the thumbnail, not the photo
         QImage thumb(pl::thumb::ThumbnailCache::diskPathFor(bobCache.path(), sha, ThumbnailSync::kSize));
         QCOMPARE(thumb.size(), QSize(64, 48));
+    }
+
+    // A photo about the size of its thumbnail gets none online: the
+    // computers without it make one from the photo itself.
+    void smallPhotosAreTheirOwnThumbnails()
+    {
+        FakeStore store;
+        QTemporaryDir aliceCache;
+        QTemporaryDir bobCache;
+        Machine alice(QStringLiteral("Alice"));
+        QImage image(64, 48, QImage::Format_RGB32);
+        image.fill(Qt::darkRed);
+        QVERIFY(image.save(alice.path(QStringLiteral("wren.jpg"))));
+        const QByteArray data = alice.read(QStringLiteral("wren.jpg"));
+        const QString sha = shaOf(data);
+        QVERIFY(data.size() <= ThumbnailSync::kOwnThumbnailBytes);
+
+        ThumbnailSync up(store, aliceCache.path());
+        const auto sent = up.run({{alice.path(QStringLiteral("wren.jpg")), sha, data.size()}}, {});
+        QVERIFY(sent);
+        QCOMPARE(sent->uploaded, 0);
+        QVERIFY(store.thumbs.isEmpty());
+
+        store.put(QStringLiteral("Birds/wren.jpg"), data, QStringLiteral("Alice"));
+        RemoteEntry photo = store.list()->first();
+        ThumbnailSync down(store, bobCache.path());
+        const auto got = down.run({}, {{sha, photo}});
+        QVERIFY(got);
+        QVERIFY2(got->failures.isEmpty(), qPrintable(got->failures.join(QLatin1Char('\n'))));
+        QCOMPARE(got->downloaded, 1);
+        QCOMPARE(store.downloads, 1);
+        QImage thumb(pl::thumb::ThumbnailCache::diskPathFor(bobCache.path(), sha, ThumbnailSync::kSize));
+        QCOMPARE(thumb.size(), QSize(64, 48));
+        // Nothing left behind but the cached thumbnail.
+        QCOMPARE(QDir(bobCache.path()).entryList(QDir::Files | QDir::Hidden).size(), 0);
     }
 };
 

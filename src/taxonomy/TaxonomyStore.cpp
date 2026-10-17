@@ -1555,6 +1555,40 @@ QList<TaxonomyStore::LeafPhoto> TaxonomyStore::projectLeafPhotos(
     return out;
 }
 
+QHash<qint64, QString> TaxonomyStore::ancestorNamesAtRank(const QList<qint64> &taxonInatIds,
+                                                         const QString &rank) const
+{
+    QHash<qint64, QString> out;
+    if (taxonInatIds.isEmpty() || rank.isEmpty())
+        return out;
+
+    // Walk each taxon up its parent chain, stopping once `rank` is reached.
+    constexpr int chunkSize = kMaxBatchBindParams - 2;
+    for (qsizetype offset = 0; offset < taxonInatIds.size(); offset += chunkSize) {
+        const QList<qint64> chunk = taxonInatIds.mid(offset, chunkSize);
+        const QStringList placeholders(chunk.size(), QStringLiteral("?"));
+        const QString sql = QStringLiteral(
+            "WITH RECURSIVE up(leaf, cur) AS ("
+            "  SELECT inat_id, parent_inat_id FROM taxon WHERE inat_id IN (%1) "
+            "  UNION ALL SELECT up.leaf, t.parent_inat_id FROM up "
+            "    JOIN taxon t ON t.inat_id = up.cur WHERE t.rank <> ?) "
+            "SELECT up.leaf, t.name FROM up JOIN taxon t ON t.inat_id = up.cur "
+            "WHERE t.rank = ?").arg(placeholders.join(QLatin1Char(',')));
+
+        QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+        q.prepare(sql);
+        for (qint64 id : chunk)
+            q.addBindValue(qlonglong(id));
+        q.addBindValue(rank);
+        q.addBindValue(rank);
+        if (!q.exec())
+            return out;
+        while (q.next())
+            out.insert(q.value(0).toLongLong(), q.value(1).toString());
+    }
+    return out;
+}
+
 QList<qint64> TaxonomyStore::projectLeafTaxaMissingPhoto(int projectId) const
 {
     QList<qint64> ids;

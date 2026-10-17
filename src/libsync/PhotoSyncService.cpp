@@ -252,26 +252,27 @@ PhotoSyncService::Outcome PhotoSyncService::runInWorker(Mode mode, const Config 
     const bool thumbsUp = mode == Mode::Upload || mode == Mode::Both;
     const bool thumbsDown = (mode == Mode::Download || mode == Mode::Both) && !out.onlineOnly.isEmpty();
     if ((thumbsUp || thumbsDown) && !config.thumbnailDir.isEmpty() && !(out.result && out.result->cancelled)) {
-        QList<QPair<QString, QString>> here;
+        QList<ThumbnailSync::Local> here;
         if (thumbsUp) {
             const auto base = state.load();
             for (auto it = base.cbegin(); it != base.cend(); ++it) {
                 if (it->local && !it->sha256.isEmpty())
-                    here.append({root + QLatin1Char('/') + it.key(), it->sha256});
+                    here.append({root + QLatin1Char('/') + it.key(), it->sha256, it->size});
             }
         }
-        QStringList onlineHashes;
+        QList<ThumbnailSync::Online> onlineHashes;
         if (thumbsDown) {
             const QHash<QString, QString> hashes =
                 catalogue.isOpen() ? PhotoSelection::contentHashes(catalogue.name())
                                    : QHash<QString, QString>();
             const auto remote = state.remote();
             for (const QString &path : std::as_const(out.onlineOnly)) {
-                QString sha = remote.value(path.mid(root.size() + 1)).sha256;
+                const RemoteEntry photo = remote.value(path.mid(root.size() + 1));
+                QString sha = photo.sha256;
                 if (sha.isEmpty())
                     sha = hashes.value(path);   // the catalogue keeps forward slashes too
                 if (!sha.isEmpty())
-                    onlineHashes << sha;
+                    onlineHashes.append({sha, photo});
             }
         }
         thumb::ThumbnailCache::SourceLoader rawLoader;

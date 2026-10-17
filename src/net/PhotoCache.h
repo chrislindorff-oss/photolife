@@ -35,6 +35,10 @@ public:
     // A url that has already failed to download stays null and is not retried.
     QPixmap photo(const QString &url);
 
+    // Whether `url` has already failed to download (photo() returns null for
+    // it and schedules nothing, so no ready() will follow).
+    bool hasFailed(const QString &url) const { return m_failed.contains(url); }
+
     // Where the on-disk cache lives, for reporting total storage use.
     QString cacheDir() const { return m_cacheDir; }
 

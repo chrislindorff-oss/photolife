@@ -8,6 +8,7 @@ qt_add_library(photolife_core STATIC
     checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
     collection/CollectionManifest.h collection/CollectionManifest.cpp
+    collection/ContactSheetWriter.h collection/ContactSheetWriter.cpp
     collection/ExportEngine.h collection/ExportEngine.cpp
     collection/FileNamePattern.h collection/FileNamePattern.cpp
     collection/ExportService.h collection/ExportService.cpp
@@ -99,6 +100,7 @@ qt_add_library(photolife_core STATIC
     ui/CatalogueConnectDialog.h ui/CatalogueConnectDialog.cpp
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
     ui/CaptureDelegate.h    ui/CaptureDelegate.cpp
+    ui/ContactSheetDialog.h ui/ContactSheetDialog.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
     ui/ExportDialog.h       ui/ExportDialog.cpp
     ui/FileNamingDialog.h   ui/FileNamingDialog.cpp

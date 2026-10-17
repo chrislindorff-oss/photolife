@@ -7,6 +7,7 @@
 #include "db/Database.h"
 #include "db/PostgresConnectionMonitor.h"
 #include "model/CaptureListModel.h"
+#include "collection/ContactSheetWriter.h"
 #include "model/ReferencePhotoModel.h"
 #include "model/TaxonomyTreeModel.h"
 #include "pl/Version.h"
@@ -60,6 +61,7 @@
 #include "ui/MapView.h"
 #include "ui/NewProjectDialog.h"
 #include "ui/PlaceConfirmDialog.h"
+#include "ui/ContactSheetDialog.h"
 #include "ui/ReferencePhotoDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/ServerDialogs.h"
@@ -96,6 +98,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QSqlDatabase>
 #include <QSqlQuery>
@@ -131,6 +134,10 @@
 namespace pl {
 namespace {
 
+// m_projectCombo item data: the project's own name, without the display-only
+// " (customized)" suffix.
+constexpr int kProjectNameRole = Qt::UserRole + 1;
+
 // The modal progress window beginTaskProgress() shows. Unlike a plain
 // QProgressDialog, it can't be dismissed while its task runs: Escape would
 // otherwise just hide it (QDialog::reject) -- unlocking the rest of the app
@@ -145,6 +152,11 @@ public:
           m_cancellable(cancellable)
     {
         setWindowFlag(Qt::WindowCloseButtonHint, false);
+        // Wrapped, so a step's note (see withWaitNote()) doesn't stretch it.
+        auto *text = new QLabel(label, this);
+        text->setWordWrap(true);
+        setLabel(text);
+        setMinimumWidth(440);
     }
 
     void reject() override
@@ -946,6 +958,8 @@ void MainWindow::buildReferenceTreeMenu(QMenu *treeMenu)
     treeMenu->addSeparator();
     m_exportTreePhotosAction = treeMenu->addAction(tr("&Export Photo Collection…"),
                                                    this, &MainWindow::exportReferenceTreePhotos);
+    treeMenu->addAction(tr("Export Reference Photo &Contact Sheet (PDF)…"), this,
+                        &MainWindow::exportReferenceContactSheet);
 }
 
 void MainWindow::buildViewMenu()
@@ -2620,6 +2634,7 @@ void MainWindow::reloadProjectList()
             const bool pruned = q.value(2).toBool();
             m_projectCombo->addItem(pruned ? tr("%1 (customized)").arg(name) : name,
                                     q.value(0).toInt());
+            m_projectCombo->setItemData(m_projectCombo->count() - 1, name, kProjectNameRole);
         }
     }
 
@@ -3782,8 +3797,17 @@ QWidget *MainWindow::buildReferencePhotosPage()
            "from iNaturalist."));
     connect(fetchButton, &QPushButton::clicked, this, &MainWindow::fetchReferencePhotos);
 
+    m_refPhotoExportButton = new QPushButton(tr("Export Contact Sheet…"), this);
+    m_refPhotoExportButton->setToolTip(
+        tr("Save these reference photos as a printable PDF contact sheet: a grid of "
+           "thumbnails with their names."));
+    m_refPhotoExportButton->setEnabled(false);
+    connect(m_refPhotoExportButton, &QPushButton::clicked, this,
+            &MainWindow::exportReferenceContactSheet);
+
     auto *header = new QHBoxLayout;
     header->addWidget(m_refPhotoStatus, 1);
+    header->addWidget(m_refPhotoExportButton, 0, Qt::AlignTop);
     header->addWidget(fetchButton, 0, Qt::AlignTop);
 
     m_refPhotoGrid = new QListView(this);
@@ -3821,6 +3845,8 @@ void MainWindow::updateReferencePhotoStatus()
 
     const int total = m_refPhotoModel->speciesCount();
     const int withPhoto = m_refPhotoModel->withPhotoCount();
+    if (m_refPhotoExportButton)
+        m_refPhotoExportButton->setEnabled(total > 0);
     if (total == 0) {
         m_refPhotoStatus->setText(
             tr("Select a reference tree — or a taxon within it — to see its species' "
@@ -3882,6 +3908,132 @@ void MainWindow::fetchReferencePhotos()
     statusBar()->showMessage(tr("Fetching reference photos from iNaturalist…"));
     beginTaskProgress(tr("Fetching Reference Photos"), [this] { m_refPhotoFetcher->cancel(); });
     m_refPhotoFetcher->start(pid);
+}
+
+void MainWindow::exportReferenceContactSheet()
+{
+    const QString dialogTitle = tr("Export Contact Sheet");
+    if (currentProjectId() <= 0) {
+        QMessageBox::information(this, dialogTitle, tr("Select a reference tree first."));
+        return;
+    }
+    if (!m_refPhotoModel || m_refPhotoModel->speciesCount() == 0) {
+        QMessageBox::information(this, dialogTitle,
+                                 tr("There are no reference photos to export for this "
+                                    "selection."));
+        return;
+    }
+    if (m_refPhotoModel->withPhotoCount() == 0) {
+        QMessageBox::information(this, dialogTitle,
+                                 tr("None of these species has a reference photo yet. "
+                                    "Use Fetch Reference Photos first."));
+        return;
+    }
+
+    // A snapshot of exactly what the Reference Photos tab lists now.
+    const QList<model::ReferencePhotoModel::Row> rows = m_refPhotoModel->rows();
+
+    const QString treeName = m_projectCombo->currentData(kProjectNameRole).toString();
+    collection::ContactSheetOptions options = m_app.settings().contactSheetOptions();
+    options.title = treeName;
+    const QModelIndex taxonIndex = m_treeView->currentIndex();
+    if (m_selectedTaxon > 0 && taxonIndex.isValid())
+        options.subtitle = taxonIndex.data(model::TaxonomyTreeModel::NameRole).toString();
+
+    QString folder = m_app.settings().contactSheetFolder();
+    if (folder.isEmpty() || !QFileInfo(folder).isDir())
+        folder = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString baseName = util::sanitizeFilenameComponent(
+        options.subtitle.isEmpty() ? tr("%1 contact sheet").arg(treeName)
+                                   : tr("%1 - %2 contact sheet").arg(treeName, options.subtitle));
+    const QString initialPath = QDir(folder).filePath(baseName + QStringLiteral(".pdf"));
+
+    ContactSheetDialog dialog(options, initialPath, m_refPhotoModel->speciesCount(),
+                              m_refPhotoModel->withPhotoCount(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    options = dialog.options();
+    const QString path = dialog.outputPath();
+    m_app.settings().setContactSheetOptions(options);
+    m_app.settings().setContactSheetFolder(QFileInfo(path).absolutePath());
+
+    // Gather every photo, downloading any not yet cached. ready() fires for
+    // failures too, so the wait always ends.
+    net::PhotoCache &cache = m_app.photoCache();
+    QSet<QString> pending;
+    for (const auto &row : rows) {
+        if (!row.photoUrl.isEmpty() && cache.photo(row.photoUrl).isNull()
+            && !cache.hasFailed(row.photoUrl))
+            pending.insert(row.photoUrl);
+    }
+    if (!pending.isEmpty()) {
+        QProgressDialog progress(tr("Downloading reference photos…"), tr("Cancel"), 0,
+                                 int(pending.size()), this);
+        progress.setWindowTitle(dialogTitle);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(0);
+        progress.setValue(0);
+        QEventLoop loop;
+        int done = 0;
+        const auto readyConnection =
+            connect(&cache, &net::PhotoCache::ready, &loop, [&](const QString &url) {
+                if (!pending.remove(url))
+                    return;
+                progress.setValue(++done);
+                if (pending.isEmpty())
+                    loop.quit();
+            });
+        connect(&progress, &QProgressDialog::canceled, &loop, &QEventLoop::quit);
+        loop.exec();
+        disconnect(readyConnection);
+        if (!pending.isEmpty())
+            return;   // cancelled
+    }
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QHash<qint64, QString> groups;
+    if (!options.groupRank.isEmpty()) {
+        QList<qint64> ids;
+        ids.reserve(rows.size());
+        for (const auto &row : rows)
+            ids.append(row.inatId);
+        groups = taxonomy::TaxonomyStore(m_app.database().connectionName())
+                     .ancestorNamesAtRank(ids, options.groupRank);
+    }
+
+    QList<collection::ContactSheetEntry> entries;
+    entries.reserve(rows.size());
+    for (const auto &row : rows) {
+        collection::ContactSheetEntry entry;
+        entry.name = row.name;
+        entry.commonName = row.commonName;
+        entry.attribution = row.attribution;
+        entry.group = groups.value(row.inatId);
+        if (!row.photoUrl.isEmpty())
+            entry.photo = cache.photo(row.photoUrl).toImage();
+        entries.append(std::move(entry));
+    }
+
+    QString error;
+    int pages = 0;
+    const bool ok = collection::writeContactSheet(path, entries, options, &error, &pages);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        QMessageBox::warning(this, dialogTitle, error);
+        return;
+    }
+
+    statusBar()->showMessage(
+        tr("Contact sheet saved — %n page(s): %1", nullptr, pages).arg(path), 8000);
+    QMessageBox done(QMessageBox::Information, dialogTitle,
+                     tr("Saved the contact sheet (%n page(s)) to:\n%1", nullptr, pages)
+                         .arg(QDir::toNativeSeparators(path)),
+                     QMessageBox::Close, this);
+    QPushButton *open = done.addButton(tr("Open PDF"), QMessageBox::AcceptRole);
+    done.setDefaultButton(open);
+    done.exec();
+    if (done.clickedButton() == open)
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void MainWindow::exportReferenceTreePhotos()
@@ -4725,6 +4877,37 @@ void MainWindow::switchToCatalogue(const QString &id)
 
 namespace {
 
+// A progress step with what to expect while waiting on it.
+QString withWaitNote(const QString &phase, const QString &note)
+{
+    return note.isEmpty() ? phase : phase + QStringLiteral("\n\n") + note;
+}
+
+QString catalogueSyncNote()
+{
+    return QObject::tr("This usually takes 10–40 seconds: each step is a round trip to the "
+                       "shared catalogue's server.");
+}
+
+QString photoSyncNote(const QString &phase)
+{
+    if (phase == QLatin1String("Checking photos on this computer"))
+        return QObject::tr("Looking for new or changed photos. A few seconds, or longer when "
+                           "many photos are new, since each new photo is read once.");
+    if (phase == QLatin1String("Checking photos online"))
+        return QObject::tr("Asking the photo storage what it has. This usually takes under a "
+                           "minute.");
+    if (phase == QLatin1String("Creating folders online"))
+        return QObject::tr("Each new folder is made online once, before its photos go up: about "
+                           "a second each.");
+    if (phase == QLatin1String("Uploading photos") || phase == QLatin1String("Downloading photos")
+        || phase == QLatin1String("Uploading thumbnails")
+        || phase == QLatin1String("Downloading thumbnails"))
+        return QObject::tr("Several go at once: roughly 100–200 small photos a minute. The bar "
+                           "shows how far it has got.");
+    return {};
+}
+
 using Op = sync::SyncService::Op;
 
 QString describeLockTime(const QString &iso)
@@ -4881,7 +5064,7 @@ void MainWindow::setupSync()
                 if (m_serverBar)
                     m_serverBar->setView(m_serverView);
                 if (m_syncUserInitiated)
-                    updateTaskProgress(phase, done, total);
+                    updateTaskProgress(withWaitNote(phase, catalogueSyncNote()), done, total);
             });
     connect(&service, &sync::SyncService::finished, this, &MainWindow::onSyncFinished);
 
@@ -4949,8 +5132,11 @@ void MainWindow::runSync(Op op, bool userInitiated)
     }
     m_runningOp = op;
     m_syncUserInitiated = userInitiated;
-    if (userInitiated && op != Op::Changes)
+    if (userInitiated && op != Op::Changes) {
         beginTaskProgress(syncOpTitle(op), {});
+        if (!isLocalOp(op))
+            updateTaskProgress(withWaitNote(syncOpTitle(op), catalogueSyncNote()), 0, 0);
+    }
     if (op != Op::Changes) {
         m_serverView.running = true;
         m_serverView.runningPhase = syncOpTitle(op);
@@ -5261,7 +5447,7 @@ void MainWindow::setupPhotoSync()
                 m_serverView.photosPhase =
                     total > 0 ? tr("%1 (%L2 of %L3)").arg(phase).arg(done).arg(total) : phase;
                 if (m_photoTaskProgress)
-                    updateTaskProgress(phase, done, total);
+                    updateTaskProgress(withWaitNote(phase, photoSyncNote(phase)), done, total);
                 updatePhotoStatus();
             });
     connect(&photos, &libsync::PhotoSyncService::finished, this, &MainWindow::onPhotoSyncFinished);

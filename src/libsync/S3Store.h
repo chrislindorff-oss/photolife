@@ -31,6 +31,13 @@ public:
     std::optional<QSet<QString>> listThumbnails() override;
     bool putThumbnail(const QString &name, const QByteArray &jpeg) override;
     std::optional<QByteArray> getThumbnail(const QString &name) override;
+    int parallelTransfers() const override { return 6; }
+    std::unique_ptr<LibraryStore> clone() const override
+    {
+        auto copy = std::make_unique<S3Store>(m_config);
+        copy->setCancel(cancelFn());
+        return copy;
+    }
 
     // The object key a library path is stored under.
     QString objectKey(const QString &relPath) const;
