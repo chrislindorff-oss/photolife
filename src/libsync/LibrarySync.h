@@ -20,8 +20,8 @@ struct LibrarySyncOptions
     // Which photos only online should be downloaded (relative paths); empty:
     // all of them. Never stops a photo already here being updated.
     std::function<bool(const QString &relPath)> wanted;
-    // Also delete the copies here of photos outside `wanted` that are safely
-    // online (LibraryPlan::freeable).
+    // Also move the copies here of photos outside `wanted` that are safely
+    // online (LibraryPlan::freeable) into kTrashDir -- never deleted.
     bool freeUp = false;
     // Also take the photos deleted here out of the store
     // (LibraryPlan::deletedHere) -- unless that looks like a mistake
@@ -90,6 +90,8 @@ struct LibrarySyncResult
 //  - changed in both places         -> keep both: theirs saved beside ours
 //                                      as "name (from <who>).ext", both uploaded
 //  - deleted online, unchanged here -> moved to <root>/.photolife-trash/<date>/
+//  - freed up (not wanted here)     -> moved there too: LibrarySync never
+//                                      deletes a photo on this computer
 //  - deleted here                   -> left online, and not downloaded again
 //
 // Transfers run several at a time when the store allows (see

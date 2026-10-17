@@ -29,7 +29,7 @@ public:
         Upload,     // send new and changed photos (before sending the catalogue)
         Download,   // fetch new and changed photos
         Both,
-        FreeUp,     // delete the copies here of photos not wanted any more (safely online)
+        FreeUp,     // move the copies here of photos not wanted any more (safely online) to the trash folder
         Fetch,      // download particular photos now (see fetch())
         RemoveOnline,   // take particular photos deleted here out of the store (see removeOnline())
     };

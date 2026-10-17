@@ -5535,8 +5535,9 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
             parts << tr("%Ln deleted online (moved to %1)", nullptr, r.trashed)
                          .arg(QLatin1String(libsync::LibrarySync::kTrashDir));
         if (r.freed > 0)
-            parts << tr("%Ln removed from this computer to free %1 (still online)", nullptr, r.freed)
-                         .arg(QLocale().formattedDataSize(r.bytesFreed));
+            parts << tr("%Ln (%1) moved to %2 (still online)", nullptr, r.freed)
+                         .arg(QLocale().formattedDataSize(r.bytesFreed),
+                              QLatin1String(libsync::LibrarySync::kTrashDir));
         if (r.removedOnline > 0)
             parts << tr("%Ln deleted here removed online", nullptr, r.removedOnline);
         if (!r.plan.removedHere.isEmpty())
@@ -5633,11 +5634,13 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
             && QMessageBox::question(
                    this, tr("Free Up Space"),
                    tr("%Ln photo file(s) on this computer (%1) aren't in the reference trees you "
-                      "keep, and are safely online. Delete these copies from this computer to "
-                      "free up the space?\n\nThey stay online, and download again if you open "
-                      "them or tick their trees.",
+                      "keep, and are safely online. Move these copies out of the library, into "
+                      "%2 in the library folder?\n\nPhotoLife never deletes them: the space is "
+                      "freed once you empty that folder yourself. They stay online, and download "
+                      "again if you open them or tick their trees.",
                       nullptr, int(plan.freeable.size()))
-                       .arg(QLocale().formattedDataSize(plan.freeableBytes)))
+                       .arg(QLocale().formattedDataSize(plan.freeableBytes),
+                            QLatin1String(libsync::LibrarySync::kTrashDir)))
                    == QMessageBox::Yes) {
             m_downloadAfterFreeUp = !plan.toDownload.isEmpty();
             runPhotoSync(Mode::FreeUp, true);

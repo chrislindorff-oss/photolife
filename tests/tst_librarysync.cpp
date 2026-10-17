@@ -701,6 +701,14 @@ private slots:
         QCOMPARE(r.freed, 1);
         QVERIFY(!bob.has(QStringLiteral("Birds/robin.jpg")));
         QVERIFY(bob.has(kOrchid));
+        // ...by moving it to the trash folder, never deleting it.
+        QDirIterator trash(bob.path(QLatin1String(LibrarySync::kTrashDir)), QDir::Files,
+                           QDirIterator::Subdirectories);
+        QVERIFY(trash.hasNext());
+        QFile moved(trash.next());
+        QVERIFY(moved.fileName().endsWith(QLatin1String("Birds/robin.jpg")));
+        QVERIFY(moved.open(QIODevice::ReadOnly));
+        QCOMPARE(moved.readAll(), QByteArray("robin"));
         QVERIFY(store.objects.contains(QStringLiteral("Birds/robin.jpg")));
 
         // Not "deleted here": wanted again, it comes back.

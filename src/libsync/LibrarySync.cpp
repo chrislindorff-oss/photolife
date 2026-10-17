@@ -584,8 +584,11 @@ std::optional<LibrarySyncResult> LibrarySync::run(const LibrarySyncOptions &opti
                 failed(rel, QStringLiteral("it changed on this computer, so it was kept"));
                 continue;
             }
-            if (!QFile::remove(info.filePath())) {
-                failed(rel, QStringLiteral("couldn't delete it"));
+            // Moved aside, never deleted: emptying the trash folder is
+            // the user's to do.
+            QString why;
+            if (!moveToTrash(rel, &why)) {
+                failed(rel, why);
                 continue;
             }
             // Forgotten, not "deleted here": it comes back if it's wanted again.
