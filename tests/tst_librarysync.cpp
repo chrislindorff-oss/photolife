@@ -8,6 +8,8 @@
 #include "libsync/LibrarySync.h"
 #include "libsync/ThumbnailSync.h"
 
+#include <QDirIterator>
+
 using namespace pl::libsync;
 
 namespace {
@@ -68,6 +70,7 @@ public:
             return false;
         }
         const Object &o = objects[e.relPath];
+        e.version = o.version;
         e.sha256 = shaOf(o.data);
         e.uploadedBy = o.uploadedBy;
         return true;
@@ -108,6 +111,20 @@ public:
         }
         put(relPath, data, who);
         return entry(relPath, true);
+    }
+
+    QStringList trashed;        // removed, in order
+    QSet<QString> failRemove;   // removals of these fail
+
+    bool remove(const RemoteEntry &e) override
+    {
+        if (failRemove.contains(e.relPath) || !objects.contains(e.relPath)) {
+            m_error = QStringLiteral("can't remove");
+            return false;
+        }
+        objects.remove(e.relPath);
+        trashed << e.relPath;
+        return true;
     }
 
     QMap<QString, QByteArray> thumbs;
@@ -324,6 +341,7 @@ private slots:
         FakeStore store;
         Machine alice(QStringLiteral("Alice"));
         alice.write(kOrchid, "v1");
+        alice.write(QStringLiteral("other.jpg"), "other");   // not an empty folder (see vanishedLibrary...)
         alice.sync(store);
         QFile::remove(alice.path(kOrchid));
 
@@ -339,6 +357,165 @@ private slots:
         // ...until someone changes it online.
         store.put(kOrchid, "v2");
         QCOMPARE(alice.sync(store).downloaded, 1);
+    }
+
+    // Deleted here: offered for removal online, removed only when asked, and
+    // then moved aside -- never deleted -- on collaborators' computers.
+    void deletedHereCanBeRemovedOnline()
+    {
+        FakeStore store;
+        Machine alice(QStringLiteral("Alice"));
+        Machine bob(QStringLiteral("Bob"));
+        alice.write(kOrchid, "orchid");
+        alice.write(QStringLiteral("a.jpg"), "a");
+        alice.write(QStringLiteral("b.jpg"), "b");
+        QCOMPARE(alice.sync(store).uploaded, 3);
+        QCOMPARE(bob.sync(store).downloaded, 3);
+
+        QVERIFY(QFile::remove(alice.path(kOrchid)));
+        const LibrarySyncResult r = alice.sync(store);
+        QCOMPARE(r.plan.deletedHere.size(), 1);
+        QCOMPARE(r.plan.deletedHere.first().relPath, kOrchid);
+        QVERIFY(!r.plan.deletionsLookSuspicious);
+        QVERIFY(store.objects.contains(kOrchid));   // asked, not done
+        // ...and still offered at the next sync.
+        QCOMPARE(alice.sync(store).plan.deletedHere.size(), 1);
+
+        LibrarySync engine(store, alice.state, alice.dir.path());
+        const LibrarySyncResult removed = engine.removeOnline({kOrchid});
+        QVERIFY2(removed.failures.isEmpty(), qPrintable(removed.failures.join(QLatin1Char('\n'))));
+        QCOMPARE(removed.removedOnline, 1);
+        QCOMPARE(store.trashed, QStringList{kOrchid});
+        QVERIFY(alice.has(QStringLiteral("a.jpg")) && alice.has(QStringLiteral("b.jpg")));
+        const LibrarySyncResult after = alice.sync(store);
+        QVERIFY(after.plan.nothingToDo());
+        QVERIFY(after.plan.deletedHere.isEmpty());
+
+        // Bob's copy is moved into the trash folder, not deleted.
+        QCOMPARE(bob.sync(store).trashed, 1);
+        QVERIFY(!bob.has(kOrchid));
+        QDirIterator it(bob.path(QLatin1String(LibrarySync::kTrashDir)), QDir::Files,
+                        QDirIterator::Subdirectories);
+        QVERIFY(it.hasNext());
+        QFile kept(it.next());
+        QVERIFY(kept.open(QIODevice::ReadOnly));
+        QCOMPARE(kept.readAll(), QByteArray("orchid"));
+    }
+
+    void removeDeletedHereOptionRemovesThemDuringTheSync()
+    {
+        FakeStore store;
+        Machine alice(QStringLiteral("Alice"));
+        for (int i = 0; i < 10; ++i)
+            alice.write(QStringLiteral("p%1.jpg").arg(i), QByteArray::number(i));
+        alice.sync(store);
+        QVERIFY(QFile::remove(alice.path(QStringLiteral("p3.jpg"))));
+        LibrarySyncOptions options;
+        options.removeDeletedHere = true;
+        const LibrarySyncResult r = alice.sync(store, options);
+        QCOMPARE(r.removedOnline, 1);
+        QCOMPARE(store.trashed, QStringList{QStringLiteral("p3.jpg")});
+        QCOMPARE(store.objects.size(), 9);
+        QVERIFY(alice.sync(store, options).plan.nothingToDo());
+    }
+
+    void keptOnlineIsNoLongerOffered()
+    {
+        FakeStore store;
+        Machine alice(QStringLiteral("Alice"));
+        alice.write(QStringLiteral("a.jpg"), "a");
+        alice.write(QStringLiteral("b.jpg"), "b");
+        alice.sync(store);
+        QFile::remove(alice.path(QStringLiteral("a.jpg")));
+        QCOMPARE(alice.sync(store).plan.deletedHere.size(), 1);
+        LibrarySync engine(store, alice.state, alice.dir.path());
+        QVERIFY(engine.keepOnline({QStringLiteral("a.jpg")}));
+        const LibrarySyncResult r = alice.sync(store);
+        QVERIFY(r.plan.deletedHere.isEmpty());
+        QCOMPARE(r.plan.keptOnline.size(), 1);   // still there for a review
+        LibrarySyncOptions options;
+        options.removeDeletedHere = true;
+        QCOMPARE(alice.sync(store, options).removedOnline, 0);
+        QVERIFY(store.objects.contains(QStringLiteral("a.jpg")));
+    }
+
+    // Copies freed up for space, and photos never downloaded, weren't
+    // deleted here: they're never offered.
+    void freedUpAndNeverFetchedAreNotDeletions()
+    {
+        FakeStore store;
+        store.put(QStringLiteral("keep.jpg"), "keep");
+        store.put(QStringLiteral("free.jpg"), "free");
+        store.put(QStringLiteral("never.jpg"), "never");
+        Machine bob(QStringLiteral("Bob"));
+        LibrarySyncOptions first;
+        first.wanted = [](const QString &rel) { return rel != QLatin1String("never.jpg"); };
+        QCOMPARE(bob.sync(store, first).downloaded, 2);
+
+        LibrarySyncOptions freeUp;
+        freeUp.upload = freeUp.download = false;
+        freeUp.freeUp = true;
+        freeUp.wanted = [](const QString &rel) { return rel == QLatin1String("keep.jpg"); };
+        QCOMPARE(bob.sync(store, freeUp).freed, 1);
+
+        LibrarySyncOptions options;
+        options.wanted = freeUp.wanted;
+        options.removeDeletedHere = true;
+        const LibrarySyncResult r = bob.sync(store, options);
+        QVERIFY(r.plan.deletedHere.isEmpty());
+        QCOMPARE(r.removedOnline, 0);
+        QCOMPARE(store.objects.size(), 3);
+    }
+
+    // Many photos gone at once looks like a drive not connected: nothing is
+    // removed online; and a library folder with nothing in it stops the sync.
+    void vanishedLibraryIsNotTakenAsDeletions()
+    {
+        FakeStore store;
+        Machine alice(QStringLiteral("Alice"));
+        for (int i = 0; i < 40; ++i)
+            alice.write(QStringLiteral("Frogs/p%1.jpg").arg(i), QByteArray::number(i));
+        alice.write(QStringLiteral("Birds/robin.jpg"), "robin");
+        alice.sync(store);
+
+        QVERIFY(QDir(alice.path(QStringLiteral("Frogs"))).removeRecursively());
+        LibrarySyncOptions options;
+        options.removeDeletedHere = true;
+        const LibrarySyncResult r = alice.sync(store, options);
+        QCOMPARE(r.plan.deletedHere.size(), 40);
+        QVERIFY(r.plan.deletionsLookSuspicious);
+        QCOMPARE(r.removedOnline, 0);
+        QVERIFY(!r.failures.isEmpty());
+        QCOMPARE(store.objects.size(), 41);
+        // Still suspicious next time: earlier deletions count too.
+        QVERIFY(alice.sync(store, options).plan.deletionsLookSuspicious);
+        QCOMPARE(store.objects.size(), 41);
+
+        QVERIFY(QFile::remove(alice.path(QStringLiteral("Birds/robin.jpg"))));
+        LibrarySync engine(store, alice.state, alice.dir.path());
+        QVERIFY(!engine.run(options));
+        QVERIFY2(engine.error().contains(QLatin1String("drive connected")), qPrintable(engine.error()));
+        QCOMPARE(store.objects.size(), 41);
+    }
+
+    void removalRefusesWhatChangedOrCameBack()
+    {
+        FakeStore store;
+        Machine alice(QStringLiteral("Alice"));
+        alice.write(QStringLiteral("a.jpg"), "a");
+        alice.write(QStringLiteral("b.jpg"), "b");
+        alice.write(QStringLiteral("c.jpg"), "c");
+        alice.sync(store);
+        QFile::remove(alice.path(QStringLiteral("a.jpg")));
+        QFile::remove(alice.path(QStringLiteral("b.jpg")));
+        alice.sync(store);
+        store.put(QStringLiteral("a.jpg"), "a, edited by Bob");   // changed online since
+        alice.write(QStringLiteral("b.jpg"), "b");                // back here
+        LibrarySync engine(store, alice.state, alice.dir.path());
+        const LibrarySyncResult r = engine.removeOnline({QStringLiteral("a.jpg"), QStringLiteral("b.jpg")});
+        QCOMPARE(r.removedOnline, 0);
+        QCOMPARE(r.failures.size(), 2);
+        QVERIFY(store.trashed.isEmpty());
     }
 
     void damagedDownloadIsRejected()

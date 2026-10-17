@@ -23,6 +23,10 @@ struct LibrarySyncOptions
     // Also delete the copies here of photos outside `wanted` that are safely
     // online (LibraryPlan::freeable).
     bool freeUp = false;
+    // Also take the photos deleted here out of the store
+    // (LibraryPlan::deletedHere) -- unless that looks like a mistake
+    // (LibraryPlan::deletionsLookSuspicious).
+    bool removeDeletedHere = false;
 };
 
 // What a sync would do, worked out without transferring anything.
@@ -42,6 +46,15 @@ struct LibraryPlan
     // still the same online: their copies here can go without losing anything.
     QStringList freeable;
     qint64 freeableBytes = 0;
+    // Deleted on this computer after they were synced (now or at an earlier
+    // sync), and unchanged online since: what may be taken out online too.
+    // Photos freed up for space, or never downloaded, are never among them.
+    QList<RemoteEntry> deletedHere;
+    QList<RemoteEntry> keptOnline;   // ...that the user chose to keep online
+    // So many of the photos synced here have vanished that it's more likely
+    // a drive not connected, or a folder moved, than deleting them: nothing
+    // is removed online automatically.
+    bool deletionsLookSuspicious = false;
 
     bool nothingToDo() const
     {
@@ -58,6 +71,7 @@ struct LibrarySyncResult
     int conflicts = 0;       // each left two files: ours, and theirs as "name (from X)"
     int trashed = 0;
     int freed = 0;
+    int removedOnline = 0;   // taken out of the store (deletedHere)
     qint64 bytesFreed = 0;
     qint64 bytesUp = 0;
     qint64 bytesDown = 0;
@@ -116,6 +130,20 @@ public:
     // so they stay whatever `wanted` says. Already-current ones are skipped.
     LibrarySyncResult fetch(const QStringList &relPaths);
 
+    // Takes just these photos (relative paths) out of the store, as last
+    // listed -- each only if it's still deleted here and unchanged online
+    // since it was synced. Nothing on this computer is touched.
+    LibrarySyncResult removeOnline(const QStringList &relPaths);
+
+    // Remembers that these photos, deleted here, stay online: they're no
+    // longer offered for removal until they change online.
+    bool keepOnline(const QStringList &relPaths);
+
+    // Above this share of the photos synced here gone at once (and at least
+    // kSuspiciousMinimum of them), deletions look like a mistake.
+    static constexpr int kSuspiciousPercent = 20;
+    static constexpr int kSuspiciousMinimum = 20;
+
     // Whether a relative path is one LibrarySync handles (an image or RAW,
     // not in a hidden folder, no ".." tricks).
     static bool isSyncable(const QString &relPath);
@@ -157,6 +185,9 @@ private:
     // Safe on worker threads: they touch only the files and `store`.
     Fetched fetchWith(LibraryStore &store, const RemoteEntry &remote, const QString &relPath) const;
     Sent sendWith(LibraryStore &store, const LocalFile &known, const QString &who) const;
+    // Removes `entries` from the store (in parallel), forgetting each one
+    // removed; failures are added to `result`.
+    void removeEntries(const QList<RemoteEntry> &entries, LibrarySyncResult &result);
     // Records a finished upload (on the calling thread).
     void recordSent(const Sent &sent);
     bool send(const QString &relPath, const QString &who, QString *why);

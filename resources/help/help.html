@@ -630,9 +630,22 @@ to run.</p>
       matches.</li>
   <li>A photo changed both here and online is kept twice: yours under its name and theirs
       beside it as <i>name (from Alex).jpg</i>.</li>
-  <li>Nothing is ever deleted online. A photo deleted online is moved from your folder to
-      <tt>.photolife-trash</tt> inside it, by date, rather than deleted. A photo you delete
-      here stays online and isn't downloaded again unless someone changes it.</li>
+  <li>A photo deleted online is moved from your folder to <tt>.photolife-trash</tt> inside
+      it, by date, rather than deleted.</li>
+  <li>A photo you delete here isn't downloaded again unless someone changes it. Whether it
+      also comes out of the photo storage is set by <b>Photos deleted here</b> in Server
+      Settings: <i>Ask me after each sync</i> (the default) lists them after an upload and
+      offers <b>Remove Online</b>, <b>Keep Online</b> or <b>Decide Later</b>; <i>Remove them
+      online too</i> does it during each upload; <i>Keep them online</i> never does.
+      <b>Server &rarr; Remove Deleted Photos Online&hellip;</b> reviews them at any time,
+      including ones kept online before.</li>
+  <li>Removing never deletes outright: on Google Drive the photos go to its bin (kept for
+      30 days); in S3 storage they move under <tt>trash/</tt> in the bucket. Collaborators'
+      copies then move to their <tt>.photolife-trash</tt> at their next sync. Only photos
+      that were synced here and are unchanged online since are ever removed, never copies
+      freed up for space or photos never downloaded. If so many photos vanish at once that
+      it looks like a disconnected drive or a moved folder, nothing is removed, and a
+      library folder that's suddenly empty stops the sync altogether.</li>
   <li>Downloads are checked against the bucket's checksum before they replace anything,
       and an interrupted sync carries on where it stopped next time.</li>
   <li>You can stop a photo sync at any time: <b>Server &rarr; Stop Photo Sync</b>, the

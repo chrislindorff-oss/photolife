@@ -5013,6 +5013,11 @@ void MainWindow::buildServerMenu(QMenu *menu)
     m_photosHereAction->setToolTip(tr("Keep every photo on this computer, or only those of some "
                                       "reference trees"));
     m_photosHereAction->setVisible(false);
+    m_removeDeletedAction = menu->addAction(tr("&Remove Deleted Photos Online…"), this,
+                                            &MainWindow::reviewDeletedPhotos);
+    m_removeDeletedAction->setToolTip(tr("Take the photos you've deleted from the library folder "
+                                         "here out of the photo storage too"));
+    m_removeDeletedAction->setVisible(false);
     m_finishEditingAction = menu->addAction(tr("&Finish Editing (Send && Release)"), this,
                                             &MainWindow::finishEditing);
     m_discardAction = menu->addAction(tr("&Discard My Changes…"), this, &MainWindow::discardChanges);
@@ -5505,7 +5510,7 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
     if (o.result) {
         const libsync::LibrarySyncResult &r = *o.result;
         // What's left: whatever this sync didn't try, and whatever failed.
-        libsync::LibraryPlan rest = r.plan;
+        libsync::LibraryPlan rest = o.mode == Mode::RemoveOnline && v.photosPlan ? *v.photosPlan : r.plan;
         if (o.mode != Mode::Download)
             rest.toUpload.clear();
         if (o.mode != Mode::Upload) {
@@ -5532,6 +5537,8 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
         if (r.freed > 0)
             parts << tr("%Ln removed from this computer to free %1 (still online)", nullptr, r.freed)
                          .arg(QLocale().formattedDataSize(r.bytesFreed));
+        if (r.removedOnline > 0)
+            parts << tr("%Ln deleted here removed online", nullptr, r.removedOnline);
         if (!r.plan.removedHere.isEmpty())
             parts << tr("%Ln deleted here (kept online)", nullptr, int(r.plan.removedHere.size()));
         detail = parts.isEmpty() ? tr("Photos up to date") : tr("Photos: %1").arg(parts.join(QStringLiteral(", ")));
@@ -5562,6 +5569,7 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
                                : o.mode == Mode::Download ? tr("Download Photos")
                                : o.mode == Mode::FreeUp   ? tr("Free Up Space")
                                : o.mode == Mode::Fetch    ? tr("Download Photos (opened)")
+                               : o.mode == Mode::RemoveOnline ? tr("Remove Photos Online")
                                                           : tr("Sync Photos");
         sync::SyncActivityLog(QDir(QFileInfo(m_app.settings().databasePath()).absolutePath())
                                   .filePath(QStringLiteral("sync-activity.log")))
@@ -5591,6 +5599,26 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
             then();
         resumeSend();
         return;
+    }
+    if (o.mode == Mode::Check && std::exchange(m_removalReview, false)) {
+        updatePhotoStatus();
+        if (!o.ok || !o.plan) {
+            QMessageBox::warning(this, tr("Remove Deleted Photos Online"),
+                                 tr("Couldn't check the photo storage: %1").arg(o.error));
+        } else if (offerOnlineRemoval(*o.plan, true)) {
+            return;
+        }
+        resumeSend();
+        return;
+    }
+    // After an upload: offer to take what was deleted here out online too.
+    if ((o.mode == Mode::Upload || o.mode == Mode::Both) && userInitiated && o.ok && o.plan
+        && !(o.result && o.result->cancelled)
+        && m_app.photoSync().config().whenDeletedHere
+               == QLatin1String(libsync::PhotoSyncService::kDeletedHereAsk)
+        && offerOnlineRemoval(*o.plan, false)) {
+        updatePhotoStatus();
+        return;   // its finish carries on with the catalogue send, if one waits
     }
     if (o.mode == Mode::Check && std::exchange(m_selectionFollowUp, false)) {
         updatePhotoStatus();
@@ -5628,7 +5656,7 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
     }
 
     if (m_opAfterPhotoUpload) {
-        if (o.mode != Mode::Upload && o.mode != Mode::Both) {
+        if (o.mode != Mode::Upload && o.mode != Mode::Both && o.mode != Mode::RemoveOnline) {
             // A background sync was under way: now the upload the send waits on.
             runPhotoSync(Mode::Upload, m_opAfterPhotoUploadUser);
             updatePhotoStatus();
@@ -5639,6 +5667,10 @@ void MainWindow::onPhotoSyncFinished(const libsync::PhotoSyncService::Outcome &o
         bool proceed = true;
         if (o.result && o.result->cancelled) {
             proceed = false;
+        } else if (o.mode == Mode::RemoveOnline) {
+            if (!o.ok || v.photosFailed > 0)   // the photos are up: only the removal fell short
+                QMessageBox::warning(this, tr("Remove Photos Online"),
+                                     detail.isEmpty() ? error : detail + QStringLiteral("\n\n") + error);
         } else if (!o.ok || v.photosFailed > 0) {
             proceed = QMessageBox::question(
                           this, syncOpTitle(op),
@@ -5685,6 +5717,10 @@ void MainWindow::updatePhotoStatus()
         m_photosHereAction->setVisible(v.photosEnabled);
         m_photosHereAction->setEnabled(!v.photosRunning);
     }
+    if (m_removeDeletedAction) {
+        m_removeDeletedAction->setVisible(v.photosEnabled);
+        m_removeDeletedAction->setEnabled(!v.photosRunning);
+    }
     if (m_photoStatusLabel) {
         m_photoStatusLabel->setText(ServerBar::photosText(v));
         m_photoStatusLabel->setVisible(v.photosEnabled);
@@ -5726,6 +5762,109 @@ void MainWindow::choosePhotosOnComputer()
     // See what that means: photos to fetch, and copies here that can go.
     m_selectionFollowUp = true;
     runPhotoSync(libsync::PhotoSyncService::Mode::Check, true);
+}
+
+void MainWindow::reviewDeletedPhotos()
+{
+    if (m_app.photoSync().isRunning()) {
+        QMessageBox::information(this, tr("Remove Deleted Photos Online"),
+                                 tr("The photos are syncing at the moment — try again when "
+                                    "that's finished."));
+        return;
+    }
+    m_removalReview = true;
+    statusBar()->showMessage(tr("Checking the photo storage…"));
+    runPhotoSync(libsync::PhotoSyncService::Mode::Check, true);
+}
+
+bool MainWindow::offerOnlineRemoval(const libsync::LibraryPlan &plan, bool review)
+{
+    QList<libsync::RemoteEntry> entries = plan.deletedHere;
+    if (review)
+        entries += plan.keptOnline;
+    const QString title = tr("Remove Deleted Photos Online");
+    if (entries.isEmpty()) {
+        if (review)
+            QMessageBox::information(this, title,
+                                     tr("None of the photos deleted from the library folder here "
+                                        "are still in the photo storage."));
+        return false;
+    }
+    QStringList rels;
+    for (const libsync::RemoteEntry &e : std::as_const(entries))
+        rels << e.relPath;
+    std::sort(rels.begin(), rels.end());
+    const QString list = rels.mid(0, 500).join(QLatin1Char('\n'))
+                         + (rels.size() > 500 ? tr("\n… and %Ln more", nullptr, int(rels.size() - 500))
+                                              : QString());
+    const auto &config = m_app.photoSync().config();
+    const QString library = QDir::toNativeSeparators(config.libraryRoot);
+
+    if (plan.deletionsLookSuspicious) {
+        QMessageBox box(QMessageBox::Warning, title,
+                        tr("%Ln photo(s) synced to this computer are no longer in the library "
+                           "folder %1 — more than usually get deleted at once.\n\nIf its drive "
+                           "isn't connected, or the folder was moved or renamed, put it back: "
+                           "nothing has been removed online.",
+                           nullptr, int(rels.size()))
+                            .arg(library),
+                        QMessageBox::NoButton, this);
+        box.setDetailedText(list);
+        QPushButton *anyway = nullptr;
+        if (review)
+            anyway = box.addButton(tr("I Deleted Them — Remove Online"), QMessageBox::DestructiveRole);
+        box.addButton(review ? QMessageBox::Cancel : QMessageBox::Ok);
+        box.exec();
+        if (!anyway || box.clickedButton() != anyway)
+            return false;
+    } else {
+        const bool drive = config.store == QLatin1String(Settings::kPhotoStoreDrive);
+        QMessageBox box(QMessageBox::Question, title,
+                        tr("%Ln photo(s) you deleted from the library folder on this computer are "
+                           "still in the photo storage. Remove them there too?",
+                           nullptr, int(rels.size())),
+                        QMessageBox::NoButton, this);
+        box.setInformativeText(
+            (drive ? tr("They go to Google Drive's bin, where they're kept for 30 days.")
+                   : tr("They're moved under trash/ in the storage bucket."))
+            + QLatin1Char(' ')
+            + tr("Collaborators' copies move to %1 in their library folders at their next sync. "
+                 "Nothing on this computer is touched.")
+                  .arg(QLatin1String(libsync::LibrarySync::kTrashDir)));
+        box.setDetailedText(list);
+        QPushButton *remove = box.addButton(tr("Remove Online"), QMessageBox::DestructiveRole);
+        QPushButton *keep = box.addButton(tr("Keep Online"), QMessageBox::RejectRole);
+        box.addButton(tr("Decide Later"), QMessageBox::NoRole);
+        box.setDefaultButton(keep);
+        box.exec();
+        if (box.clickedButton() == keep) {
+            if (m_app.photoSync().keepOnline(rels))
+                statusBar()->showMessage(
+                    tr("Kept %Ln deleted photo(s) online; Server ▸ Remove Deleted Photos Online "
+                       "can still remove them.",
+                       nullptr, int(rels.size())),
+                    10000);
+            return false;
+        }
+        if (box.clickedButton() != remove)
+            return false;
+    }
+
+    m_photoSyncUserInitiated = true;
+    m_photoTaskProgress = true;
+    beginTaskProgress(tr("Removing Photos Online"), [this] {
+        m_app.photoSync().cancel();
+        showTaskCancelling(tr("Stopping after the current photo…"));
+    });
+    m_serverView.photosRunning = true;
+    if (!m_app.photoSync().removeOnline(rels)) {
+        m_photoTaskProgress = false;
+        m_serverView.photosRunning = false;
+        endTaskProgress();
+        return false;
+    }
+    updatePhotoStatus();
+    return true;
 }
 
 void MainWindow::fetchPhotos(const QStringList &paths, std::function<void()> then)

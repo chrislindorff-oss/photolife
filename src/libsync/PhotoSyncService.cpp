@@ -136,6 +136,33 @@ bool PhotoSyncService::run(Mode mode)
     return true;
 }
 
+bool PhotoSyncService::removeOnline(const QStringList &relPaths)
+{
+    if (m_running || relPaths.isEmpty())
+        return false;
+    m_fetchPaths = relPaths;
+    if (!run(Mode::RemoveOnline)) {
+        m_fetchPaths.clear();
+        return false;
+    }
+    return true;
+}
+
+bool PhotoSyncService::keepOnline(const QStringList &relPaths)
+{
+    if (m_running || !m_config.enabled())
+        return false;
+    QString error;
+    const auto store = makeStore(m_config, &error);
+    if (!store)
+        return false;
+    LibraryState state(m_config.statePath);
+    if (!state.open())
+        return false;
+    LibrarySync sync(*store, state, cleanRoot(m_config.libraryRoot));
+    return sync.keepOnline(relPaths);
+}
+
 bool PhotoSyncService::fetch(const QStringList &paths)
 {
     if (m_running || paths.isEmpty())
@@ -196,6 +223,13 @@ PhotoSyncService::Outcome PhotoSyncService::runInWorker(Mode mode, const Config 
         return out;
     }
 
+    if (mode == Mode::RemoveOnline) {
+        out.result = sync.removeOnline(fetchPaths);
+        out.ok = true;
+        out.onlineOnly = onlineOnlyFrom(state, root);
+        return out;
+    }
+
     // What this computer keeps: everything, or the ticked trees' photos.
     CatalogueReader catalogue(config.databasePath);
     LibrarySyncOptions options;
@@ -203,6 +237,8 @@ PhotoSyncService::Outcome PhotoSyncService::runInWorker(Mode mode, const Config 
     options.upload = mode == Mode::Upload || mode == Mode::Both || mode == Mode::Check;
     options.download = mode == Mode::Download || mode == Mode::Both || mode == Mode::Check;
     options.freeUp = mode == Mode::FreeUp;
+    options.removeDeletedHere = (mode == Mode::Upload || mode == Mode::Both)
+                                && config.whenDeletedHere == QLatin1String(kDeletedHereRemove);
     if (mode == Mode::FreeUp) {
         options.upload = false;
         options.download = false;

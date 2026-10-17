@@ -276,6 +276,7 @@ void Application::configureSync()
                 .filePath(QStringLiteral("thumbnails"));
         photos.allTrees = profile.photosAllTrees;
         photos.trees = profile.photoTrees;
+        photos.whenDeletedHere = profile.photosWhenDeletedHere;
     }
     m_photoSync->setConfig(photos);
 }

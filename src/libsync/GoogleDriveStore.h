@@ -40,6 +40,7 @@ public:
     std::optional<QSet<QString>> listThumbnails() override;
     bool putThumbnail(const QString &name, const QByteArray &jpeg) override;
     std::optional<QByteArray> getThumbnail(const QString &name) override;
+    bool remove(const RemoteEntry &entry) override;
     // Drive allows about three sustained writes a second per user; four
     // workers keep that busy without tripping its rate limit for long.
     int parallelTransfers() const override { return 4; }

@@ -1,5 +1,7 @@
 #include "libsync/S3Store.h"
 
+#include <QDate>
+
 #include <QBuffer>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -78,6 +80,29 @@ QString S3Store::libraryPrefix() const
 QString S3Store::thumbsPrefix() const
 {
     return rootPrefix() + QStringLiteral("thumbs/");
+}
+
+QString S3Store::trashPrefix() const
+{
+    return rootPrefix() + QStringLiteral("trash/");
+}
+
+// S3 has no bin: the object is copied under trash/<date>/, then deleted.
+bool S3Store::remove(const RemoteEntry &entry)
+{
+    const QString key = objectKey(entry.relPath);
+    const QString trashKey = trashPrefix() + QDate::currentDate().toString(Qt::ISODate)
+                             + QLatin1Char('/') + entry.relPath;
+    const SigV4Headers copyHeaders{
+        {"x-amz-copy-source", sigV4Encode(m_config.bucket) + '/' + sigV4Encode(key, /*keepSlash=*/true)}};
+    const auto copied = call("PUT", trashKey, {}, copyHeaders, nullptr, kEmptyPayloadHash);
+    // A copy can fail after its 200 has gone out: the error is then the body.
+    if (!copied.ok() || copied.body.contains("<Error>"))
+        return fail(QStringLiteral("Couldn't move %1 to trash/").arg(entry.relPath), copied);
+    const auto deleted = call("DELETE", key, {}, {}, nullptr, kEmptyPayloadHash);
+    if (!deleted.ok())
+        return fail(QStringLiteral("Couldn't remove %1").arg(entry.relPath), deleted);
+    return true;
 }
 
 QString S3Store::objectKey(const QString &relPath) const

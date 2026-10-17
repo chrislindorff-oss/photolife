@@ -37,6 +37,7 @@ public:
         QByteArray data;
         int revision = 0;
         QJsonObject appProperties;
+        bool trashed = false;   // in Drive's bin
     };
 
     QHash<QString, File> files;
@@ -280,7 +281,7 @@ private:
                 parents.insert(it.next().captured(1));
             QList<File> hits;
             for (const File &f : std::as_const(files)) {
-                if (parents.contains(f.parent) && (name.isEmpty() || f.name == name)
+                if (parents.contains(f.parent) && !f.trashed && (name.isEmpty() || f.name == name)
                     && (mime.isEmpty() || f.mimeType == mime))
                     hits << f;
             }
@@ -306,6 +307,17 @@ private:
                 reply(s, 200, f.data, "application/octet-stream");
             else
                 replyJson(s, 200, resource(f));
+            return;
+        }
+        if (const auto m = fileRe.match(path); m.hasMatch() && verb == "PATCH") {
+            if (!files.contains(m.captured(1))) {
+                replyJson(s, 404, {{QStringLiteral("error"),
+                                    QJsonObject{{QStringLiteral("message"), QStringLiteral("File not found")}}}});
+                return;
+            }
+            File &f = files[m.captured(1)];
+            f.trashed = QJsonDocument::fromJson(body).object().value(QStringLiteral("trashed")).toBool();
+            replyJson(s, 200, resource(f));
             return;
         }
         if (verb == "POST" && path == QLatin1String("/drive/v3/files")) {
@@ -550,6 +562,27 @@ private slots:
                              md5Hex(d), shaHex(d), QStringLiteral("Alice")));
         QCOMPARE(drive.listings, 0);
         QVERIFY(drive.byPath(QStringLiteral("library/New/Deep/x.jpg")));
+    }
+
+    // Removing a photo bins it on Drive: recoverable, and gone from listings.
+    void removeMovesToTheBin()
+    {
+        FakeDrive drive;
+        GoogleDriveStore store(drive.config());
+        store.setRetryDelayMs(0);
+        QTemporaryDir dir;
+        const QByteArray d = "wren";
+        const auto up = store.upload(writeFile(dir.filePath(QStringLiteral("w")), d),
+                                     QStringLiteral("Birds/wren.jpg"), md5Hex(d), shaHex(d),
+                                     QStringLiteral("Alice"));
+        QVERIFY2(up, qPrintable(store.error()));
+        GoogleDriveStore other(drive.config());
+        const auto listed = other.list();
+        QCOMPARE(listed->size(), 1);
+        QVERIFY2(other.remove(listed->first()), qPrintable(other.error()));
+        QVERIFY(drive.files.value(up->remoteId).trashed);
+        QVERIFY(drive.files.contains(up->remoteId));   // binned, not deleted
+        QVERIFY(GoogleDriveStore(drive.config()).list()->isEmpty());
     }
 
     void thumbnails()

@@ -145,6 +145,7 @@ std::optional<Settings::CatalogueProfile> Settings::profile(const QString &id) c
     p.drive.refreshToken = v("photos/drive/refreshToken").toString();   // plain text too
     p.drive.account = v("photos/drive/account").toString();
     p.photosAllTrees = v("photos/allTrees", true).toBool();
+    p.photosWhenDeletedHere = v("photos/whenDeletedHere", QStringLiteral("ask")).toString();
     for (const QString &id : v("photos/trees").toStringList())
         p.photoTrees << id.toInt();
     return p;
@@ -212,6 +213,7 @@ QString Settings::saveServerProfile(const CatalogueProfile &p)
     set("photos/drive/refreshToken", p.drive.refreshToken);
     set("photos/drive/account", p.drive.account);
     set("photos/allTrees", p.photosAllTrees);
+    set("photos/whenDeletedHere", p.photosWhenDeletedHere);
     QStringList trees;
     for (const int id : p.photoTrees)
         trees << QString::number(id);

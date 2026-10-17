@@ -50,6 +50,14 @@ public:
     bool pin(const QString &relPath);
     QSet<QString> pinned();
 
+    // Photos deleted on this computer that the user chose to keep online, at
+    // the version they were kept at (a newer one online asks again).
+    bool keepOnline(const QString &relPath, const QString &remoteVersion);
+    QHash<QString, QString> keptOnline();
+
+    // Everything known about a photo, once it's gone from the store too.
+    bool forget(const QString &relPath);
+
     // Groups many put()/remove() calls into one write.
     bool begin();
     bool commit();

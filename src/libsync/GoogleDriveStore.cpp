@@ -452,6 +452,35 @@ bool GoogleDriveStore::describe(RemoteEntry &entry)
     return true;
 }
 
+bool GoogleDriveStore::remove(const RemoteEntry &entry)
+{
+    const QString id = entry.remoteId.isEmpty() ? m_files.value(entry.relPath) : entry.remoteId;
+    if (id.isEmpty()) {
+        m_error = QStringLiteral("%1 isn't in the Drive folder").arg(entry.relPath);
+        return false;
+    }
+    Call call;
+    call.verb = "PATCH";
+    call.url = apiUrl(QStringLiteral("/drive/v3/files/") + id,
+                      {{QStringLiteral("fields"), QStringLiteral("id,trashed")},
+                       {QStringLiteral("supportsAllDrives"), QStringLiteral("true")}});
+    call.headers = {{"Content-Type", "application/json; charset=UTF-8"}};
+    call.body = R"({"trashed":true})";
+    const auto response = send(call);
+    if (!response.ok()) {
+        // Drive lets only a file's owner bin it from someone's My Drive.
+        if (response.status == 403 && response.body.contains("insufficient"))
+            m_error = QStringLiteral("Couldn't remove %1 from Drive: only the person who uploaded "
+                                     "it can")
+                          .arg(entry.relPath);
+        else
+            fail(QStringLiteral("Couldn't remove %1 from Drive").arg(entry.relPath), response);
+        return false;
+    }
+    m_files.remove(entry.relPath);
+    return true;
+}
+
 bool GoogleDriveStore::download(const RemoteEntry &entry, const QString &localPath,
                                 const ByteProgress &progress)
 {

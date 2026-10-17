@@ -31,7 +31,13 @@ public:
         Both,
         FreeUp,     // delete the copies here of photos not wanted any more (safely online)
         Fetch,      // download particular photos now (see fetch())
+        RemoveOnline,   // take particular photos deleted here out of the store (see removeOnline())
     };
+
+    // What to do about photos deleted on this computer (Settings).
+    static constexpr const char *kDeletedHereAsk = "ask";
+    static constexpr const char *kDeletedHereRemove = "remove";
+    static constexpr const char *kDeletedHereKeep = "keep";
 
     struct Config
     {
@@ -47,6 +53,9 @@ public:
         // (see PhotoSelection; unmatched and pinned photos are always kept).
         bool allTrees = true;
         QList<int> trees;
+        // Photos deleted here: "ask" (the UI offers them after a sync),
+        // "remove" (uploads take them out online too), or "keep" online.
+        QString whenDeletedHere = QString::fromLatin1(kDeletedHereAsk);
 
         bool enabled() const
         {
@@ -83,6 +92,11 @@ public:
     bool run(Mode mode);
     // Downloads these photos (absolute paths) now, and keeps them here.
     bool fetch(const QStringList &paths);
+    // Takes these photos (relative paths), deleted here, out of the store.
+    bool removeOnline(const QStringList &relPaths);
+    // Remembers that these photos (relative paths), deleted here, stay
+    // online. Not while a sync runs.
+    bool keepOnline(const QStringList &relPaths);
     // Stops the running sync after the file it's on.
     void cancel() { m_cancel.store(true); }
 

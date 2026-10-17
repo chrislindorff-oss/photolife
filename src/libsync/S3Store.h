@@ -31,6 +31,7 @@ public:
     std::optional<QSet<QString>> listThumbnails() override;
     bool putThumbnail(const QString &name, const QByteArray &jpeg) override;
     std::optional<QByteArray> getThumbnail(const QString &name) override;
+    bool remove(const RemoteEntry &entry) override;
     int parallelTransfers() const override { return 6; }
     std::unique_ptr<LibraryStore> clone() const override
     {
@@ -62,6 +63,7 @@ private:
     QString rootPrefix() const;      // "<prefix>/", or empty
     QString libraryPrefix() const;   // "<prefix>/library/"
     QString thumbsPrefix() const;    // "<prefix>/thumbs/"
+    QString trashPrefix() const;     // "<prefix>/trash/"
     struct Listed
     {
         QString key;

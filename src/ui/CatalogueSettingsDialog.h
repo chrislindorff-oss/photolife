@@ -52,6 +52,7 @@ private:
     QLineEdit *m_userName;
     QLineEdit *m_libraryRoot;
     QComboBox *m_photoStore;
+    QComboBox *m_whenDeletedHere;
     QWidget *m_s3Fields;
     QLineEdit *m_s3Endpoint;
     QLineEdit *m_s3Region;

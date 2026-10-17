@@ -422,6 +422,13 @@ private:
     bool m_opAfterPhotoUploadUser = false;
     bool m_photosUploadedForOp = false;
     QAction *m_photosHereAction = nullptr;
+    QAction *m_removeDeletedAction = nullptr;
+    bool m_removalReview = false;         // a Check for Remove Deleted Photos Online
+    // Offers to take the photos deleted here out of the photo storage too;
+    // with `review`, also those kept online before. True if a removal started
+    // (its finish carries on with whatever was waiting).
+    bool offerOnlineRemoval(const libsync::LibraryPlan &plan, bool review);
+    void reviewDeletedPhotos();
     QAction *m_stopPhotosAction = nullptr;
     void stopPhotoSync();
     bool m_photoTaskProgress = false;     // a photo sync owns the task-progress window

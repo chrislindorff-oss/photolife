@@ -55,6 +55,9 @@ public:
         // reference trees (project ids) -- see libsync::PhotoSelection.
         bool photosAllTrees = true;
         QList<int> photoTrees;
+        // Photos deleted on this computer: ask whether to remove them online
+        // too, always do, or never (libsync::PhotoSyncService::kDeletedHere*).
+        QString photosWhenDeletedHere = QStringLiteral("ask");
 
         bool syncsPhotos() const { return server && photoStore != QLatin1String(kPhotoStoreNone); }
 

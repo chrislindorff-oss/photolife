@@ -58,7 +58,10 @@ bool LibraryState::open()
                                   " sha256      TEXT NOT NULL DEFAULT '',"
                                   " uploaded_by TEXT NOT NULL DEFAULT '',"
                                   " remote_id   TEXT NOT NULL DEFAULT '')"))
-           && exec(QStringLiteral("CREATE TABLE IF NOT EXISTS pinned (rel_path TEXT PRIMARY KEY)"));
+           && exec(QStringLiteral("CREATE TABLE IF NOT EXISTS pinned (rel_path TEXT PRIMARY KEY)"))
+           && exec(QStringLiteral("CREATE TABLE IF NOT EXISTS kept_online ("
+                                  " rel_path       TEXT PRIMARY KEY,"
+                                  " remote_version TEXT NOT NULL)"));
 }
 
 bool LibraryState::replaceRemote(const QList<RemoteEntry> &entries)
@@ -191,6 +194,47 @@ bool LibraryState::remove(const QString &relPath)
     if (!q.exec()) {
         m_error = q.lastError().text();
         return false;
+    }
+    return true;
+}
+
+bool LibraryState::keepOnline(const QString &relPath, const QString &remoteVersion)
+{
+    QSqlQuery q(QSqlDatabase::database(m_connection, false));
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO kept_online (rel_path, remote_version) VALUES (?, ?)"));
+    q.addBindValue(relPath);
+    q.addBindValue(remoteVersion);
+    if (!q.exec()) {
+        m_error = q.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QHash<QString, QString> LibraryState::keptOnline()
+{
+    QHash<QString, QString> out;
+    QSqlQuery q(QSqlDatabase::database(m_connection, false));
+    q.setForwardOnly(true);
+    if (!q.exec(QStringLiteral("SELECT rel_path, remote_version FROM kept_online"))) {
+        m_error = q.lastError().text();
+        return out;
+    }
+    while (q.next())
+        out.insert(q.value(0).toString(), q.value(1).toString());
+    return out;
+}
+
+bool LibraryState::forget(const QString &relPath)
+{
+    for (const char *table : {"synced_file", "remote_file", "kept_online", "pinned"}) {
+        QSqlQuery q(QSqlDatabase::database(m_connection, false));
+        q.prepare(QStringLiteral("DELETE FROM %1 WHERE rel_path = ?").arg(QLatin1String(table)));
+        q.addBindValue(relPath);
+        if (!q.exec()) {
+            m_error = q.lastError().text();
+            return false;
+        }
     }
     return true;
 }

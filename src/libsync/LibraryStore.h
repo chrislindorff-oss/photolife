@@ -81,6 +81,11 @@ public:
     }
     virtual bool prepareThumbnails() { return true; }
 
+    // Takes a photo out of the library online -- recoverably: Drive moves it
+    // to its bin (emptied after 30 days), S3 (which has no bin) moves it
+    // under "trash/<date>/". Never touches anything on this computer.
+    virtual bool remove(const RemoteEntry &entry) = 0;
+
     // Small JPEG thumbnails kept beside the photos, named "<sha256>_<px>",
     // so photos that are only online can still be browsed.
     virtual std::optional<QSet<QString>> listThumbnails() = 0;

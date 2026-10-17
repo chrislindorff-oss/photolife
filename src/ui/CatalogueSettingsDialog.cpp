@@ -2,6 +2,7 @@
 
 #include "libsync/GoogleAuth.h"
 #include "libsync/GoogleDriveStore.h"
+#include "libsync/PhotoSyncService.h"
 #include "libsync/S3Store.h"
 
 #include <QApplication>
@@ -75,6 +76,24 @@ CatalogueSettingsDialog::CatalogueSettingsDialog(const Settings::CatalogueProfil
                           QString::fromLatin1(Settings::kPhotoStoreDrive));
     const int store = m_photoStore->findData(profile.photoStore);
     m_photoStore->setCurrentIndex(store >= 0 ? store : 0);
+
+    // Photos deleted from the library folder here: online too, or not.
+    m_whenDeletedHere = new QComboBox(this);
+    m_whenDeletedHere->setObjectName(QStringLiteral("whenDeletedHere"));
+    m_whenDeletedHere->addItem(tr("Ask me after each sync"),
+                               QString::fromLatin1(libsync::PhotoSyncService::kDeletedHereAsk));
+    m_whenDeletedHere->addItem(tr("Remove them online too"),
+                               QString::fromLatin1(libsync::PhotoSyncService::kDeletedHereRemove));
+    m_whenDeletedHere->addItem(tr("Keep them online"),
+                               QString::fromLatin1(libsync::PhotoSyncService::kDeletedHereKeep));
+    const int deleted = m_whenDeletedHere->findData(profile.photosWhenDeletedHere);
+    m_whenDeletedHere->setCurrentIndex(deleted >= 0 ? deleted : 0);
+    m_whenDeletedHere->setToolTip(
+        tr("When you delete photos from the library folder on this computer, whether a sync also "
+           "takes them out of the photo storage — and so off everyone else's computers. Removed "
+           "photos go to Google Drive's bin (kept 30 days), or under trash/ in S3 storage. "
+           "PhotoLife never deletes photos on this computer, and won't remove anything online "
+           "when so many photos vanish at once that it looks like a disconnected drive."));
 
     m_s3Endpoint = new QLineEdit(profile.s3.endpoint, this);
     m_s3Endpoint->setObjectName(QStringLiteral("s3Endpoint"));
@@ -168,6 +187,7 @@ CatalogueSettingsDialog::CatalogueSettingsDialog(const Settings::CatalogueProfil
     form->addRow(tr("Photo s&torage:"), m_photoStore);
     form->addRow(m_s3Fields);
     form->addRow(m_driveFields);
+    form->addRow(tr("Photos deleted &here:"), m_whenDeletedHere);
 
     auto *test = new QPushButton(tr("Test Connection"), this);
     connect(test, &QPushButton::clicked, this, &CatalogueSettingsDialog::testConnection);
@@ -201,6 +221,7 @@ void CatalogueSettingsDialog::updatePhotoStoreFields()
     const QString store = m_photoStore->currentData().toString();
     m_s3Fields->setVisible(store == QLatin1String(Settings::kPhotoStoreS3));
     m_driveFields->setVisible(store == QLatin1String(Settings::kPhotoStoreDrive));
+    m_whenDeletedHere->setEnabled(store != QLatin1String(Settings::kPhotoStoreNone));
     updateOkState();
     adjustSize();
 }
@@ -354,6 +375,7 @@ Settings::CatalogueProfile CatalogueSettingsDialog::profile() const
     p.photoStore = m_photoStore->currentData().toString();
     p.s3 = s3Config();
     p.drive = driveConfig();
+    p.photosWhenDeletedHere = m_whenDeletedHere->currentData().toString();
     return p;
 }
 

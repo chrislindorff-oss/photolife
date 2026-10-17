@@ -194,6 +194,20 @@ std::optional<LibraryPlan> LibrarySync::plan(const LibrarySyncOptions &options)
         report(QStringLiteral("Checking photos on this computer"), i + 1, int(local.size()));
     }
 
+    // A library folder with nothing in it, that had photos at the last sync,
+    // is far more likely a drive not connected than every photo deleted.
+    int syncedHere = 0;
+    for (auto it = m_base.cbegin(); it != m_base.cend(); ++it)
+        syncedHere += it->local ? 1 : 0;
+    if (m_local.isEmpty() && syncedHere > 0) {
+        m_error = QStringLiteral("The photo library folder %1 has no photos in it, though %2 were "
+                                 "there at the last sync. Is its drive connected? Nothing was changed.")
+                      .arg(QDir::toNativeSeparators(m_root))
+                      .arg(syncedHere);
+        return std::nullopt;
+    }
+    const QHash<QString, QString> kept = m_state.keptOnline();
+
     // The store.
     report(QStringLiteral("Checking photos online"), 0, 0);
     const auto listed = m_store.list();
@@ -277,6 +291,11 @@ std::optional<LibraryPlan> LibrarySync::plan(const LibrarySyncOptions &options)
                     plan.removedHere << rel;        // deleted here: keep it online only
                 else
                     ++plan.onlineOnly;
+                // Either way it was deleted here, and is as it was online.
+                if (kept.value(rel) == r->version)
+                    plan.keptOnline << *r;
+                else
+                    plan.deletedHere << *r;
             } else if (options.wanted && !options.wanted(rel)) {
                 ++plan.notWanted;
             } else {
@@ -289,6 +308,12 @@ std::optional<LibraryPlan> LibrarySync::plan(const LibrarySyncOptions &options)
         }
     }
     m_state.commit();
+
+    // Measured against everything synced here before, deletions included.
+    const int deleted = int(plan.deletedHere.size() + plan.keptOnline.size());
+    const int before = syncedHere + int(plan.deletedHere.size() + plan.keptOnline.size() - plan.removedHere.size());
+    plan.deletionsLookSuspicious = deleted >= kSuspiciousMinimum
+                                   && qint64(deleted) * 100 > qint64(before) * kSuspiciousPercent;
 
     if (!options.upload) {
         plan.toUpload.clear();
@@ -571,7 +596,27 @@ std::optional<LibrarySyncResult> LibrarySync::run(const LibrarySyncOptions &opti
         }
     }
 
+    QSet<QString> removed;
+    if (options.removeDeletedHere && !p.deletedHere.isEmpty() && !stop()) {
+        if (p.deletionsLookSuspicious) {
+            result.failures << QStringLiteral(
+                "%1 photos deleted here weren't removed online: that's too many at once to be sure "
+                "it wasn't a mistake").arg(p.deletedHere.size());
+        } else {
+            const int before = result.removedOnline;
+            removeEntries(p.deletedHere, result);
+            if (result.removedOnline > before) {
+                for (const RemoteEntry &r : p.deletedHere) {
+                    if (!m_base.contains(r.relPath))
+                        removed.insert(r.relPath);
+                }
+            }
+        }
+    }
+
     for (const QString &rel : p.removedHere) {
+        if (removed.contains(rel))
+            continue;   // gone online too: nothing left to remember
         SyncedFile f = m_base.value(rel);
         f.local = false;
         m_state.put(f);
@@ -580,6 +625,74 @@ std::optional<LibrarySyncResult> LibrarySync::run(const LibrarySyncOptions &opti
 
     report(QStringLiteral("Done"), 1, 1);
     return result;
+}
+
+void LibrarySync::removeEntries(const QList<RemoteEntry> &entries, LibrarySyncResult &result)
+{
+    report(QStringLiteral("Removing photos online"), 0, int(entries.size()));
+    int finished = 0;
+    forEachTransfer<QString>(
+        m_store, int(entries.size()), [this] { return isCancelled(); },
+        [&](LibraryStore &store, int i) -> QString {
+            // Only the very version synced here: not one changed online since
+            // it was last listed.
+            RemoteEntry now = entries.at(i);
+            if (!store.describe(now))
+                return store.error();
+            if (now.version != entries.at(i).version)
+                return QStringLiteral("it changed online since it was synced here, so it was kept");
+            return store.remove(now) ? QString() : store.error();
+        },
+        [&](int i, QString &&why) {
+            report(QStringLiteral("Removing photos online"), ++finished, int(entries.size()));
+            const QString &rel = entries.at(i).relPath;
+            if (why.isEmpty()) {
+                m_state.forget(rel);
+                m_base.remove(rel);
+                ++result.removedOnline;
+            } else if (!isCancelled()) {
+                result.failures << QStringLiteral("%1: %2").arg(rel, why);
+            }
+        });
+    if (isCancelled())
+        result.cancelled = true;
+}
+
+LibrarySyncResult LibrarySync::removeOnline(const QStringList &relPaths)
+{
+    LibrarySyncResult result;
+    m_error.clear();
+    m_base = m_state.load();
+    const QHash<QString, RemoteEntry> remote = m_state.remote();
+    QList<RemoteEntry> entries;
+    for (const QString &rel : relPaths) {
+        const auto r = remote.constFind(rel);
+        const auto b = m_base.constFind(rel);
+        if (r == remote.constEnd()) {
+            result.failures << QStringLiteral("%1: it isn't online").arg(rel);
+        } else if (QFileInfo::exists(absPath(rel))) {
+            result.failures << QStringLiteral("%1: it's on this computer again, so it was kept").arg(rel);
+        } else if (b == m_base.constEnd() || b->remoteVersion != r->version) {
+            result.failures << QStringLiteral("%1: it changed online since it was synced here, so "
+                                              "it was kept").arg(rel);
+        } else {
+            entries << *r;
+        }
+    }
+    removeEntries(entries, result);
+    report(QStringLiteral("Done"), 1, 1);
+    return result;
+}
+
+bool LibrarySync::keepOnline(const QStringList &relPaths)
+{
+    const QHash<QString, RemoteEntry> remote = m_state.remote();
+    m_state.begin();
+    for (const QString &rel : relPaths) {
+        if (const auto r = remote.constFind(rel); r != remote.constEnd())
+            m_state.keepOnline(rel, r->version);
+    }
+    return m_state.commit();
 }
 
 LibrarySyncResult LibrarySync::fetch(const QStringList &relPaths)
