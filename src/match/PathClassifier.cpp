@@ -1,5 +1,6 @@
 #include "match/PathClassifier.h"
 
+#include "match/NameIndex.h"
 #include "match/NameParser.h"
 
 #include <QHash>
@@ -102,6 +103,16 @@ FolderClass classifyFolderName(const QString &folderName)
         return out;
     }
 
+    // "Brown Thornbill · Acanthiza pusilla", "Brown Thornbill (Acanthiza
+    // pusilla)": whatever its scientific half is.
+    if (const QStringList parts = splitNamePair(stripped); !parts.isEmpty()) {
+        for (const QString &part : parts) {
+            const FolderClass klass = classifyFolderName(part);
+            if (klass.kind == FolderKind::Taxon)
+                return klass;
+        }
+    }
+
     // Locality folders.
     if (looksNonTaxonomic(stripped)) {
         out.kind = FolderKind::Locality;
@@ -181,6 +192,37 @@ int classifyFolders(const QString &connectionName)
             r.klass = classifyFolderName(r.name);
             rows.insert(r.id, r);
             childrenOf[r.parentId].append(r.id);
+        }
+    }
+
+    // A folder named with a common name in the taxonomy cache is that taxon,
+    // whatever its shape or place says ("Flame Robin" under "Robins").
+    // One that means a single species (or subspecies) is filed under its
+    // scientific name; any other -- a group's name, or one shared by several
+    // taxa -- keeps its own text, for the matcher to send to review.
+    const std::shared_ptr<const NameIndex> names = NameIndex::build(connectionName);
+    for (auto &r : rows) {
+        if (r.klass.kind == FolderKind::Group || r.klass.kind == FolderKind::Staging
+            || r.klass.kind == FolderKind::Taxon)
+            continue;
+        const QString text = stripNumbering(r.name).trimmed();
+        QList<NameIndex::Entry> hits = names->lookup(text);
+        for (const QString &part : splitNamePair(text)) {
+            if (!hits.isEmpty())
+                break;
+            hits = names->lookup(part);
+        }
+        if (hits.isEmpty())
+            continue;
+        r.klass.kind = FolderKind::Taxon;
+        const auto one = NameIndex::unique(hits);
+        if (one && NameIndex::isSpeciesOrBelow(one->rank)) {
+            r.klass.rank = one->rank == QLatin1String("species") ? QStringLiteral("species")
+                                                                  : QStringLiteral("infraspecies");
+            r.klass.inferredName = one->name;
+        } else {
+            r.klass.rank.clear();   // no genus/family hint from a common name
+            r.klass.inferredName = text;
         }
     }
 

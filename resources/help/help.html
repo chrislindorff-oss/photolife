@@ -119,9 +119,30 @@ menu:</p>
       iNaturalist subspecies, varieties and hybrids that iNat&rsquo;s regular species
       list doesn&rsquo;t report on its own. It makes a few requests per species, so it
       can be slow for a large tree, but it's safe to quit and re-run later.</li>
+  <li><b>Update Common Names</b> fetches every English common name iNaturalist has
+      for your trees&rsquo; taxa &mdash; not just its preferred one &mdash; so photos
+      filed under another name (&ldquo;Purple Swamphen&rdquo; for the Australasian
+      Swamphen) match too. The taxa your photos are matched to come first &mdash; a
+      few minutes, with a progress window &mdash; then the library is matched again,
+      and the rest of your trees' taxa are fetched quietly in the background, the most
+      useful first. For big trees that takes hours (iNaturalist answers about 30 taxa
+      every few seconds); it carries on at the next launch if you close PhotoLife, and
+      the status bar shows how far it has got. New trees get theirs by themselves; each
+      taxon is fetched again after 90 days.</li>
   <li><b>Delete Reference Tree&hellip;</b> removes a tree you no longer need (your
       photos and their matches are untouched).</li>
 </ul>
+<p><b>Common names in folder and file names.</b> A folder or photo named with a
+common name (&ldquo;Flame Robin&rdquo;) matches automatically when that name means
+just one species (or subspecies) in your trees; differences in hyphens, spaces and
+apostrophes don't matter (&ldquo;Superb Fairy-wren&rdquo; finds &ldquo;Superb
+Fairywren&rdquo;, &ldquo;Lathams Snipe&rdquo; finds &ldquo;Latham's Snipe&rdquo;), nor
+does &ldquo;Robin, Flame&rdquo; order. A folder can give both names &mdash;
+&ldquo;Flame Robin &middot; Petroica phoenicea&rdquo; or &ldquo;Flame Robin
+(Petroica phoenicea)&rdquo; &mdash; and they're checked against each other. A
+group's common name (&ldquo;Sun Orchids&rdquo;), or one shared by several taxa, goes
+to <b>Review Unmatched</b>. A <i>Common name</i> column in an imported tree file is
+used the same way.</p>
 <p>Right-click a taxon in the tree for more:</p>
 <ul>
   <li><b>Fetch Subspecies/Varieties under &ldquo;&hellip;&rdquo;</b> &mdash; the

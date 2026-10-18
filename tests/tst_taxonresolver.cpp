@@ -28,6 +28,7 @@ private slots:
     void fuzzyMatchesTypo();
     void aliasBeatsEverything();
     void resolvesCommonNameFromRawString();
+    void commonNames();
     void nonTaxonMarker();
     void nothingMatches();
 
@@ -163,6 +164,70 @@ void TestTaxonResolver::resolvesCommonNameFromRawString()
     QVERIFY(!c.isEmpty());
     QCOMPARE(c.first().name, QStringLiteral("Anas superciliosa"));
     QCOMPARE(c.first().matchedVia, QStringLiteral("vernacular"));
+}
+
+// Common names: one that means a single species is as good as its
+// scientific name; a looser spelling nearly so; a group's name, or one
+// shared by several taxa, goes to review.
+void TestTaxonResolver::commonNames()
+{
+    auto add = [&](qint64 id, std::optional<qint64> parent, const char *rank, const char *name,
+                   QStringList common) {
+        taxonomy::Taxon t;
+        t.inatId = id;
+        t.parentInatId = parent;
+        t.rank = QLatin1String(rank);
+        t.name = QString::fromUtf8(name);
+        t.commonName = common.value(0);
+        t.vernacular = common;
+        t.allNames = true;
+        QVERIFY(m_store->upsertTaxon(t) > 0);
+    };
+    add(300, std::nullopt, "species", "Petroica phoenicea", {QStringLiteral("Flame Robin")});
+    add(310, std::nullopt, "species", "Malurus cyaneus", {QStringLiteral("Superb Fairywren")});
+    add(311, 310, "subspecies", "Malurus cyaneus cyanochlamys", {QStringLiteral("Superb Fairywren")});
+    add(320, std::nullopt, "species", "Gallinago hardwickii", {QStringLiteral("Latham's Snipe")});
+    add(330, std::nullopt, "genus", "Thelymitra", {QStringLiteral("Sun Orchids")});
+    add(340, std::nullopt, "species", "Heteromyias cinereifrons", {QStringLiteral("Grey Robin")});
+    add(341, std::nullopt, "species", "Peneothello cyanus", {QStringLiteral("Grey Robin")});
+    add(350, std::nullopt, "species", "Porphyrio melanotus",
+        {QStringLiteral("Australasian Swamphen"), QStringLiteral("Purple Swamphen")});
+
+    TaxonResolver resolver(m_db->connectionName());
+    auto top = [&](const char *text) {
+        const auto c = resolver.resolve(parseName(QString::fromUtf8(text)));
+        return c.isEmpty() ? TaxonCandidate{} : c.first();
+    };
+
+    QCOMPARE(top("Flame Robin").inatId, qint64(300));
+    QCOMPARE(top("Flame Robin").score, TaxonResolver::kUniqueCommonName);
+    QCOMPARE(top("flame robin").inatId, qint64(300));
+    QCOMPARE(top("Purple Swamphen").inatId, qint64(350));   // not the preferred name
+    QCOMPARE(top("Purple Swamphen").score, TaxonResolver::kUniqueCommonName);
+
+    // Hyphens, spaces and apostrophes don't matter.
+    QCOMPARE(top("Superb Fairy-wren").inatId, qint64(310));   // the species, not its subspecies
+    QCOMPARE(top("Superb Fairy-wren").score, TaxonResolver::kUniqueLooseCommonName);
+    QCOMPARE(top("Lathams Snipe").inatId, qint64(320));
+    QCOMPARE(top("Lathams Snipe").score, TaxonResolver::kUniqueLooseCommonName);
+
+    // Inverted, and paired with its scientific name.
+    QCOMPARE(top("Robin, Flame").inatId, qint64(300));
+    QCOMPARE(top("Flame Robin · Petroica phoenicea").inatId, qint64(300));
+    QCOMPARE(top("Flame Robin · Petroica phoenicea").score, 1.0);
+    QCOMPARE(top("Flame Robin (Petroica phoenicea)").inatId, qint64(300));
+    QVERIFY(top("Flame Robin · Peneothello cyanus").score < 0.9);   // they disagree
+
+    // A group's name, or a shared one: for review.
+    QCOMPARE(top("Sun Orchids").inatId, qint64(330));
+    QCOMPARE(top("Sun Orchids").score, TaxonResolver::kOtherCommonName);
+    const auto grey = resolver.resolve(parseName(QStringLiteral("Grey Robin")));
+    QCOMPARE(grey.size(), 2);
+    QCOMPARE(grey.first().score, TaxonResolver::kOtherCommonName);
+
+    // Scientific names are untouched.
+    QCOMPARE(top("Caladenia carnea").inatId, qint64(101));
+    QCOMPARE(top("Caladenia carnea").score, 1.0);
 }
 
 void TestTaxonResolver::nonTaxonMarker()

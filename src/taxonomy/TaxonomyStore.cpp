@@ -300,15 +300,25 @@ QHash<qint64, int> TaxonomyStore::upsertTaxa(const QList<Taxon> &taxa)
     if (result.size() != deduped.size())
         return {};
 
-    // Replace every one of these taxa's name rows: one delete, then one
-    // multi-row insert for all of them combined.
-    const QList<int> localIds = result.values();
-    {
-        const QStringList placeholders(localIds.size(), QStringLiteral("?"));
+    // Replace these taxa's name rows: one delete, then one multi-row insert
+    // for all of them combined. A taxon that comes with all its names
+    // (Taxon::allNames) has every row replaced; one with at most its
+    // preferred common name only has its accepted name replaced, so it keeps
+    // the synonyms and common names fetched or added before.
+    QList<int> fullIds;
+    QList<int> leanIds;
+    for (const Taxon &t : deduped)
+        (t.allNames ? fullIds : leanIds) << result.value(t.inatId);
+    for (const auto &[ids, kindFilter] :
+         {std::pair{fullIds, QStringLiteral(" AND kind IN ('accepted', 'synonym', 'vernacular')")},
+          std::pair{leanIds, QStringLiteral(" AND kind = 'accepted'")}}) {
+        if (ids.isEmpty())
+            continue;
+        const QStringList placeholders(ids.size(), QStringLiteral("?"));
         QSqlQuery del(db);
-        del.prepare(QStringLiteral("DELETE FROM taxon_name WHERE taxon_id IN (%1)")
-                        .arg(placeholders.join(QLatin1Char(','))));
-        for (int id : localIds)
+        del.prepare(QStringLiteral("DELETE FROM taxon_name WHERE taxon_id IN (%1)%2")
+                        .arg(placeholders.join(QLatin1Char(',')), kindFilter));
+        for (int id : ids)
             del.addBindValue(id);
         if (!del.exec())
             return {};
@@ -1368,6 +1378,46 @@ std::optional<geo::GeoShape> TaxonomyStore::projectLocalityShape(int projectId) 
     if (!place || place->geometryGeoJson.isEmpty())
         return std::nullopt;
     return geo::parseGeoJsonShape(place->geometryGeoJson);
+}
+
+QList<std::pair<qint64, int>> TaxonomyStore::treeTaxaByNamePriority() const
+{
+    QList<std::pair<qint64, int>> out;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.setForwardOnly(true);
+    const QString lowRanks = QStringLiteral("('species', 'subspecies', 'variety', 'form', 'hybrid')");
+    if (q.exec(QStringLiteral(
+            "SELECT t.inat_id, CASE "
+            "  WHEN t.id IN (SELECT taxon_id FROM capture_match WHERE taxon_id IS NOT NULL) THEN 0 "
+            "  WHEN t.rank IN %1 AND t.parent_inat_id IN (SELECT t2.parent_inat_id FROM capture_match m "
+            "       JOIN taxon t2 ON t2.id = m.taxon_id) THEN 1 "
+            "  WHEN t.rank IN %1 THEN 2 "
+            "  WHEN t.rank = 'genus' THEN 3 ELSE 4 END AS tier "
+            "FROM taxon t WHERE t.id IN (SELECT taxon_id FROM project_taxon) "
+            "   OR t.id IN (SELECT taxon_id FROM capture_match WHERE taxon_id IS NOT NULL) "
+            "ORDER BY tier, t.inat_id").arg(lowRanks))) {
+        while (q.next())
+            out.append({q.value(0).toLongLong(), q.value(1).toInt()});
+    }
+    return out;
+}
+
+int TaxonomyStore::commonNameCount(const QList<qint64> &inatIds) const
+{
+    int count = 0;
+    for (qsizetype i = 0; i < inatIds.size(); i += 500) {
+        const QList<qint64> chunk = inatIds.mid(i, 500);
+        QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+        q.prepare(QStringLiteral(
+            "SELECT COUNT(*) FROM taxon_name tn JOIN taxon t ON t.id = tn.taxon_id "
+            "WHERE tn.kind IN ('vernacular', 'user-vernacular') AND t.inat_id IN (%1)")
+                      .arg(QStringList(chunk.size(), QStringLiteral("?")).join(QLatin1Char(','))));
+        for (qint64 id : chunk)
+            q.addBindValue(qlonglong(id));
+        if (q.exec() && q.next())
+            count += q.value(0).toInt();
+    }
+    return count;
 }
 
 QList<qint64> TaxonomyStore::projectTaxonInatIds(int projectId) const

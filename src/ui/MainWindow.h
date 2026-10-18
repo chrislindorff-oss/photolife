@@ -66,6 +66,7 @@ class AlaStatusSync;
 class ApcOriginSync;
 class InfraspecificFiller;
 class ReferencePhotoFetcher;
+class CommonNameFetcher;
 }
 namespace match {
 class MatchEngine;
@@ -390,6 +391,12 @@ private:
     QPushButton *m_refPhotoExportButton = nullptr;
     QWidget *m_refPhotoPage = nullptr;
     taxonomy::ReferencePhotoFetcher *m_refPhotoFetcher = nullptr;
+    taxonomy::CommonNameFetcher *m_commonNameFetcher = nullptr;
+    QAction *m_updateCommonNamesAction = nullptr;
+    bool m_commonNamesInteractive = false;   // started from the menu: progress window, then a match
+    // Fetches every English common name of the trees' taxa; `interactive`
+    // shows progress and re-matches the library after.
+    void updateCommonNames(bool interactive);
     QAction *m_fetchRefPhotosAction = nullptr;
     QAction *m_exportTreePhotosAction = nullptr;
     bool m_exportCancelling = false;   // ignore late progress so "Cancelling…" stays up

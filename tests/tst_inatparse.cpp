@@ -72,13 +72,22 @@ void TestINatParse::taxonNamesSplitIntoSynonymsAndVernacular()
             {"name": "Caladenia carnea", "lexicon": "scientific-names"},
             {"name": "Petalochilus carneus", "lexicon": "scientific-names"},
             {"name": "Pink Fingers", "lexicon": "english"},
-            {"name": "Pink Lady Fingers", "lexicon": "English"}
+            {"name": "Pink Lady Fingers", "lexicon": "English"},
+            {"name": "Rosa Fingerorchidee", "lexicon": "German", "locale": "de"},
+            {"name": "Pinkies", "lexicon": "Local names", "locale": "en"}
         ]
     })"));
     QCOMPARE(t.synonyms, QStringList{QStringLiteral("Petalochilus carneus")});
     QVERIFY(t.vernacular.contains(QStringLiteral("Pink Fingers")));
     QVERIFY(t.vernacular.contains(QStringLiteral("Pink Lady Fingers")));
+    QVERIFY(t.vernacular.contains(QStringLiteral("Pinkies")));   // English by locale
+    QVERIFY(!t.vernacular.contains(QStringLiteral("Rosa Fingerorchidee")));   // other languages left out
     QVERIFY(!t.synonyms.contains(QStringLiteral("Caladenia carnea")));
+    QVERIFY(t.allNames);
+
+    // Without a names list, it's only the preferred name.
+    QVERIFY(!parseTaxon(obj(R"({"id": 11, "rank": "species", "name": "Diuris pardina",
+                                "preferred_common_name": "Leopard Orchid"})")).allNames);
 }
 
 void TestINatParse::taxonDefaultPhoto()

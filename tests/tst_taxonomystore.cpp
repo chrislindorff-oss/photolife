@@ -423,6 +423,7 @@ void TestTaxonomyStore::reUpsertReplacesNamesWithoutDuplicating()
     t.rank = QStringLiteral("genus");
     t.name = QStringLiteral("Caladenia");
     t.synonyms = {QStringLiteral("Petalochilus"), QStringLiteral("Arachnorchis")};
+    t.allNames = true;
     const int id = m_store->upsertTaxon(t);
 
     t.synonyms = {QStringLiteral("Stegostyla")};  // fewer, different
@@ -433,6 +434,19 @@ void TestTaxonomyStore::reUpsertReplacesNamesWithoutDuplicating()
     q.addBindValue(id);
     QVERIFY(q.exec() && q.next());
     QCOMPARE(q.value(0).toInt(), 2);  // accepted + 1 synonym, old synonyms gone
+
+    // Without all its names (e.g. from a species list), the taxon keeps the
+    // names it has, and gains its preferred common name.
+    Taxon lean;
+    lean.inatId = 100;
+    lean.rank = QStringLiteral("genus");
+    lean.name = QStringLiteral("Caladenia");
+    lean.commonName = QStringLiteral("Spider Orchids");
+    lean.vernacular = {lean.commonName};
+    m_store->upsertTaxon(lean);
+    q.addBindValue(id);
+    QVERIFY(q.exec() && q.next());
+    QCOMPARE(q.value(0).toInt(), 3);  // accepted, Stegostyla, Spider Orchids
 }
 
 void TestTaxonomyStore::projectMembershipAndTree()
@@ -915,9 +929,10 @@ void TestTaxonomyStore::upsertTaxaWritesAllRowsInOnePass()
     QVERIFY(q.exec() && q.next());
     QCOMPARE(q.value(0).toInt(), 4);   // accepted + 1 synonym + 2 vernacular
 
-    // Re-upserting with a smaller name set replaces, doesn't accumulate.
+    // Re-upserting with a smaller full name set replaces, doesn't accumulate.
     a.synonyms.clear();
     a.vernacular.clear();
+    a.allNames = true;
     QVERIFY(!m_store->upsertTaxa({a}).isEmpty());
     q.addBindValue(ids.value(900));
     QVERIFY(q.exec() && q.next());

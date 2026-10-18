@@ -4,6 +4,7 @@
 #include "taxonomy/TaxonomyStore.h"
 
 #include <QHash>
+#include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QVariant>
@@ -23,7 +24,7 @@ double baseScoreFor(const QString &kind)
         return 0.92;
     if (kind == QLatin1String("synonym"))
         return 0.95;
-    if (kind == QLatin1String("vernacular"))
+    if (kind == QLatin1String("vernacular") || kind == taxonomy::TaxonomyStore::kUserVernacular)
         return 0.82;
     return 0.70;
 }
@@ -31,6 +32,21 @@ double baseScoreFor(const QString &kind)
 QString genusOf(const QString &scientificName)
 {
     return scientificName.section(QLatin1Char(' '), 0, 0);
+}
+
+bool isCommonName(const TaxonCandidate &c)
+{
+    return c.matchedVia == QLatin1String("vernacular")
+           || c.matchedVia == taxonomy::TaxonomyStore::kUserVernacular;
+}
+
+// "Thornbill, Brown" -> "Brown Thornbill" (one comma, a few words each side).
+QString uninverted(const QString &raw)
+{
+    static const QRegularExpression re(QStringLiteral(R"(^([^,]{2,40}),\s*([^,]{2,40})$)"));
+    const auto m = re.match(raw.trimmed());
+    return m.hasMatch() ? m.captured(2).trimmed() + QLatin1Char(' ') + m.captured(1).trimmed()
+                        : QString();
 }
 
 } // namespace
@@ -131,6 +147,38 @@ QList<TaxonCandidate> TaxonResolver::exactCandidates(const ParsedName &parsed) c
     return out;
 }
 
+const NameIndex &TaxonResolver::index() const
+{
+    if (!m_index)
+        m_index = NameIndex::build(m_connectionName);
+    return *m_index;
+}
+
+QList<TaxonCandidate> TaxonResolver::commonNameCandidates(const QString &text) const
+{
+    bool loose = false;
+    const QList<NameIndex::Entry> hits = index().lookup(text, &loose);
+    if (hits.isEmpty())
+        return {};
+    const auto one = NameIndex::unique(hits);
+    const bool sure = one && NameIndex::isSpeciesOrBelow(one->rank);
+    QList<TaxonCandidate> out;
+    for (const NameIndex::Entry &e : hits) {
+        if (sure && e.taxonId != one->taxonId)
+            continue;   // its own subspecies, sharing the species' name
+        TaxonCandidate c;
+        c.taxonId = e.taxonId;
+        c.inatId = e.inatId;
+        c.name = e.name;
+        c.rank = e.rank;
+        c.commonName = e.commonName;
+        c.matchedVia = QStringLiteral("vernacular");
+        c.score = sure ? (loose ? kUniqueLooseCommonName : kUniqueCommonName) : kOtherCommonName;
+        out.append(c);
+    }
+    return out;
+}
+
 QList<TaxonCandidate> TaxonResolver::fuzzyCandidates(const ParsedName &parsed) const
 {
     if (parsed.genus.isEmpty())
@@ -209,7 +257,7 @@ void TaxonResolver::applyHints(QList<TaxonCandidate> &candidates, const ResolveH
     }
 
     for (TaxonCandidate &c : candidates) {
-        if (c.matchedVia == QLatin1String("vernacular") && !hints.genusFromFolder)
+        if (isCommonName(c) && !hints.genusFromFolder)
             continue;
         const QString candGenus = genusOf(c.name).toLower();
         if (candGenus == hintGenus) {
@@ -222,16 +270,60 @@ void TaxonResolver::applyHints(QList<TaxonCandidate> &candidates, const ResolveH
     }
 }
 
+QList<TaxonCandidate> TaxonResolver::resolveOne(const ParsedName &parsed,
+                                                const ResolveHints &hints) const
+{
+    QList<TaxonCandidate> candidates = exactCandidates(parsed);
+    const bool scientific = std::any_of(candidates.cbegin(), candidates.cend(), [](const auto &c) {
+        return !isCommonName(c);
+    });
+    if (scientific)
+        return candidates;
+
+    // Two names for one thing: each on its own, agreeing or not.
+    if (const QStringList parts = splitNamePair(parsed.raw); !parts.isEmpty()) {
+        QList<TaxonCandidate> tops;
+        for (const QString &part : parts) {
+            const QList<TaxonCandidate> found = resolveOne(parseName(part), hints);
+            if (!found.isEmpty())
+                tops << *std::max_element(found.cbegin(), found.cend(), [](const auto &a, const auto &b) {
+                    return a.score < b.score;
+                });
+        }
+        if (!tops.isEmpty()) {
+            TaxonCandidate best = *std::max_element(tops.cbegin(), tops.cend(), [](const auto &a, const auto &b) {
+                return a.score < b.score;
+            });
+            const bool agree = std::all_of(tops.cbegin(), tops.cend(), [&](const auto &c) {
+                return c.taxonId == best.taxonId;
+            });
+            if (tops.size() > 1)
+                best.score = agree ? std::min(1.0, best.score + 0.05) : best.score * 0.6;
+            return {best};
+        }
+    }
+
+    // A common name: scored by whether it means one species (the exact
+    // lookup above can't tell), and found loosely or inverted too.
+    QList<TaxonCandidate> common = commonNameCandidates(parsed.raw);
+    if (common.isEmpty()) {
+        if (const QString flipped = uninverted(parsed.raw); !flipped.isEmpty())
+            common = commonNameCandidates(flipped);
+    }
+    if (!common.isEmpty())
+        candidates = common;
+    if (candidates.isEmpty())
+        candidates = fuzzyCandidates(parsed);
+    return candidates;
+}
+
 QList<TaxonCandidate> TaxonResolver::resolve(const ParsedName &parsed,
                                              const ResolveHints &hints) const
 {
     if (parsed.raw.isEmpty())
         return {};
 
-    QList<TaxonCandidate> candidates = exactCandidates(parsed);
-    const bool hadExact = !candidates.isEmpty();
-    if (!hadExact)
-        candidates = fuzzyCandidates(parsed);
+    QList<TaxonCandidate> candidates = resolveOne(parsed, hints);
 
     applyHints(candidates, hints);
 
@@ -253,8 +345,22 @@ QList<TaxonCandidate> TaxonResolver::resolve(const ParsedName &parsed,
                 return !hints.preferTaxonIds.contains(c.taxonId);
             });
     }
-    std::sort(result.begin(), result.end(),
-              [](const TaxonCandidate &a, const TaxonCandidate &b) { return a.score > b.score; });
+    // Equal scores: the most specific name first ("Limnodynastes dumerilii
+    // insularis" is the subspecies, not the species its first two words also
+    // name), then a genus before a same-named subgenus or section -- so the
+    // pick never depends on hash order.
+    std::stable_sort(result.begin(), result.end(), [](const TaxonCandidate &a, const TaxonCandidate &b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        const auto words = [](const TaxonCandidate &c) { return c.name.count(QLatin1Char(' ')); };
+        if (words(a) != words(b))
+            return words(a) > words(b);
+        const bool genusA = a.rank == QLatin1String("genus");
+        const bool genusB = b.rank == QLatin1String("genus");
+        if (genusA != genusB)
+            return genusA;
+        return a.taxonId < b.taxonId;
+    });
     if (result.size() > 8)
         result.resize(8);
     return result;

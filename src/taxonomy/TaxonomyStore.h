@@ -28,6 +28,11 @@ public:
     // keep it as-is; see foldSearchText() for typed search input.
     static QString foldName(const QString &name);
 
+    // taxon_name.kind of a common name the user supplied (a tree file's
+    // "Common name" column): matched like iNaturalist's ("vernacular"), but
+    // kept when a taxon's iNaturalist names are replaced.
+    static inline const QString kUserVernacular = QStringLiteral("user-vernacular");
+
     // Folds a user-typed search query the same way as foldName(), but first
     // swaps a standalone "x"/"X" token for the hybrid multiplication sign
     // (×) iNaturalist stores hybrid names with -- e.g. someone typing
@@ -302,6 +307,13 @@ public:
     // locality or its outline hasn't been fetched (or iNaturalist has none).
     std::optional<geo::GeoShape> projectLocalityShape(int projectId) const;
     QList<qint64> projectTaxonInatIds(int projectId) const;
+    // The taxa of every reference tree, and those photos are matched to
+    // (iNat ids), each once, most useful for matching first: the matched
+    // taxa (tier 0), species and below of genera with matched photos (1),
+    // other species and below (2), genera (3), the rest (4).
+    QList<std::pair<qint64, int>> treeTaxaByNamePriority() const;
+    // How many common names (iNaturalist's and the user's) these taxa have.
+    int commonNameCount(const QList<qint64> &inatIds) const;
 
     // One recorded conservation status or origin of a project taxon, from any
     // source and for any place -- for exporting a tree.

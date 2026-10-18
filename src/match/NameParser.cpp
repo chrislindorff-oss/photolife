@@ -269,4 +269,19 @@ bool looksNonTaxonomic(const QString &raw)
     return false;
 }
 
+QStringList splitNamePair(const QString &text)
+{
+    static const QRegularExpression sepRe(
+        QStringLiteral(R"(\s+[\x{00B7}\x{2022}|/\-\x{2013}\x{2014}]\s+)"));
+    static const QRegularExpression parenRe(QStringLiteral(R"(^(.+?)\s*\(([^()]+)\)\s*$)"));
+    QStringList parts;
+    if (text.contains(sepRe)) {
+        for (const QString &p : text.split(sepRe, Qt::SkipEmptyParts))
+            parts << p.trimmed();
+    } else if (const auto m = parenRe.match(text); m.hasMatch()) {
+        parts << m.captured(1).trimmed() << m.captured(2).trimmed();
+    }
+    return parts.size() >= 2 ? parts : QStringList{};
+}
+
 } // namespace pl::match

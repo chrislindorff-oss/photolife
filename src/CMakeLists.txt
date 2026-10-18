@@ -50,6 +50,7 @@ qt_add_library(photolife_core STATIC
     match/MatchEngine.h     match/MatchEngine.cpp
     match/MatchReviewer.h   match/MatchReviewer.cpp
     match/MatchService.h    match/MatchService.cpp
+    match/NameIndex.h       match/NameIndex.cpp
     match/NameParser.h      match/NameParser.cpp
     match/PathClassifier.h  match/PathClassifier.cpp
     match/TaxonResolver.h   match/TaxonResolver.cpp
@@ -90,6 +91,7 @@ qt_add_library(photolife_core STATIC
     taxonomy/AlaStatusSync.h taxonomy/AlaStatusSync.cpp
     taxonomy/ApcOriginSync.h taxonomy/ApcOriginSync.cpp
     taxonomy/ProjectBuilder.h taxonomy/ProjectBuilder.cpp
+    taxonomy/CommonNameFetcher.h taxonomy/CommonNameFetcher.cpp
     taxonomy/ReferencePhotoFetcher.h taxonomy/ReferencePhotoFetcher.cpp
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
     taxonomy/TaxonomyTypes.h

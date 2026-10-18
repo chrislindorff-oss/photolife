@@ -1,10 +1,13 @@
 #pragma once
 
+#include "match/NameIndex.h"
 #include "match/NameParser.h"
 
 #include <QList>
 #include <QSet>
 #include <QString>
+
+#include <memory>
 
 namespace pl::match {
 
@@ -58,13 +61,29 @@ public:
 
     void setFuzzyThreshold(double t) { m_fuzzyThreshold = t; }
 
+    // The common-name index to use (shared across a matching pass); built
+    // from the connection on first need otherwise.
+    void setNameIndex(std::shared_ptr<const NameIndex> index) { m_index = std::move(index); }
+
+    // Scores for common-name hits: one that means a single taxon at species
+    // rank or below is as good as its scientific name (and auto-matches);
+    // a looser spelling a little less; anything else goes to review.
+    static constexpr double kUniqueCommonName = 1.00;
+    static constexpr double kUniqueLooseCommonName = 0.98;
+    static constexpr double kOtherCommonName = 0.82;
+
 private:
+    QList<TaxonCandidate> resolveOne(const ParsedName &parsed, const ResolveHints &hints) const;
+    // Common-name hits for `text` from the index, scored as above.
+    QList<TaxonCandidate> commonNameCandidates(const QString &text) const;
+    const NameIndex &index() const;
     QList<TaxonCandidate> exactCandidates(const ParsedName &parsed) const;
     QList<TaxonCandidate> fuzzyCandidates(const ParsedName &parsed) const;
     void applyHints(QList<TaxonCandidate> &candidates, const ResolveHints &hints) const;
 
     QString m_connectionName;
     double m_fuzzyThreshold = 0.80;
+    mutable std::shared_ptr<const NameIndex> m_index;
 };
 
 } // namespace pl::match

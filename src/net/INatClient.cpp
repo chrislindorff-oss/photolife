@@ -134,7 +134,8 @@ void INatClient::fetchTaxon(qint64 inatId, std::function<void(Outcome<TaxonDetai
 }
 
 void INatClient::fetchTaxa(const QList<qint64> &inatIds,
-                           std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done)
+                           std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done,
+                           bool allNames)
 {
     if (inatIds.isEmpty()) {
         done({});
@@ -145,6 +146,8 @@ void INatClient::fetchTaxa(const QList<qint64> &inatIds,
         idStrings << QString::number(id);
 
     QUrl url(m_baseUrl + QStringLiteral("/taxa/") + idStrings.join(QLatin1Char(',')));
+    if (allNames)
+        url.setQuery(QStringLiteral("all_names=true"));
 
     request(url, [done = std::move(done)](HttpResponse resp) {
         Outcome<QList<pl::taxonomy::Taxon>> out;

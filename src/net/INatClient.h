@@ -103,9 +103,11 @@ public:
     // GET /v1/taxa/{id}?all_names=true  (taxon + ancestors + children)
     void fetchTaxon(qint64 inatId, std::function<void(Outcome<TaxonDetail>)> done);
 
-    // GET /v1/taxa/{id1,id2,...}  (up to 30 ids; caller batches)
+    // GET /v1/taxa/{id1,id2,...}  (up to 30 ids; caller batches). With
+    // `allNames`, also every name each taxon has (all_names=true).
     void fetchTaxa(const QList<qint64> &inatIds,
-                   std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done);
+                   std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done,
+                   bool allNames = false);
 
     // GET /v1/observations/species_counts?taxon_id=&place_id=&verifiable=true&page=
     void speciesCounts(qint64 taxonId, qint64 placeId, int page, int perPage,

@@ -69,6 +69,7 @@ TreeFile exportedFile()
               row(100, 47217, "genus", 20, "Diuris", "48460/47217"),
               row(900, 100, "species", 10, "Diuris pardina", "48460/47217/100", true)};
     f.rows[3].fromChecklist = true;
+    f.rows[3].commonName = QStringLiteral("Leopard Orchid");
     f.rows[3].statuses = {{QStringLiteral("Rare"), QStringLiteral("VBA 2021"), 7830}};
     f.rows[3].origins = {{QStringLiteral("native"), QString(), std::nullopt}};
     return f;
@@ -187,6 +188,11 @@ void TestTreeImporter::exportedFileImportsWithoutNetwork()
     // No source or place in the file: the request's default and the tree's place.
     QCOMPARE(origins.at(0).source, QStringLiteral("tree file"));
     QCOMPARE(origins.at(0).placeInatId, std::optional<qint64>(7830));
+
+    // The file's common name, for matching photos filed under it.
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM taxon_name tn JOIN taxon t ON t.id = tn.taxon_id "
+                                   "WHERE t.inat_id = 900 AND tn.name = 'Leopard Orchid' "
+                                   "AND tn.kind = 'user-vernacular'")), 1);
 }
 
 void TestTreeImporter::resolvesNameOnlyRowsAndFillsAncestors()

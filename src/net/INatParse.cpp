@@ -73,6 +73,10 @@ pl::taxonomy::Taxon parseTaxon(const QJsonObject &obj)
     if (!t.commonName.isEmpty())
         t.vernacular.append(t.commonName);
 
+    // All its names (with all_names=true): the scientific ones, and the
+    // English common names -- other languages' names would only make false
+    // matches against an English-named library.
+    t.allNames = obj.value(QStringLiteral("names")).isArray();
     const QJsonArray names = obj.value(QStringLiteral("names")).toArray();
     for (const QJsonValue &nv : names) {
         const QJsonObject n = nv.toObject();
@@ -83,7 +87,9 @@ pl::taxonomy::Taxon parseTaxon(const QJsonObject &obj)
         if (lexicon == QLatin1String("scientific-names")) {
             if (name != t.name)
                 t.synonyms.append(name);
-        } else if (!t.vernacular.contains(name)) {
+        } else if ((lexicon.startsWith(QLatin1String("english"))
+                    || n.value(QStringLiteral("locale")).toString().startsWith(QLatin1String("en")))
+                   && !t.vernacular.contains(name)) {
             t.vernacular.append(name);
         }
     }

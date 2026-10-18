@@ -1,5 +1,7 @@
 #pragma once
 
+#include "match/NameIndex.h"
+
 #include <QList>
 #include <QMetaType>
 #include <QSet>
@@ -109,6 +111,8 @@ private:
     QString m_connectionName;
     double m_autoThreshold = 0.90;
     double m_pendingThreshold = 0.68;
+    // The common names, built once per pass (run()) or on first use.
+    mutable std::shared_ptr<const NameIndex> m_nameIndex;
 };
 
 } // namespace pl::match

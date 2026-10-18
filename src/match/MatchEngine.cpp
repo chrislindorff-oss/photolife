@@ -163,6 +163,9 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId,
     }
 
     TaxonResolver resolver(m_connectionName);
+    if (!m_nameIndex)
+        m_nameIndex = NameIndex::build(m_connectionName);
+    resolver.setNameIndex(m_nameIndex);
 
     const QString rawForAlias = !nameText.isEmpty() ? nameText : folder.inferredName;
     if (!rawForAlias.isEmpty() && resolver.isMarkedNonTaxon(rawForAlias, folder.path)) {
@@ -474,6 +477,7 @@ MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<
     Stats stats;
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
     stats.captures = int(captureIds.size());
+    m_nameIndex = NameIndex::build(m_connectionName);   // the names as they are now
 
     if (!db.transaction()) {
         stats.error = db.lastError().text();

@@ -6,9 +6,11 @@
 #include <QTemporaryDir>
 
 #include "db/Database.h"
+#include "match/MatchEngine.h"
 #include "match/PathClassifier.h"
 #include "scan/CatalogueWriter.h"
 #include "scan/FileScanner.h"
+#include "taxonomy/TaxonomyStore.h"
 
 using namespace pl;
 using namespace pl::match;
@@ -25,6 +27,7 @@ private slots:
     void unknownForAmbiguous();
     void classifyFoldersUsesTreeContext();
     void faunaCommonNameFolderUnderGroup();
+    void commonNameFoldersAreTaxaWhereverTheyAre();
 };
 
 void TestPathClassifier::groupFolders()
@@ -155,6 +158,82 @@ void TestPathClassifier::faunaCommonNameFolderUnderGroup()
     QCOMPARE(q.value(0).toString(), QStringLiteral("taxon"));
     QCOMPARE(q.value(1).toString(), QStringLiteral("species"));
     QCOMPARE(q.value(2).toString(), QStringLiteral("Pacific Black Duck"));
+}
+
+// A folder named with a known common name is that taxon wherever it sits
+// ("Flame Robin" under "Robins" used to count as a place), filed under its
+// scientific name when the name means one species -- and its photos then
+// match automatically; a group's common name still goes to review.
+void TestPathClassifier::commonNameFoldersAreTaxaWhereverTheyAre()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString root = tmp.filePath(QStringLiteral("Nature"));
+    auto touch = [](const QString &p) {
+        QDir().mkpath(QFileInfo(p).absolutePath());
+        QFile f(p);
+        f.open(QIODevice::WriteOnly);
+        f.write("x");
+    };
+    touch(root + QStringLiteral("/Birds/Robins/Flame Robin/IMG_0001.jpg"));
+    touch(root + QStringLiteral("/Birds/Robins/Superb Fairy-wren/IMG_0002.jpg"));
+    touch(root + QStringLiteral("/Birds/Robins/Brown Thornbill \u00B7 Acanthiza pusilla/IMG_0003.jpg"));
+    touch(root + QStringLiteral("/Birds/Robins/Lake Wendouree/IMG_0004.jpg"));
+    touch(root + QStringLiteral("/Plants/Sun Orchids/IMG_0005.jpg"));
+
+    Database db;
+    QVERIFY(db.open(QStringLiteral(":memory:")));
+    taxonomy::TaxonomyStore store(db.connectionName());
+    auto add = [&](qint64 id, const char *rank, const char *name, const char *common) {
+        taxonomy::Taxon t;
+        t.inatId = id;
+        t.rank = QLatin1String(rank);
+        t.name = QLatin1String(name);
+        t.commonName = QLatin1String(common);
+        t.vernacular = {t.commonName};
+        QVERIFY(store.upsertTaxon(t) > 0);
+    };
+    add(1, "species", "Petroica phoenicea", "Flame Robin");
+    add(2, "species", "Malurus cyaneus", "Superb Fairywren");
+    add(3, "species", "Acanthiza pusilla", "Brown Thornbill");
+    add(4, "genus", "Thelymitra", "Sun Orchids");
+
+    scan::CatalogueWriter writer(db.connectionName());
+    scan::FileScanner scanner;
+    QVERIFY(writer.sync(scanner.scan({root}), {root}).ok());
+    QVERIFY(classifyFolders(db.connectionName()) > 0);
+
+    auto folder = [&](const QString &name) {
+        QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+        q.prepare(QStringLiteral("SELECT kind, inferred_rank, inferred_name FROM folder WHERE name = ?"));
+        q.addBindValue(name);
+        q.exec();
+        return q.next() ? QStringList{q.value(0).toString(), q.value(1).toString(), q.value(2).toString()}
+                        : QStringList{};
+    };
+    QCOMPARE(folder(QStringLiteral("Flame Robin")),
+             (QStringList{QStringLiteral("taxon"), QStringLiteral("species"), QStringLiteral("Petroica phoenicea")}));
+    QCOMPARE(folder(QStringLiteral("Superb Fairy-wren")).value(2), QStringLiteral("Malurus cyaneus"));
+    QCOMPARE(folder(QStringLiteral("Brown Thornbill \u00B7 Acanthiza pusilla")).value(2),
+             QStringLiteral("Acanthiza pusilla"));
+    QCOMPARE(folder(QStringLiteral("Lake Wendouree")).value(0), QStringLiteral("locality"));
+    QCOMPARE(folder(QStringLiteral("Sun Orchids")),
+             (QStringList{QStringLiteral("taxon"), QString(), QStringLiteral("Sun Orchids")}));
+
+    MatchEngine engine(db.connectionName());
+    engine.matchAll();
+    auto matched = [&](const QString &baseName) {
+        QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+        q.prepare(QStringLiteral("SELECT t.name, m.status FROM capture_match m JOIN capture c ON c.id = m.capture_id "
+                                 "LEFT JOIN taxon t ON t.id = m.taxon_id WHERE c.base_name = ?"));
+        q.addBindValue(baseName);
+        q.exec();
+        return q.next() ? q.value(0).toString() + QLatin1Char('/') + q.value(1).toString() : QString();
+    };
+    QCOMPARE(matched(QStringLiteral("IMG_0001")), QStringLiteral("Petroica phoenicea/auto"));
+    QCOMPARE(matched(QStringLiteral("IMG_0002")), QStringLiteral("Malurus cyaneus/auto"));
+    QCOMPARE(matched(QStringLiteral("IMG_0003")), QStringLiteral("Acanthiza pusilla/auto"));
+    QCOMPARE(matched(QStringLiteral("IMG_0005")), QStringLiteral("Thelymitra/pending"));
 }
 
 QTEST_GUILESS_MAIN(TestPathClassifier)

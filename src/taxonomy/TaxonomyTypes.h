@@ -42,6 +42,11 @@ struct Taxon
 
     QStringList synonyms;      // other scientific names
     QStringList vernacular;    // common names (commonName included is fine)
+    // `synonyms` and `vernacular` are all the names iNaturalist has (the
+    // reply carried its full "names" list). Otherwise they're at most the
+    // preferred common name, and storing the taxon keeps the names it
+    // already has -- see TaxonomyStore::upsertTaxa().
+    bool allNames = false;
 };
 
 // Conservation status for a taxon in a place.

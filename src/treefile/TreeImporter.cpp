@@ -143,6 +143,10 @@ void TreeImporter::linkRows(const QList<PendingLink> &links)
                              l.fromChecklist});
         m_ancestryOf.insert(l.inatId, taxon.ancestry.isEmpty() ? row.ancestry : taxon.ancestry);
         linked.append(&l);
+        // The file's common name, so photos filed under it match too (kept
+        // when iNaturalist's names are refreshed).
+        if (!row.commonName.trimmed().isEmpty())
+            m_store.addName(l.inatId, row.commonName.trimmed(), TaxonomyStore::kUserVernacular);
 
         for (const TreeFileFact &f : row.statuses) {
             pl::taxonomy::StatusRecord s;

@@ -51,6 +51,11 @@ struct ParsedName
 // Parses one name string (from a folder name or a file name's name field).
 ParsedName parseName(const QString &raw);
 
+// Two names given for one thing -- "Brown Thornbill · Acanthiza pusilla",
+// "Brown Thornbill (Acanthiza pusilla)", "Acanthiza pusilla - Brown
+// Thornbill" -- split into its names; empty when it isn't such a pair.
+QStringList splitNamePair(const QString &text);
+
 // A quick "this is not a taxon" check for folder names: localities, staging
 // folders, pure punctuation. Conservative — a false negative just means the
 // resolver gets a shot and probably fails anyway.

@@ -37,6 +37,7 @@
 #include "taxonomy/AlaStatusSync.h"
 #include "taxonomy/ApcOriginSync.h"
 #include "taxonomy/ProjectBuilder.h"
+#include "taxonomy/CommonNameFetcher.h"
 #include "taxonomy/ReferencePhotoFetcher.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
@@ -197,6 +198,9 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     m_infraFiller = new taxonomy::InfraspecificFiller(m_app.inat(), m_app.taxonomyStore(), this);
     m_refPhotoFetcher =
         new taxonomy::ReferencePhotoFetcher(m_app.inat(), m_app.taxonomyStore(), this);
+    m_commonNameFetcher = new taxonomy::CommonNameFetcher(
+        m_app.inatBackground(), m_app.taxonomyStore(),
+        taxonomy::CommonNameFetcher::recordPathFor(m_app.settings().databasePath()), this);
     m_checklistImporter =
         new checklist::ChecklistImporter(m_app.inat(), m_app.taxonomyStore(), this);
     m_treeImporter = new treefile::TreeImporter(m_app.inat(), m_app.taxonomyStore(), this);
@@ -436,6 +440,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 refreshCoverage();
                 if (wasNewTree)
                     fetchInfraspecificTaxa();
+                updateCommonNames(false);   // the new taxa's other names, quietly
             });
 
     connect(m_infraFiller, &taxonomy::InfraspecificFiller::progress, this,
@@ -462,6 +467,57 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                         [this] { m_treeModel->setProject(currentProjectId()); });
                     refreshCoverage();
                 }
+            });
+
+    connect(m_commonNameFetcher, &taxonomy::CommonNameFetcher::progress, this,
+            [this](int done, int total) {
+                if (m_commonNamesInteractive)
+                    updateTaskProgress(tr("Fetching the common names of your photos' taxa — "
+                                          "%L1 of %L2…")
+                                           .arg(done)
+                                           .arg(total),
+                                       done, total);
+                else if (done > 0 && done % 600 == 0)   // every couple of minutes
+                    statusBar()->showMessage(
+                        tr("Fetching common names in the background — %L1 of %L2 taxa")
+                            .arg(done)
+                            .arg(total),
+                        15000);
+            });
+    connect(m_commonNameFetcher, &taxonomy::CommonNameFetcher::finished, this,
+            [this](bool ok, const QString &error, int added) {
+                const bool interactive = std::exchange(m_commonNamesInteractive, false);
+                if (m_updateCommonNamesAction)
+                    m_updateCommonNamesAction->setEnabled(true);
+                if (interactive)
+                    endTaskProgress();
+                if (!ok) {
+                    if (interactive && error != QLatin1String("cancelled"))
+                        QMessageBox::warning(this, tr("Update Common Names"),
+                                             tr("Couldn't fetch the common names: %1\n\nThose "
+                                                "already fetched are kept; run it again to "
+                                                "carry on.")
+                                                 .arg(error));
+                    else
+                        statusBar()->showMessage(tr("Fetching common names stopped: %1").arg(error),
+                                                 8000);
+                    return;
+                }
+                if (interactive) {
+                    // Photos waiting on those names can match now; the rest of
+                    // the trees' taxa follow quietly.
+                    statusBar()->showMessage(tr("Added %Ln common name(s).", nullptr, added), 8000);
+                    if (added > 0)
+                        startMatch();
+                    QTimer::singleShot(0, this, [this] { updateCommonNames(false); });
+                    return;
+                }
+                if (added > 0)
+                    statusBar()->showMessage(
+                        tr("Fetched the common names of every reference tree taxon (%Ln added) — "
+                           "Match Library to use them.",
+                           nullptr, added),
+                        15000);
             });
 
     connect(m_refPhotoFetcher, &taxonomy::ReferencePhotoFetcher::progress, this,
@@ -671,6 +727,11 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     if (m_app.catalogueEditable())
         m_originFetcher->enqueue(m_app.taxonomyStore().projectsMissingOrigins());
     syncAustralianSources(false, false);
+    // A background fetch of the trees' common names that hadn't finished
+    // carries on (only once one has been started: see updateCommonNames()).
+    if (QFileInfo::exists(
+            taxonomy::CommonNameFetcher::recordPathFor(m_app.settings().databasePath())))
+        QTimer::singleShot(20000, this, [this] { updateCommonNames(false); });
 
     // The first tree's refresh (queued by reloadProjectList()) runs now,
     // before the window is shown -- not on the first event-loop turn after
@@ -945,6 +1006,13 @@ void MainWindow::buildReferenceTreeMenu(QMenu *treeMenu)
     treeMenu->addSeparator();
     m_fetchRefPhotosAction = treeMenu->addAction(tr("Fetch Reference &Photos"),
                                                  this, &MainWindow::fetchReferencePhotos);
+    m_updateCommonNamesAction = treeMenu->addAction(tr("Update &Common Names"), this,
+                                                    [this] { updateCommonNames(true); });
+    m_updateCommonNamesAction->setToolTip(
+        tr("Fetches every English common name iNaturalist has — not just its preferred one — "
+           "for the taxa your photos are matched to (a few minutes), matches the library again, "
+           "then fetches the rest of your trees' taxa in the background. New trees get theirs "
+           "by themselves."));
     treeMenu->setToolTipsVisible(true);
     QAction *updateStatuses = treeMenu->addAction(
         tr("Update Threatened && Introduced Status (Australia)"), this,
@@ -3908,6 +3976,52 @@ void MainWindow::fetchReferencePhotos()
     statusBar()->showMessage(tr("Fetching reference photos from iNaturalist…"));
     beginTaskProgress(tr("Fetching Reference Photos"), [this] { m_refPhotoFetcher->cancel(); });
     m_refPhotoFetcher->start(pid);
+}
+
+void MainWindow::updateCommonNames(bool interactive)
+{
+    if (!m_commonNameFetcher || m_commonNameFetcher->isRunning())
+        return;
+    if (!m_app.catalogueEditable()) {
+        if (interactive)
+            ensureCanEdit();
+        return;   // a read-only shared copy: its editor keeps these current
+    }
+    if (interactive && !ensureCanEdit())
+        return;
+    using Scope = taxonomy::CommonNameFetcher::Scope;
+    // From the menu: the taxa photos are matched to, with progress (a few
+    // minutes), then a match; everything else carries on in the background.
+    const int photoTaxa = interactive ? int(m_commonNameFetcher->due(Scope::PhotoTaxa).size()) : 0;
+    if (photoTaxa == 0) {
+        const int rest = int(m_commonNameFetcher->due(Scope::All).size());
+        if (interactive) {
+            QMessageBox::information(
+                this, tr("Update Common Names"),
+                rest == 0 ? tr("Every taxon in your reference trees has had its common names "
+                               "fetched in the last %Ln day(s).",
+                               nullptr, taxonomy::CommonNameFetcher::kRefreshDays)
+                          : tr("Your photos' taxa already have their common names. The other "
+                               "%Ln taxa of your trees are being fetched in the background.",
+                               nullptr, rest));
+        }
+        if (rest > 0) {
+            m_commonNamesInteractive = false;
+            m_commonNameFetcher->start(Scope::All);
+        }
+        return;
+    }
+    m_commonNamesInteractive = true;
+    if (m_updateCommonNamesAction)
+        m_updateCommonNamesAction->setEnabled(false);
+    beginTaskProgress(tr("Updating Common Names"), [this] {
+        m_commonNameFetcher->cancel();
+        showTaskCancelling(tr("Stopping…"));
+    });
+    updateTaskProgress(tr("Fetching the common names of your photos' %Ln taxa from iNaturalist…",
+                          nullptr, photoTaxa),
+                       0, 0);
+    m_commonNameFetcher->start(Scope::PhotoTaxa);
 }
 
 void MainWindow::exportReferenceContactSheet()
