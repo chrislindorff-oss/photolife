@@ -549,6 +549,16 @@ void Settings::setContactSheetOptions(const collection::ContactSheetOptions &opt
                         QJsonDocument(options.toJson()).toJson(QJsonDocument::Compact));
 }
 
+QString Settings::organiseFolder() const
+{
+    return m_settings.value(QStringLiteral("organise/folder")).toString();
+}
+
+void Settings::setOrganiseFolder(const QString &path)
+{
+    m_settings.setValue(QStringLiteral("organise/folder"), path);
+}
+
 QString Settings::contactSheetFolder() const
 {
     return m_settings.value(QLatin1String(kContactSheetFolder)).toString();

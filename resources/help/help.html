@@ -6,8 +6,11 @@
 <h1>PhotoLife Help</h1>
 
 <p>PhotoLife builds a catalogue alongside your nature-photo library and hangs
-each photo on the tree of life. It never moves, renames or deletes your photos
-&mdash; it reads them and keeps its own database. The only times it writes to a
+each photo on the tree of life. It never moves, renames or deletes the photos in
+your library &mdash; it reads them and keeps its own database. (The one exception
+is <a href="#organise">Organise New Photos</a>, which moves a new download
+folder's photos into taxon folders &mdash; only when you commit, never deleting
+anything, and it can be undone.) The only times it writes to a
 photo file are when you explicitly ask it to (see
 <a href="#writes">What PhotoLife writes to your photos</a>).</p>
 
@@ -15,6 +18,7 @@ photo file are when you explicitly ask it to (see
 <ul>
   <li><a href="#workflow">The workflow at a glance</a></li>
   <li><a href="#views">Finding your way around</a></li>
+  <li><a href="#organise">Organise new photos</a></li>
   <li><a href="#library">1. Add your photo folders</a></li>
   <li><a href="#trees">2. Build a reference tree</a></li>
   <li><a href="#checklist">3. Import a regional checklist (optional)</a></li>
@@ -76,6 +80,36 @@ observations into the library and compare your iNaturalist list with your trees.
 <p>The <b>Reference Trees</b> panel on the left (tree picker, search box, tree,
 coverage summary) stays visible no matter which mode you're in, so you can still
 search or select a taxon while reviewing or browsing the whole library.</p>
+
+<h2 id="organise">Organise new photos</h2>
+<p>After a day out, copy the day's photos into a folder (say <i>Anakie 2025-10-18</i>),
+then choose <b>Organise &rarr; Open Download Folder&hellip;</b> (or <b>View &rarr;
+Organise New Photos</b>). The photos appear as a filmstrip in the order they were
+taken &mdash; RAW and JPEG of a shot together &mdash; with the selected photo large
+below it. The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
+(<b>F11</b> for full screen).</p>
+<ul>
+  <li><b>Click the first photo of each taxon</b> and type its name &mdash; suggestions
+      come from your trees' common and scientific names (&darr; to choose one), or
+      anything typed is used as it is. Every photo after it, up to the next named one,
+      goes with that name; a coloured band shows each run.</li>
+  <li><b>R</b> (or Delete) marks a reject, and moves on. <b>Space</b> or the &#x2922;
+      corner opens a photo full size. Right-click to rename, clear a name, or
+      un-reject.</li>
+  <li>Your names and rejects are kept in the folder as you go, so you can stop and
+      carry on later where you left off.</li>
+  <li><b>Organise into Folders&hellip;</b> shows what will happen, then moves each run
+      into a folder of its name inside the download folder (<i>Anakie 2025-10-18/Flame
+      Robin/DSC_1234.NEF</i>), and rejects into <i>Rejects</i>. File names are kept;
+      RAW, JPEG and sidecar files (.xmp &hellip;) move together; two runs given the same
+      name share a folder; nothing is overwritten (a name already taken gets
+      &ldquo;(2)&rdquo;) or deleted. Photos before the first name stay where they
+      are.</li>
+  <li><b>Undo Last Organise</b> puts everything back, names included.</li>
+</ul>
+<p>Move the organised folder into your library as usual &mdash; or organise it where
+it already is inside the library, and PhotoLife catalogues the new folders straight
+away; named after their taxa, they match automatically.</p>
 
 <h2 id="library">1. Add your photo folders</h2>
 <p><b>Library &rarr; Add Folder to Library&hellip;</b> and choose a folder. PhotoLife

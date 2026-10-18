@@ -52,6 +52,11 @@ public:
 
     QString cacheDir() const { return m_cacheDir; }
 
+    // The key ready() reports for a thumbnail asked for with this content
+    // hash and path: the hash, or (for a file outside the catalogue, asked
+    // for with an empty hash) one made from its path.
+    static QString keyFor(const QString &contentHash, const QString &sourcePath);
+
 signals:
     void ready(const QString &contentHash, int longestEdge);
 

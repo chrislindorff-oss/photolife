@@ -47,6 +47,8 @@ qt_add_library(photolife_core STATIC
     lightroom/LightroomImportEngine.h lightroom/LightroomImportEngine.cpp
     lightroom/LightroomImporter.h lightroom/LightroomImporter.cpp
     match/CandidateFinder.h match/CandidateFinder.cpp
+    organise/OrganiseMover.h organise/OrganiseMover.cpp
+    organise/OrganiseSession.h organise/OrganiseSession.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
     match/MatchReviewer.h   match/MatchReviewer.cpp
     match/MatchService.h    match/MatchService.cpp
@@ -115,6 +117,7 @@ qt_add_library(photolife_core STATIC
     ui/InatToolsView.h      ui/InatToolsView.cpp
     ui/LibraryFoldersDialog.h ui/LibraryFoldersDialog.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
+    ui/OrganiseView.h       ui/OrganiseView.cpp
     ui/ManageCataloguesDialog.h ui/ManageCataloguesDialog.cpp
     ui/MapView.h            ui/MapView.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp

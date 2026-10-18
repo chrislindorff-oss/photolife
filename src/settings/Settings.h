@@ -202,6 +202,10 @@ public:
     QString contactSheetFolder() const;
     void setContactSheetFolder(const QString &path);
 
+    // The download folder last opened in the Organise view.
+    QString organiseFolder() const;
+    void setOrganiseFolder(const QString &path);
+
 private:
     // The active server's id, or empty for the Local catalogue.
     QString activeServerId() const;

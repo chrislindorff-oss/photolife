@@ -94,6 +94,7 @@ class CoveragePanel;
 class HelpWindow;
 class ImageViewer;
 class InatToolsView;
+class OrganiseView;
 class MapView;
 class ReferencePhotoDialog;
 class ReviewPane;
@@ -357,6 +358,7 @@ private:
     QAction *m_viewLibraryAction = nullptr;
     QAction *m_viewReviewAction = nullptr;
     QAction *m_viewInatAction = nullptr;
+    QAction *m_viewOrganiseAction = nullptr;
     QAction *m_darkModeAction = nullptr;
     QLabel *m_pgStatusLabel = nullptr;
     PostgresConnectionMonitor *m_pgMonitor = nullptr;
@@ -505,6 +507,8 @@ private:
     QAction *m_fetchLocalitiesAction = nullptr;
 
     InatToolsView *m_inatView = nullptr;
+    OrganiseView *m_organiseView = nullptr;
+    void buildOrganiseMenu(QMenu *menu);
     inat::InatImportService *m_inatImportService = nullptr;
     bool m_inatPipelineActive = false;
     bool m_inatPipelineCancelled = false;

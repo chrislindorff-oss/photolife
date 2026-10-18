@@ -57,6 +57,7 @@
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
 #include "ui/InatToolsView.h"
+#include "ui/OrganiseView.h"
 #include "ui/LibraryFoldersDialog.h"
 #include "ui/ManageCataloguesDialog.h"
 #include "ui/MapView.h"
@@ -880,6 +881,7 @@ void MainWindow::buildMenus()
     QMenu *treeMenu = menuBar()->addMenu(tr("&Reference Tree"));
     QMenu *matchingMenu = menuBar()->addMenu(tr("&Matching"));
     QMenu *inatMenu = menuBar()->addMenu(tr("i&Naturalist Tools"));
+    QMenu *organiseMenu = menuBar()->addMenu(tr("&Organise"));
     m_viewMenu = menuBar()->addMenu(tr("&View"));
     m_serverMenu = menuBar()->addMenu(tr("&Server"));
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
@@ -890,6 +892,7 @@ void MainWindow::buildMenus()
     buildViewMenu();                  // must precede buildMatchingMenu(): creates m_viewReviewAction
     buildMatchingMenu(matchingMenu);  // reuses m_matchAction + m_viewReviewAction
     buildInatMenu(inatMenu);          // after buildViewMenu(): switches via m_viewInatAction
+    buildOrganiseMenu(organiseMenu);  // likewise, via m_viewOrganiseAction
     buildHelpMenu(helpMenu);
     buildServerMenu(m_serverMenu);
     buildToolBar();                   // last: reuses actions from every menu above + m_filterCombo
@@ -1057,6 +1060,11 @@ void MainWindow::buildViewMenu()
     m_viewInatAction->setObjectName(QStringLiteral("viewInatAction"));
     m_viewModeGroup->addAction(m_viewInatAction);
 
+    m_viewOrganiseAction = m_viewMenu->addAction(tr("&Organise New Photos"));
+    m_viewOrganiseAction->setCheckable(true);
+    m_viewOrganiseAction->setObjectName(QStringLiteral("viewOrganiseAction"));
+    m_viewModeGroup->addAction(m_viewOrganiseAction);
+
     m_viewMenu->addSeparator();
     auto *displayMenu = m_viewMenu->addMenu(tr("&Display…"));
     displayMenu->menuAction()->setToolTip(
@@ -1124,6 +1132,23 @@ void MainWindow::buildMatchingMenu(QMenu *matchingMenu)
                 tr("Forgotten names take effect on the next Match Library run."), 6000);
         });
         dialog.exec();
+    });
+}
+
+void MainWindow::buildOrganiseMenu(QMenu *menu)
+{
+    // Like buildInatMenu(): m_organiseView is built later, in buildCentralWidget().
+    menu->addAction(tr("&Open Download Folder…"), this, [this] {
+        m_viewOrganiseAction->setChecked(true);
+        m_organiseView->chooseFolder();
+    });
+    menu->addAction(tr("Organise into &Folders…"), this, [this] {
+        m_viewOrganiseAction->setChecked(true);
+        m_organiseView->commit();
+    });
+    menu->addAction(tr("&Undo Last Organise"), this, [this] {
+        m_viewOrganiseAction->setChecked(true);
+        m_organiseView->undoLast();
     });
 }
 
@@ -3437,6 +3462,21 @@ void MainWindow::buildCentralWidget()
     m_centralStack->addWidget(m_photoStack);  // All Library Photos mode
     m_centralStack->addWidget(m_reviewPane);  // Review Unmatched mode
     m_centralStack->addWidget(m_inatView);    // iNaturalist mode
+    m_organiseView = new OrganiseView(m_app, this);
+    connect(m_organiseView, &OrganiseView::statusMessage, this,
+            [this](const QString &text, int ms) { statusBar()->showMessage(text, ms); });
+    connect(m_organiseView, &OrganiseView::organised, this, [this](const QString &folder) {
+        // Inside the library: catalogue the new folders (their names match).
+        const QString clean = QDir::cleanPath(folder);
+        for (const QString &root : m_app.settings().watchedRoots()) {
+            const QString r = QDir::cleanPath(root);
+            if (clean == r || clean.startsWith(r + QLatin1Char('/'))) {
+                requestScan();
+                break;
+            }
+        }
+    });
+    m_centralStack->addWidget(m_organiseView);   // Organise mode
     setCentralWidget(m_centralStack);
 
     connect(m_viewTreeAction, &QAction::toggled, this, [this](bool on) {
@@ -3454,6 +3494,10 @@ void MainWindow::buildCentralWidget()
     connect(m_viewInatAction, &QAction::toggled, this, [this](bool on) {
         if (on)
             m_centralStack->setCurrentWidget(m_inatView);
+    });
+    connect(m_viewOrganiseAction, &QAction::toggled, this, [this](bool on) {
+        if (on)
+            m_centralStack->setCurrentWidget(m_organiseView);
     });
     m_viewLibraryAction->setChecked(true);   // start on All Photos
 

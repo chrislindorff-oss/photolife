@@ -36,6 +36,11 @@ QImage scaleToLongestEdge(QImage image, int longestEdge)
 
 } // namespace
 
+QString ThumbnailCache::keyFor(const QString &contentHash, const QString &sourcePath)
+{
+    return effectiveKey(contentHash, sourcePath);
+}
+
 ThumbnailCache::ThumbnailCache(QString cacheDir, QObject *parent)
     : QObject(parent), m_cacheDir(std::move(cacheDir))
 {
