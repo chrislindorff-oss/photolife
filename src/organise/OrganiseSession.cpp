@@ -59,15 +59,26 @@ int OrganisePlan::photos() const
     return n;
 }
 
-QList<Item> OrganiseSession::scanFolder(const QString &folder)
+QList<Item> OrganiseSession::scanFolder(const QString &folder,
+                                        const std::function<void(int, int)> &progress)
 {
     const QString dir = QDir(folder).absolutePath();
     QList<Item> items;
     QSet<QString> claimed;   // files that belong to a shot
     scan::FileScanner scanner;
-    for (const scan::DiscoveredCapture &c : scanner.scan({dir})) {
-        if (QDir(c.dirPath).absolutePath() != dir)
-            continue;   // a subfolder's (one already organised)
+    if (progress)
+        progress(0, 0);
+    const QList<scan::DiscoveredCapture> captures = scanner.scan({dir});
+    QList<scan::DiscoveredCapture> topLevel;
+    for (const scan::DiscoveredCapture &capture : captures) {
+        if (QDir(capture.dirPath).absolutePath() == dir)
+            topLevel << capture;
+    }
+    if (progress)
+        progress(0, int(topLevel.size()));
+
+    int done = 0;
+    for (const scan::DiscoveredCapture &c : topLevel) {
         Item item;
         item.baseName = c.baseName;
         QList<scan::DiscoveredFile> files = c.files;
@@ -91,6 +102,8 @@ QList<Item> OrganiseSession::scanFolder(const QString &folder)
         if (!item.taken.isValid())
             item.taken = QDateTime::fromSecsSinceEpoch(item.mtime);
         items << item;
+        if (progress)
+            progress(++done, int(topLevel.size()));
     }
 
     // Sidecars: "DSC_1234.xmp", "DSC_1234.NEF.xmp", "DSC_1234.NEF.dop"...
@@ -128,6 +141,7 @@ void OrganiseSession::setItems(const QString &folder, QList<Item> items)
     m_items = std::move(items);
     m_names.clear();
     m_rejected.clear();
+    m_namingEnds.clear();
     m_nameOrder.clear();
 }
 
@@ -147,7 +161,13 @@ void OrganiseSession::setName(int i, const QString &name)
 
 int OrganiseSession::runStart(int i) const
 {
-    for (int j = std::min(i, count() - 1); j >= 0; --j) {
+    const int last = std::min(i, count() - 1);
+    int lowerBound = -1;
+    for (int boundary : m_namingEnds) {
+        if (boundary < last)
+            lowerBound = std::max(lowerBound, boundary);
+    }
+    for (int j = last; j > lowerBound; --j) {
         if (m_names.contains(j))
             return j;
     }
@@ -181,6 +201,16 @@ void OrganiseSession::setRejected(int i, bool rejected)
         m_rejected.insert(i);
     else
         m_rejected.remove(i);
+}
+
+void OrganiseSession::setNamingEndAt(int i, bool ends)
+{
+    if (i < 0 || i >= count())
+        return;
+    if (ends)
+        m_namingEnds.insert(i);
+    else
+        m_namingEnds.remove(i);
 }
 
 QStringList OrganiseSession::recentNames() const
@@ -252,7 +282,7 @@ bool OrganiseSession::saveProgress() const
             shots.remove(item.baseName);
     }
     for (int i = 0; i < count(); ++i) {
-        if (!m_names.contains(i) && !m_rejected.contains(i))
+        if (!m_names.contains(i) && !m_rejected.contains(i) && !m_namingEnds.contains(i))
             continue;
         const Item &item = m_items.at(i);
         QJsonObject o{{QStringLiteral("size"), double(item.size)},
@@ -261,6 +291,8 @@ bool OrganiseSession::saveProgress() const
             o.insert(QStringLiteral("name"), m_names.value(i));
         if (m_rejected.contains(i))
             o.insert(QStringLiteral("rejected"), true);
+        if (m_namingEnds.contains(i))
+            o.insert(QStringLiteral("namingEnd"), true);
         shots.insert(item.baseName, o);
     }
     if (shots.isEmpty()) {
@@ -298,6 +330,8 @@ void OrganiseSession::loadProgress()
             m_names.insert(i, name);
         if (o.value(QStringLiteral("rejected")).toBool())
             m_rejected.insert(i);
+        if (o.value(QStringLiteral("namingEnd")).toBool())
+            m_namingEnds.insert(i);
     }
     for (const QJsonValue &v : root.value(QStringLiteral("recent")).toArray())
         m_nameOrder << v.toString();
@@ -307,6 +341,7 @@ void OrganiseSession::clearProgress()
 {
     m_names.clear();
     m_rejected.clear();
+    m_namingEnds.clear();
     m_nameOrder.clear();
     QFile::remove(QDir(m_folder).filePath(QLatin1String(kProgressFile)));
 }

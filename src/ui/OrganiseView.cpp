@@ -26,7 +26,9 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
+#include <QProgressBar>
 #include <QPushButton>
+#include <QPromise>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QStyledItemDelegate>
@@ -49,6 +51,7 @@ enum Role {
     RunStartRole,
     RunNumberRole,
     RejectedRole,
+    NamingEndRole,
 };
 
 // The session's shots, with their thumbnails.
@@ -114,6 +117,8 @@ public:
             return m_session.runNumber(row);
         case RejectedRole:
             return m_session.isRejected(row);
+        case NamingEndRole:
+            return m_session.isNamingEndAt(row);
         default:
             return {};
         }
@@ -145,7 +150,7 @@ public:
         const QRect f = frameRect(cellRect);
         return QRect(f.left() + 6, f.top() + kBand + 4, f.width() - 12, f.height() - kBand - kCaption - 8);
     }
-    // The corner button that opens the photo full size (a click elsewhere names it).
+    // The corner button that opens the photo full size.
     static QRect zoomRect(const QRect &cellRect)
     {
         const QRect img = imageRect(cellRect);
@@ -231,7 +236,10 @@ public:
         const QRect caption(frame.left() + 8, img.bottom() + 4, frame.width() - 16, kCaption);
         const QString line1 = index.data(Qt::DisplayRole).toString() + QStringLiteral("  ·  ")
                               + index.data(KindsRole).toString()
-                              + (rejected ? QObject::tr("  ·  reject") : QString());
+                              + (rejected ? QObject::tr("  ·  reject") : QString())
+                              + (index.data(NamingEndRole).toBool()
+                                     ? QObject::tr("  ·  last of its taxon")
+                                     : QString());
         const QDateTime taken = index.data(TakenRole).toDateTime();
         const QString line2 = QLocale().toString(taken, QLocale::ShortFormat);
         const QFontMetrics fm(small);
@@ -386,8 +394,14 @@ using namespace ui_organise;
 
 OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent), m_app(app)
 {
-    m_folderLabel = new QLabel(tr("No folder open"), this);
+    // Elided to fit (full path in its tooltip): a label sized to a long path
+    // would make the window's minimum width wider than the screen, and the
+    // window manager then can't maximise it.
+    m_folderText = tr("No folder open");
+    m_folderLabel = new QLabel(m_folderText, this);
     m_folderLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_folderLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_folderLabel->setMinimumWidth(80);
     auto *open = new QPushButton(tr("Open Download Folder…"), this);
     connect(open, &QPushButton::clicked, this, &OrganiseView::chooseFolder);
 
@@ -402,12 +416,17 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     connect(m_gridButton, &QToolButton::clicked, this, [this] { setFilmstrip(false); });
 
     m_counts = new QLabel(this);
+    m_scanProgress = new QProgressBar(this);
+    m_scanProgress->setTextVisible(true);
+    m_scanProgress->setFormat(tr("Finding photos…"));
+    m_scanProgress->setRange(0, 0);
+    m_scanProgress->hide();
     m_commitButton = new QPushButton(tr("Organise into Folders…"), this);
     m_commitButton->setToolTip(tr("Move each named run of photos into a folder of its name inside "
                                   "this folder, and rejects into \"Rejects\". File names are kept; "
                                   "it can be undone."));
     connect(m_commitButton, &QPushButton::clicked, this, &OrganiseView::commit);
-    m_undoButton = new QPushButton(tr("Undo Last Organise"), this);
+    m_undoButton = new QPushButton(tr("Undo Organise…"), this);
     connect(m_undoButton, &QPushButton::clicked, this, &OrganiseView::undoLast);
 
     auto *bar = new QHBoxLayout;
@@ -421,9 +440,10 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addWidget(m_undoButton);
     bar->addWidget(m_commitButton);
 
-    m_hint = new QLabel(tr("Click the first photo of each taxon to name it — the photos after it "
-                           "go with it, up to the next named one. R marks a reject · Space or ⤢ "
-                           "shows it full size · the wheel scrolls · F11 full screen."),
+    m_hint = new QLabel(tr("Click a photo to focus and preview it. N names it · R marks it as a "
+                           "reject · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1) · "
+                           "right-click for actions. The photos after a named one go with it, "
+                           "up to the next name or end. The wheel scrolls · F11 full screen."),
                         this);
     m_hint->setWordWrap(true);
     QPalette pal = m_hint->palette();
@@ -446,13 +466,17 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     m_list->viewport()->installEventFilter(this);
     m_list->installEventFilter(this);
     connect(m_list, &QListView::clicked, this, [this](const QModelIndex &index) {
-        if (QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier))
-            return;   // extending a selection
         const QPoint at = m_list->viewport()->mapFromGlobal(QCursor::pos());
         if (OrganiseDelegate::zoomRect(m_list->visualRect(index)).contains(at))
             showFullSize(index.row());
-        else
-            nameAt(index.row());
+    });
+    // A double-click opens the viewer, as V does (the first click of it has
+    // already selected the photo; on the corner button it's already open).
+    m_list->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    connect(m_list, &QListView::doubleClicked, this, [this](const QModelIndex &index) {
+        const QPoint at = m_list->viewport()->mapFromGlobal(QCursor::pos());
+        if (!OrganiseDelegate::zoomRect(m_list->visualRect(index)).contains(at))
+            showFullSize(index.row());
     });
     connect(m_list, &QListView::customContextMenuRequested, this, &OrganiseView::contextMenuAt);
 
@@ -460,9 +484,13 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     m_preview = new QLabel(this);
     m_preview->setAlignment(Qt::AlignCenter);
     m_preview->setMinimumHeight(120);
-    m_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    // Ignored both ways: the photo is scaled to whatever space there is, and
+    // must never ask for its own size (that would grow the window each time).
+    m_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     m_previewCaption = new QLabel(this);
     m_previewCaption->setAlignment(Qt::AlignCenter);
+    m_previewCaption->setWordWrap(true);   // wraps rather than widening the window
+    m_previewCaption->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this] { updatePreview(); });
     connect(&m_app.thumbnails(), &thumb::ThumbnailCache::ready, this,
@@ -473,6 +501,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
 
     auto *layout = new QVBoxLayout(this);
     layout->addLayout(bar);
+    layout->addWidget(m_scanProgress);
     layout->addWidget(m_hint);
     layout->addWidget(m_list);
     layout->addWidget(m_preview, 1);
@@ -501,14 +530,28 @@ void OrganiseView::openFolder(const QString &folder)
         return;
     m_loading = true;
     m_app.settings().setOrganiseFolder(folder);
-    m_folderLabel->setText(QDir::toNativeSeparators(folder));
+    m_folderText = QDir::toNativeSeparators(folder);
+    m_folderLabel->setToolTip(m_folderText);
+    elideFolderLabel();
     m_counts->setText(tr("Reading the photos…"));
+    m_scanProgress->setRange(0, 0);
+    m_scanProgress->setFormat(tr("Finding photos…"));
+    m_scanProgress->show();
     m_commitButton->setEnabled(false);
     m_undoButton->setEnabled(false);
     auto *watcher = new QFutureWatcher<QList<organise::Item>>(this);
+    connect(watcher, &QFutureWatcher<QList<organise::Item>>::progressRangeChanged, this,
+            [this](int minimum, int maximum) {
+                m_scanProgress->setRange(minimum, maximum);
+                m_scanProgress->setFormat(maximum == 0 ? tr("Finding photos…")
+                                                       : tr("%v / %m photos"));
+            });
+    connect(watcher, &QFutureWatcher<QList<organise::Item>>::progressValueChanged,
+            m_scanProgress, &QProgressBar::setValue);
     connect(watcher, &QFutureWatcher<QList<organise::Item>>::finished, this, [this, watcher, folder] {
         watcher->deleteLater();
         m_loading = false;
+        m_scanProgress->hide();
         m_session.setItems(folder, watcher->result());
         m_session.loadProgress();
         m_model->reset();
@@ -526,7 +569,18 @@ void OrganiseView::openFolder(const QString &folder)
         }
         m_list->setFocus();
     });
-    watcher->setFuture(QtConcurrent::run([folder] { return organise::OrganiseSession::scanFolder(folder); }));
+    watcher->setFuture(QtConcurrent::run([folder](QPromise<QList<organise::Item>> &promise) {
+        promise.setProgressRange(0, 0);
+        QList<organise::Item> items = organise::OrganiseSession::scanFolder(
+            folder, [&promise](int done, int total) {
+            if (total > 0) {
+                if (done == 0)
+                    promise.setProgressRange(0, total);
+                promise.setProgressValue(done);
+            }
+        });
+        promise.addResult(std::move(items));
+    }));
 }
 
 void OrganiseView::setFilmstrip(bool on)
@@ -572,8 +626,15 @@ void OrganiseView::updateCellSize()
 void OrganiseView::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    elideFolderLabel();
     updateCellSize();
     updatePreview();
+}
+
+void OrganiseView::elideFolderLabel()
+{
+    m_folderLabel->setText(m_folderLabel->fontMetrics().elidedText(
+        m_folderText, Qt::ElideMiddle, std::max(40, m_folderLabel->width())));
 }
 
 void OrganiseView::updatePreview()
@@ -610,7 +671,18 @@ void OrganiseView::updatePreview()
 void OrganiseView::updateCounts()
 {
     const bool open = !m_session.folder().isEmpty();
-    m_undoButton->setEnabled(open && organise::OrganiseMover::canUndo(m_session.folder()));
+    // Say plainly what Undo covers: a whole organise, every folder of it.
+    const organise::OrganiseMover::UndoPreview undo =
+        open ? organise::OrganiseMover::previewUndo(m_session.folder()) : organise::OrganiseMover::UndoPreview{};
+    m_undoButton->setEnabled(!undo.folders.isEmpty());
+    m_undoButton->setToolTip(
+        undo.folders.isEmpty()
+            ? tr("Nothing to undo: no Organise into Folders has been done here.")
+            : tr("Puts back everything the organise of %1 moved: %Ln photo(s) from %2 folder(s) — "
+                 "not just one taxon. Shows the list before doing anything.",
+                 nullptr, undo.shots)
+                  .arg(QLocale().toString(undo.when, QLocale::ShortFormat))
+                  .arg(undo.folders.size()));
     if (!open || m_session.count() == 0) {
         m_counts->setText(open ? tr("No photos in this folder") : QString());
         m_commitButton->setEnabled(false);
@@ -649,9 +721,11 @@ void OrganiseView::nameAt(int row)
     changed(row);
 }
 
-void OrganiseView::toggleRejected()
+void OrganiseView::toggleRejected(int row)
 {
-    const QModelIndexList rows = m_list->selectionModel()->selectedIndexes();
+    const QModelIndexList rows = row >= 0 && row < m_session.count()
+                                     ? QModelIndexList{m_model->index(row)}
+                                     : m_list->selectionModel()->selectedIndexes();
     if (rows.isEmpty())
         return;
     // All rejected: un-reject; otherwise reject them all.
@@ -670,6 +744,26 @@ void OrganiseView::toggleRejected()
         m_list->setCurrentIndex(next);
         m_list->scrollTo(next);
     }
+}
+
+void OrganiseView::toggleNamingEnd(int row)
+{
+    if (row < 0 || row >= m_session.count())
+        return;
+    const QString taxon = m_session.runName(row);
+    if (taxon.isEmpty() && !m_session.isNamingEndAt(row)) {
+        emit statusMessage(tr("This photo isn't named yet, so it can't be the last of a taxon."), 6000);
+        return;
+    }
+    m_session.setNamingEndAt(row, !m_session.isNamingEndAt(row));
+    const QString photo = m_session.items().at(row).baseName;
+    emit statusMessage(m_session.isNamingEndAt(row)
+                           ? tr("%1 is the last photo of \u201c%2\u201d — the photos after it are "
+                                "unnamed until you name the next taxon.").arg(photo, taxon)
+                           : tr("%1 is no longer the last photo of \u201c%2\u201d — the name "
+                                "carries on to the next named photo.").arg(photo, taxon),
+                       8000);
+    changed(row);
 }
 
 void OrganiseView::showFullSize(int row)
@@ -703,6 +797,8 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
     if (!index.isValid())
         return;
     if (!m_list->selectionModel()->isSelected(index))
+        m_list->selectionModel()->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect);
+    else
         m_list->setCurrentIndex(index);
     const int row = index.row();
     QMenu menu(this);
@@ -714,7 +810,20 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
             changed(row);
         });
     menu.addAction(m_session.isRejected(row) ? tr("Not a Reject") : tr("Reject"), this,
-                   [this] { toggleRejected(); });
+                   [this, row] { toggleRejected(row); });
+    // Named for the taxon it closes, so it's clear the mark goes on its LAST
+    // photo (not on the first photo of the next one).
+    const QString taxon = m_session.runName(row);
+    QAction *last = menu.addAction(
+        m_session.isNamingEndAt(row)
+            ? tr("Not the Last Photo of \u201c%1\u201d").arg(taxon)
+            : taxon.isEmpty() ? tr("Mark as Last Photo of Its Taxon")
+                              : tr("Mark as Last Photo of \u201c%1\u201d").arg(taxon),
+        this, [this, row] { toggleNamingEnd(row); });
+    last->setEnabled(!taxon.isEmpty() || m_session.isNamingEndAt(row));
+    last->setShortcut(Qt::Key_E);
+    last->setToolTip(tr("This photo keeps the name; the photos after it are left unnamed until "
+                        "you name the next taxon."));
     menu.addSeparator();
     menu.addAction(tr("View Full Size"), this, [this, row] { showFullSize(row); });
     menu.addAction(tr("Show in File Manager"), this, [this] {
@@ -738,14 +847,22 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
         auto *key = static_cast<QKeyEvent *>(event);
         const int row = m_list->currentIndex().row();
         switch (key->key()) {
+        case Qt::Key_N:
         case Qt::Key_Return:
         case Qt::Key_Enter:
             nameAt(row);
             return true;
         case Qt::Key_R:
+            if (row >= 0)
+                toggleRejected(row);
+            return true;
+        case Qt::Key_E:
+            toggleNamingEnd(row);
+            return true;
         case Qt::Key_Delete:
             toggleRejected();
             return true;
+        case Qt::Key_V:
         case Qt::Key_Space:
             showFullSize(row);
             return true;
@@ -782,7 +899,7 @@ void OrganiseView::commit()
         (plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr, plan.unnamed)
                           : QString())
         + tr("File names are kept, RAW and JPEG and sidecar files move together, nothing is "
-             "overwritten, and Undo Last Organise puts everything back."));
+             "overwritten, and Undo Organise puts all of it back."));
     box.setDetailedText(lines.join(QLatin1Char('\n')));
     QPushButton *go = box.addButton(tr("Organise"), QMessageBox::AcceptRole);
     box.addButton(QMessageBox::Cancel);
@@ -819,18 +936,46 @@ void OrganiseView::commit()
 void OrganiseView::undoLast()
 {
     const QString folder = m_session.folder();
-    if (folder.isEmpty() || !organise::OrganiseMover::canUndo(folder))
+    const organise::OrganiseMover::UndoPreview preview = organise::OrganiseMover::previewUndo(folder);
+    if (folder.isEmpty() || preview.folders.isEmpty()) {
+        QMessageBox::information(this, tr("Undo Organise"),
+                                 tr("There's no Organise into Folders to undo in this folder."));
         return;
-    if (QMessageBox::question(this, tr("Undo Last Organise"),
-                              tr("Move the photos the last Organise moved back into %1?")
-                                  .arg(QDir::toNativeSeparators(folder)))
-        != QMessageBox::Yes)
+    }
+    // Exactly what goes back: every folder of that organise.
+    QString list = QStringLiteral("<ul>");
+    for (const auto &f : preview.folders)
+        list += QStringLiteral("<li><b>%1</b> — %2</li>")
+                    .arg(f.name.toHtmlEscaped(), tr("%Ln photo(s)", nullptr, f.shots));
+    list += QStringLiteral("</ul>");
+    QString text = tr("<p>This undoes the whole <b>Organise into Folders</b> of %1 — every folder "
+                      "it made, not just the last taxon named:</p>%2"
+                      "<p>%Ln photo(s) go back into <i>%3</i>, keeping their names and rejects, "
+                      "and the folders are removed once empty.</p>",
+                      nullptr, preview.shots)
+                       .arg(QLocale().toString(preview.when, QLocale::LongFormat).toHtmlEscaped(), list,
+                            QDir::toNativeSeparators(folder).toHtmlEscaped());
+    if (preview.missing > 0)
+        text += tr("<p><b>%Ln file(s)</b> have been moved or renamed since, and will be left where "
+                   "they are.</p>",
+                   nullptr, preview.missing);
+    if (preview.earlier > 0)
+        text += tr("<p>An earlier organise (%Ln in all) can be undone after this one.</p>", nullptr,
+                   preview.earlier);
+    QMessageBox box(QMessageBox::Question, tr("Undo Organise"), text, QMessageBox::NoButton, this);
+    box.setTextFormat(Qt::RichText);
+    QPushButton *go = box.addButton(tr("Put Them All Back"), QMessageBox::AcceptRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != go)
         return;
     const organise::OrganiseMover::Result result = organise::OrganiseMover::undo(folder);
     if (!result.failures.isEmpty())
-        QMessageBox::warning(this, tr("Undo Last Organise"),
-                             tr("%Ln file(s) couldn't be moved back:\n\n%1", nullptr,
-                                int(result.failures.size()))
+        QMessageBox::warning(this, tr("Undo Organise"),
+                             tr("%Ln file(s) couldn't be moved back and were left where they "
+                                "are:\n\n%1",
+                                nullptr, int(result.failures.size()))
                                  .arg(result.failures.mid(0, 10).join(QLatin1Char('\n'))));
     emit statusMessage(tr("Moved %Ln photo(s) back.", nullptr, result.moved), 8000);
     emit organised(folder);

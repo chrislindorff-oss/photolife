@@ -6,6 +6,9 @@
 #include <QQueue>
 #include <QSet>
 #include <QString>
+#include <QStringList>
+
+#include <functional>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -52,6 +55,16 @@ public:
     // counted, rather than triggering a download.
     DiskUsage diskUsage(const QStringList &urls) const;
 
+    // Larger copies of the same iNaturalist photo, biggest first: "original"
+    // (up to 2048 px), "large" (1024 px), then `url` itself (often "medium").
+    static QStringList largerVariants(const QString &url);
+
+    // Downloads the largest copy of `url`'s photo there is (see
+    // largerVariants()) and keeps it, as downloaded, beside the thumbnails;
+    // `done` gets its file path, or an error. Already downloaded: at once.
+    using LargeDone = std::function<void(const QString &path, const QString &error)>;
+    void fetchLarge(const QString &url, LargeDone done);
+
 signals:
     void ready(const QString &url);
 
@@ -60,6 +73,8 @@ private:
     void startDownload(const QString &url);
     void onFinished(const QString &url, QNetworkReply *reply);
     QString diskPath(const QString &url) const;
+    QString largePath(const QString &url) const;
+    void fetchVariant(const QString &url, QStringList variants, LargeDone done);
 
     QString m_cacheDir;
     QByteArray m_userAgent;

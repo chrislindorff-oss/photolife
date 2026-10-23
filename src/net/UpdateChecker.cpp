@@ -71,11 +71,18 @@ void UpdateChecker::check()
             return;
         }
         if (resp.status == 404) {
-            emit checkFailed(tr("no releases published yet"));
+            // The repository, or its latest release, isn't there -- not
+            // "you're up to date".
+            emit checkFailed(tr("PhotoLife's release page on GitHub couldn't be found (%1)").arg(m_repo));
+            return;
+        }
+        if (resp.status == 403 || resp.status == 429) {
+            emit checkFailed(tr("GitHub is limiting how often it can be asked just now; try again "
+                                "in an hour"));
             return;
         }
         if (!resp.ok()) {
-            emit checkFailed(tr("update check failed (HTTP %1)").arg(resp.status));
+            emit checkFailed(tr("GitHub answered with an error (HTTP %1)").arg(resp.status));
             return;
         }
 

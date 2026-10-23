@@ -9,6 +9,8 @@ class HttpClient;
 
 // Optional, user-triggered check against the GitHub "latest release" API.
 // No telemetry, no automatic polling — only runs when check() is called.
+// checkFailed() says why in words for the user (a missing release page is a
+// failure, never "up to date").
 class UpdateChecker : public QObject
 {
     Q_OBJECT

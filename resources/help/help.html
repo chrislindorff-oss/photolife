@@ -89,13 +89,26 @@ taken &mdash; RAW and JPEG of a shot together &mdash; with the selected photo la
 below it. The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
 (<b>F11</b> for full screen).</p>
 <ul>
-  <li><b>Click the first photo of each taxon</b> and type its name &mdash; suggestions
-      come from your trees' common and scientific names (&darr; to choose one), or
-      anything typed is used as it is. Every photo after it, up to the next named one,
-      goes with that name; a coloured band shows each run.</li>
-  <li><b>R</b> (or Delete) marks a reject, and moves on. <b>Space</b> or the &#x2922;
-      corner opens a photo full size. Right-click to rename, clear a name, or
-      un-reject.</li>
+  <li><b>Click a photo</b> to focus it and see a larger preview. Click the first
+      photo of each taxon, then press <b>N</b> (or right-click and choose
+      <b>Name This Photo</b>) to enter its name &mdash; suggestions come from your
+      trees' common and scientific names (&darr; to choose one), or anything typed
+      is used as it is. Every photo after it, up to the next named one, goes with
+      that name; a coloured band shows each run.</li>
+  <li>With a photo focused, press <b>R</b> to mark it as a reject, or
+      <b>V</b> (or double-click it) to view it full size. Right-click for these actions, rename or
+      clear a name, and other options. <b>Delete</b> still marks the selected
+      photos as rejects; the &#x2922; corner also opens a photo full size. In the full-size
+      view, <b>A</b> shows it at actual pixels (1:1) to check sharpness &mdash; drag to
+      pan &mdash; and the arrow keys keep that zoom and spot from photo to photo (see
+      <a href="#viewer">The image viewer</a>).</li>
+  <li>To stop a name carrying forward, focus the <b>last</b> photo of that taxon &mdash;
+      not the first photo of the next one &mdash; and press <b>E</b>, or right-click and
+      choose <b>Mark as Last Photo of &ldquo;<i>name</i>&rdquo;</b> (the menu shows the
+      taxon's name). That photo keeps the name and shows <i>last of its taxon</i>; the photos
+      after it are left unnamed until you name the next taxon. The mark is saved with your
+      progress; <b>Not the Last Photo of &ldquo;<i>name</i>&rdquo;</b> (or <b>E</b> again)
+      removes it.</li>
   <li>Your names and rejects are kept in the folder as you go, so you can stop and
       carry on later where you left off.</li>
   <li><b>Organise into Folders&hellip;</b> shows what will happen, then moves each run
@@ -105,7 +118,12 @@ below it. The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
       name share a folder; nothing is overwritten (a name already taken gets
       &ldquo;(2)&rdquo;) or deleted. Photos before the first name stay where they
       are.</li>
-  <li><b>Undo Last Organise</b> puts everything back, names included.</li>
+  <li><b>Undo Organise&hellip;</b> takes back a whole <i>Organise into Folders</i> &mdash;
+      every folder it made, not just one taxon. It first lists exactly what will go back
+      (when that organise was done, each folder and how many photos), then returns the
+      photos to the download folder with their names and rejects, and removes the emptied
+      folders. Organised more than once? Each Undo takes back the most recent one, so you can
+      step back through them.</li>
 </ul>
 <p>Move the organised folder into your library as usual &mdash; or organise it where
 it already is inside the library, and PhotoLife catalogues the new folders straight
@@ -389,6 +407,12 @@ Tree</b>) to add it to a tree.</p>
 current tree, for comparison while you're out identifying things. PhotoLife fetches
 missing ones automatically the first time you open the tab for a tree with gaps, or
 on demand via <b>Reference Tree &rarr; Fetch Reference Photos</b>.</p>
+<p>Right-click a reference photo and choose <b>View Larger Image</b> to see it up close:
+PhotoLife downloads iNaturalist's largest copy of that photo (up to 2048 pixels; the
+grid holds only small ones), keeps it for next time, and opens it in the
+<a href="#viewer">image viewer</a> &mdash; where <b>A</b> shows actual pixels and you can
+zoom and pan &mdash; with the photographer's credit underneath. <b>Open on
+iNaturalist</b> (or a double-click) opens the species' iNaturalist page.</p>
 <p><b>Export Contact Sheet&hellip;</b> on the tab (also <b>Reference Tree &rarr; Export
 Reference Photo Contact Sheet (PDF)</b>) saves the photos it currently lists &mdash; the
 whole tree, or just the selected branch &mdash; as a printable PDF grid of thumbnails
@@ -534,6 +558,13 @@ iNaturalist that are missing from a tree.</p>
 to the ends, and Esc closes it. The star button adds or removes the photo as a best
 shot. If the photo has GPS data, <b>View on Map</b> opens its location in your
 browser.</p>
+<p><b>Zooming.</b> Press <b>A</b> (or double-click) to switch between fitting the window
+and actual pixels (1:1, one photo pixel per screen pixel), centred on the spot under the
+pointer. The mouse wheel zooms in and out around the pointer, <b>+</b>/<b>&minus;</b>
+step the zoom, and <b>0</b> or <b>F</b> fits the photo again; the zoom shows beside the
+photo count. Zoomed in, the pointer becomes a hand: drag to pan. Moving to the next or
+previous photo keeps the zoom and the spot, so you can compare a burst's sharpness. (A
+RAW file without a JPEG shows its embedded preview, which is full size on most cameras.)</p>
 
 <h2 id="names">Learned names</h2>
 <p><b>Matching &rarr; Learned Names&hellip;</b> lists the corrections PhotoLife has picked
@@ -561,8 +592,12 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       move between your Local catalogue and any server catalogues (see
       <a href="#sharing">Local and server catalogues</a>).</li>
   <li><b>View &rarr; Dark Mode</b> switches between the light and dark themes.</li>
-  <li><b>Help &rarr; Check for Updates&hellip;</b> looks for a newer release, and
-      <b>Help &rarr; Storage Usage&hellip;</b> shows how much disk space the catalogue
+  <li><b>Help &rarr; Check for Updates&hellip;</b> asks GitHub whether there's a newer
+      release (only when you choose it &mdash; PhotoLife never checks on its own). If there is,
+      <b>Go to Downloads</b> opens the download section of the PhotoLife website, which offers
+      the installer for your system, and <b>What's New</b> shows the release notes; installing
+      over your current version keeps your catalogues and settings. If the check can't be
+      done, it says why and still offers the downloads. <b>Help &rarr; Storage Usage&hellip;</b> shows how much disk space the catalogue
       and caches are using.</li>
 </ul>
 
@@ -777,6 +812,10 @@ It only re-reads location data; nothing else about your catalogue changes.</p>
   <tr><td colspan="2"><i>In the image viewer:</i></td></tr>
   <tr><td><b>&larr; / &rarr;</b></td><td>Previous / next photo</td></tr>
   <tr><td><b>Home / End</b></td><td>First / last photo</td></tr>
+  <tr><td><b>A</b> or double-click</td><td>Fit / actual pixels (1:1)</td></tr>
+  <tr><td><b>Wheel</b>, <b>+ / &minus;</b></td><td>Zoom in / out</td></tr>
+  <tr><td><b>0</b> or <b>F</b></td><td>Fit to the window</td></tr>
+  <tr><td>Drag</td><td>Pan a zoomed photo</td></tr>
   <tr><td><b>Esc</b></td><td>Close the viewer</td></tr>
 </table>
 

@@ -1146,7 +1146,7 @@ void MainWindow::buildOrganiseMenu(QMenu *menu)
         m_viewOrganiseAction->setChecked(true);
         m_organiseView->commit();
     });
-    menu->addAction(tr("&Undo Last Organise"), this, [this] {
+    menu->addAction(tr("&Undo Organise…"), this, [this] {
         m_viewOrganiseAction->setChecked(true);
         m_organiseView->undoLast();
     });
@@ -1182,6 +1182,7 @@ void MainWindow::buildHelpMenu(QMenu *helpMenu)
     QAction *checkUpdate = helpMenu->addAction(tr("Check for &Updates…"), this, [this] {
         auto &checker = m_app.updateChecker();
         statusBar()->showMessage(tr("Checking for updates…"), 4000);
+        QApplication::setOverrideCursor(Qt::BusyCursor);
         checker.check();
     });
     checkUpdate->setMenuRole(QAction::ApplicationSpecificRole);
@@ -1190,26 +1191,56 @@ void MainWindow::buildHelpMenu(QMenu *helpMenu)
         tr("&About %1").arg(QString::fromLatin1(kAppName)), this, &MainWindow::showAbout);
     about->setMenuRole(QAction::AboutRole);
 
+    // Checks only run when asked for (Help > Check for Updates), so every
+    // outcome -- failures included -- gets a dialog, and each offers a way to
+    // the downloads.
     connect(&m_app.updateChecker(), &net::UpdateChecker::upToDate, this, [this](const QString &v) {
+        QApplication::restoreOverrideCursor();
+        statusBar()->clearMessage();
         QMessageBox::information(this, tr("Check for Updates"),
-                                tr("PhotoLife %1 is up to date.").arg(v));
+                                 tr("PhotoLife %1 is the latest version.").arg(v));
     });
     connect(&m_app.updateChecker(), &net::UpdateChecker::updateAvailable, this,
-            [this](const QString &latest, const QString &url) {
+            [this](const QString &latest, const QString &releaseUrl) {
+                QApplication::restoreOverrideCursor();
+                statusBar()->clearMessage();
+                QString version = latest;
+                if (version.startsWith(QLatin1Char('v')))
+                    version.remove(0, 1);
                 QMessageBox box(QMessageBox::Information, tr("Update Available"),
-                                tr("PhotoLife %1 is available.").arg(latest), QMessageBox::Close,
-                                this);
-                if (!url.isEmpty()) {
-                    box.addButton(tr("Open Download Page"), QMessageBox::AcceptRole);
-                    if (box.exec() == QMessageBox::AcceptRole)
-                        QDesktopServices::openUrl(QUrl(url));
-                } else {
-                    box.exec();
-                }
+                                tr("PhotoLife %1 is available — you have %2.")
+                                    .arg(version, QString::fromLatin1(kAppVersion)),
+                                QMessageBox::NoButton, this);
+                box.setInformativeText(tr("Download the installer for your system from the PhotoLife "
+                                          "website, then run it: your catalogues and settings are "
+                                          "kept."));
+                QPushButton *download = box.addButton(tr("Go to Downloads"), QMessageBox::AcceptRole);
+                QPushButton *notes = releaseUrl.isEmpty()
+                                         ? nullptr
+                                         : box.addButton(tr("What's New"), QMessageBox::HelpRole);
+                box.addButton(QMessageBox::Close);
+                box.setDefaultButton(download);
+                box.exec();
+                if (box.clickedButton() == download)
+                    QDesktopServices::openUrl(QUrl(QString::fromLatin1(kDownloadPageUrl)));
+                else if (notes && box.clickedButton() == notes)
+                    QDesktopServices::openUrl(QUrl(releaseUrl));
             });
     connect(&m_app.updateChecker(), &net::UpdateChecker::checkFailed, this,
             [this](const QString &err) {
-                statusBar()->showMessage(tr("Update check failed: %1").arg(err), 8000);
+                QApplication::restoreOverrideCursor();
+                statusBar()->clearMessage();
+                QMessageBox box(QMessageBox::Warning, tr("Check for Updates"),
+                                tr("PhotoLife couldn't check for a newer version: %1.").arg(err),
+                                QMessageBox::NoButton, this);
+                box.setInformativeText(tr("You're on version %1. The latest version is always on "
+                                          "the PhotoLife website.")
+                                           .arg(QString::fromLatin1(kAppVersion)));
+                QPushButton *download = box.addButton(tr("Go to Downloads"), QMessageBox::AcceptRole);
+                box.addButton(QMessageBox::Close);
+                box.exec();
+                if (box.clickedButton() == download)
+                    QDesktopServices::openUrl(QUrl(QString::fromLatin1(kDownloadPageUrl)));
             });
 }
 
@@ -3940,6 +3971,23 @@ QWidget *MainWindow::buildReferencePhotosPage()
             QDesktopServices::openUrl(
                 QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
     });
+    m_refPhotoGrid->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_refPhotoGrid, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        const QModelIndex idx = m_refPhotoGrid->indexAt(pos);
+        if (!idx.isValid())
+            return;
+        m_refPhotoGrid->setCurrentIndex(idx);
+        QMenu menu(this);
+        QAction *larger = menu.addAction(tr("View Larger Image"), this,
+                                         [this, idx] { viewLargeReferencePhoto(idx); });
+        larger->setEnabled(!idx.data(model::ReferencePhotoModel::PhotoUrlRole).toString().isEmpty());
+        menu.setDefaultAction(larger);
+        const qint64 inatId = idx.data(model::ReferencePhotoModel::InatIdRole).toLongLong();
+        menu.addAction(tr("Open on iNaturalist"), this, [inatId] {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
+        })->setEnabled(inatId > 0);
+        menu.exec(m_refPhotoGrid->viewport()->mapToGlobal(pos));
+    });
     connect(m_refPhotoModel, &QAbstractItemModel::modelReset, this,
             &MainWindow::updateReferencePhotoStatus);
 
@@ -4066,6 +4114,42 @@ void MainWindow::updateCommonNames(bool interactive)
                           nullptr, photoTaxa),
                        0, 0);
     m_commonNameFetcher->start(Scope::PhotoTaxa);
+}
+
+void MainWindow::viewLargeReferencePhoto(const QModelIndex &index)
+{
+    using Model = model::ReferencePhotoModel;
+    const QString url = index.data(Model::PhotoUrlRole).toString();
+    const QString name = index.data(Model::NameRole).toString();
+    const QString common = index.data(Model::CommonNameRole).toString();
+    const QString credit = index.data(Model::AttributionRole).toString();
+    if (url.isEmpty()) {
+        statusBar()->showMessage(tr("%1 has no reference photo yet.").arg(name), 6000);
+        return;
+    }
+    statusBar()->showMessage(tr("Downloading a larger copy of the %1 photo…").arg(name));
+    QApplication::setOverrideCursor(Qt::BusyCursor);
+    m_app.photoCache().fetchLarge(url, [this, name, common, credit](const QString &path,
+                                                                    const QString &error) {
+        QApplication::restoreOverrideCursor();
+        if (path.isEmpty()) {
+            statusBar()->showMessage(tr("Couldn't get a larger copy: %1").arg(error), 8000);
+            return;
+        }
+        statusBar()->clearMessage();
+        ImageViewer::Item item;
+        item.path = path;
+        item.title = common.isEmpty() ? name : QStringLiteral("%1 · %2").arg(common, name);
+        // The photographer's credit goes with it: iNaturalist's licences ask for it.
+        item.caption = item.title + QStringLiteral(" — iNaturalist reference photo")
+                       + (credit.isEmpty() ? QString() : QStringLiteral("\n") + credit);
+        if (!m_refViewer)
+            m_refViewer = new ImageViewer(this);
+        m_refViewer->show();   // before setItems(): see openViewer()
+        m_refViewer->raise();
+        m_refViewer->activateWindow();
+        m_refViewer->setItems({item}, 0);
+    });
 }
 
 void MainWindow::exportReferenceContactSheet()

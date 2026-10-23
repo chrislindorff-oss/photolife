@@ -7,6 +7,8 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QRegularExpression>
+#include <QSaveFile>
 
 namespace pl::net {
 
@@ -71,6 +73,84 @@ void PhotoCache::pump()
 {
     while (m_inFlight < kMaxConcurrent && !m_waiting.isEmpty())
         startDownload(m_waiting.dequeue());
+}
+
+QStringList PhotoCache::largerVariants(const QString &url)
+{
+    // .../photos/12345/medium.jpg[?123] -> original / large / as given
+    static const QRegularExpression sizeRe(
+        QStringLiteral(R"(/(square|thumb|small|medium|large|original)(\.[A-Za-z]+)(\?.*)?$)"));
+    const auto m = sizeRe.match(url);
+    if (!m.hasMatch())
+        return {url};
+    QStringList out;
+    for (const char *size : {"original", "large"}) {
+        QString v = url;
+        v.replace(m.capturedStart(1), m.capturedLength(1), QLatin1String(size));
+        out << v;
+    }
+    out << url;
+    out.removeDuplicates();   // keeps the first: biggest first, whatever `url` was
+    return out;
+}
+
+QString PhotoCache::largePath(const QString &url) const
+{
+    const QString hash =
+        QString::fromLatin1(QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha1).toHex());
+    return QDir(m_cacheDir).filePath(QStringLiteral("large/%1.jpg").arg(hash));
+}
+
+void PhotoCache::fetchLarge(const QString &url, LargeDone done)
+{
+    if (url.isEmpty()) {
+        done({}, tr("there's no reference photo"));
+        return;
+    }
+    const QString path = largePath(url);
+    if (QFileInfo(path).size() > 0) {
+        done(path, {});
+        return;
+    }
+    fetchVariant(url, largerVariants(url), std::move(done));
+}
+
+// Tries each variant in turn until one downloads as an image; saves its bytes
+// unchanged (no re-encoding: it's for looking at closely).
+void PhotoCache::fetchVariant(const QString &url, QStringList variants, LargeDone done)
+{
+    if (variants.isEmpty()) {
+        done({}, tr("iNaturalist didn't send a larger copy of this photo"));
+        return;
+    }
+    const QString next = variants.takeFirst();
+    QNetworkRequest req{QUrl(next)};
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                     QNetworkRequest::NoLessSafeRedirectPolicy);
+    if (!m_userAgent.isEmpty())
+        req.setHeader(QNetworkRequest::UserAgentHeader, m_userAgent);
+    QNetworkReply *reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, url, variants, done = std::move(done)]() mutable {
+                reply->deleteLater();
+                const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                const QByteArray bytes = reply->error() == QNetworkReply::NoError
+                                                 && (status == 0 || (status >= 200 && status < 300))
+                                             ? reply->readAll()
+                                             : QByteArray();
+                if (bytes.isEmpty() || QImage::fromData(bytes).isNull()) {
+                    fetchVariant(url, std::move(variants), std::move(done));
+                    return;
+                }
+                const QString path = largePath(url);
+                QDir().mkpath(QFileInfo(path).absolutePath());
+                QSaveFile file(path);
+                if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+                    done({}, tr("couldn't save it to %1").arg(QFileInfo(path).absolutePath()));
+                    return;
+                }
+                done(path, {});
+            });
 }
 
 void PhotoCache::startDownload(const QString &url)

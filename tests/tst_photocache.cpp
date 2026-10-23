@@ -19,6 +19,7 @@ private slots:
     void returnsAnImageAlreadyOnDisk();
     void unreachableUrlStaysNullAndIsNotRetriedForever();
     void diskUsageCountsOnlyUrlsPresentOnDisk();
+    void largerVariantsAskForTheBiggestFirst();
 
 private:
     static QString diskPathFor(const QString &cacheDir, const QString &url)
@@ -87,6 +88,26 @@ void TestPhotoCache::diskUsageCountsOnlyUrlsPresentOnDisk()
     const PhotoCache::DiskUsage usage = cache.diskUsage({cachedUrl, missingUrl, QString()});
     QCOMPARE(usage.count, 1);
     QCOMPARE(usage.bytes, QFileInfo(path).size());
+}
+
+void TestPhotoCache::largerVariantsAskForTheBiggestFirst()
+{
+    using pl::net::PhotoCache;
+    QCOMPARE(PhotoCache::largerVariants(
+                 QStringLiteral("https://inaturalist-open-data.s3.amazonaws.com/photos/356885346/medium.jpg")),
+             (QStringList{QStringLiteral("https://inaturalist-open-data.s3.amazonaws.com/photos/356885346/original.jpg"),
+                          QStringLiteral("https://inaturalist-open-data.s3.amazonaws.com/photos/356885346/large.jpg"),
+                          QStringLiteral("https://inaturalist-open-data.s3.amazonaws.com/photos/356885346/medium.jpg")}));
+    // Other extensions and a cache-busting query are kept.
+    QCOMPARE(PhotoCache::largerVariants(QStringLiteral("https://static.inaturalist.org/photos/9/small.jpeg?1600"))
+                 .first(),
+             QStringLiteral("https://static.inaturalist.org/photos/9/original.jpeg?1600"));
+    // Already the largest, or not an iNaturalist size: just itself.
+    QCOMPARE(PhotoCache::largerVariants(QStringLiteral("https://x.example/photos/1/original.jpg")),
+             (QStringList{QStringLiteral("https://x.example/photos/1/original.jpg"),
+                          QStringLiteral("https://x.example/photos/1/large.jpg")}));
+    QCOMPARE(PhotoCache::largerVariants(QStringLiteral("https://x.example/a.jpg")),
+             QStringList{QStringLiteral("https://x.example/a.jpg")});
 }
 
 QTEST_MAIN(TestPhotoCache)

@@ -10,8 +10,15 @@ class QScrollArea;
 
 namespace pl {
 
+class ImageCanvas;
+
 // Full-image viewer with prev/next navigation over a fixed set of images.
 // Fits each image to the window; arrow keys / Page keys navigate, Esc closes.
+// Zoom: A (or a double-click) toggles fit / actual pixels (1:1, one image
+// pixel per screen pixel) at the spot under the pointer; the wheel zooms
+// around the pointer, + / - step, 0 or F fits. Zoomed in, drag with the hand
+// to pan. Stepping to another photo keeps the zoom and spot, for comparing a
+// burst's sharpness.
 class ImageViewer : public QDialog
 {
     Q_OBJECT
@@ -45,16 +52,24 @@ signals:
 protected:
     void keyPressEvent(QKeyEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void step(int delta);
     void showCurrent();
     void rescale();
+    // Zooms to `scale` (device pixels per image pixel; <= 0: fit) keeping the
+    // image point under `anchor` (viewport coordinates) where it is.
+    void zoomTo(double scale, QPoint anchor);
+    void zoomBy(double factor, QPoint anchor);
+    double fitScale() const;
+    QPoint viewportCenter() const;
+    void updateCounter();
     void updateBestShotButton();
     void updateMapButton();
 
     QScrollArea *m_scroll;
-    QLabel *m_image;
+    ImageCanvas *m_image;
     QLabel *m_caption;
     QLabel *m_counter;
     QPushButton *m_bestShot;
@@ -63,6 +78,11 @@ private:
     QVector<Item> m_items;
     int m_index = 0;
     QImage m_current;
+    bool m_fit = true;
+    double m_scale = 1.0;        // device pixels per image pixel, when not fitting
+    QPointF m_spot{0.5, 0.5};    // the viewed spot, as a fraction of the image (kept across photos)
+    bool m_panning = false;
+    QPoint m_panFrom;
 };
 
 } // namespace pl

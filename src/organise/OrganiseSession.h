@@ -7,6 +7,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace pl::organise {
 
 // One shot in a download folder: its RAW and/or JPEG renditions, and any
@@ -51,8 +53,10 @@ public:
 
     // The shots directly in `folder` (not its subfolders), sorted by when
     // they were taken, file name breaking ties. Reads each shot's EXIF date,
-    // so it can take a moment: safe to call on a worker thread.
-    static QList<Item> scanFolder(const QString &folder);
+    // so it can take a moment: safe to call on a worker thread. `progress`
+    // reports (0, 0) while finding photos, then (done, total) while reading them.
+    static QList<Item> scanFolder(const QString &folder,
+                                  const std::function<void(int, int)> &progress = {});
 
     void setItems(const QString &folder, QList<Item> items);
     QString folder() const { return m_folder; }
@@ -62,6 +66,9 @@ public:
     // The name given at photo `i` (empty unless it starts a run).
     QString nameAt(int i) const { return m_names.value(i); }
     void setName(int i, const QString &name);   // empty clears it
+    // Stop the current name from carrying past photo `i`.
+    bool isNamingEndAt(int i) const { return m_namingEnds.contains(i); }
+    void setNamingEndAt(int i, bool ends);
     // The run photo `i` is in: the index of its named photo, or -1 before
     // the first name.
     int runStart(int i) const;
@@ -77,10 +84,10 @@ public:
 
     OrganisePlan plan() const;
 
-    // Names and rejects, kept in kProgressFile in the folder so a session
-    // can be picked up again; a shot is recognised by its name, size and
-    // modification time. Shots organised out of the folder keep theirs, so
-    // an undone organise comes back named.
+    // Names, rejects and naming ends, kept in kProgressFile in the folder so
+    // a session can be picked up again; a shot is recognised by its name,
+    // size and modification time. Shots organised out of the folder keep
+    // their entries, so an undone organise brings their state back too.
     bool saveProgress() const;
     void loadProgress();
     void clearProgress();
@@ -93,6 +100,7 @@ private:
     QList<Item> m_items;
     QHash<int, QString> m_names;
     QSet<int> m_rejected;
+    QSet<int> m_namingEnds;
     QStringList m_nameOrder;   // names in the order given (for recentNames())
 };
 

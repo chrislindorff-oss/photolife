@@ -8,8 +8,13 @@ inline constexpr const char *kAppVersionFull = "@PHOTOLIFE_VERSION_FULL@";
 inline constexpr const char *kOrgName        = "PhotoLife";
 inline constexpr const char *kOrgDomain      = "photolife.local";
 inline constexpr const char *kHomepageUrl    = "@PROJECT_HOMEPAGE_URL@";
+// The website's download section: picks the installer for the visitor's
+// system from the latest release.
+inline constexpr const char *kDownloadPageUrl = "@PROJECT_HOMEPAGE_URL@/#download";
 
-// GitHub "owner/repo" the update check queries for the latest release.
-inline constexpr const char *kReleasesRepo   = "chrisl/photolife";
+// GitHub "owner/repo" the update check queries for the latest release. It's
+// compiled in, so a wrong one strands every install of that version: check it
+// still matches where releases are published (.github/workflows/release.yml).
+inline constexpr const char *kReleasesRepo   = "chrislindorff-oss/photolife";
 
 } // namespace pl

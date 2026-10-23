@@ -33,7 +33,7 @@ void TestUpdateChecker::wire(std::function<Transport::Reply(const Transport::Req
     m_http = std::make_unique<HttpClient>(std::move(owned), nullptr);
     m_http->setMinRequestIntervalMs(0);
     m_checker = std::make_unique<UpdateChecker>(*m_http);
-    m_checker->setRepo(QStringLiteral("chrisl/photolife"));
+    m_checker->setRepo(QStringLiteral("chrislindorff-oss/photolife"));
 }
 
 void TestUpdateChecker::isNewerComparesNumerically()
@@ -57,7 +57,7 @@ void TestUpdateChecker::reportsUpdateAvailable()
 {
     wire([](const Transport::Request &, int) {
         return FakeTransport::ok(
-            R"({"tag_name":"v0.5.0","html_url":"https://github.com/chrisl/photolife/releases/tag/v0.5.0"})");
+            R"({"tag_name":"v0.5.0","html_url":"https://github.com/chrislindorff-oss/photolife/releases/tag/v0.5.0"})");
     });
     m_checker->setCurrentVersion(QStringLiteral("0.1.0"));
 
@@ -86,8 +86,12 @@ void TestUpdateChecker::reportsFailureWhenNoReleases()
     m_checker->setCurrentVersion(QStringLiteral("0.1.0"));
 
     QSignalSpy fail(m_checker.get(), &UpdateChecker::checkFailed);
+    QSignalSpy upToDate(m_checker.get(), &UpdateChecker::upToDate);
     m_checker->check();
     QVERIFY(fail.wait(3000));
+    QCOMPARE(upToDate.count(), 0);   // a missing release page is never "up to date"
+    // Says what's wrong, naming where it looked.
+    QVERIFY(fail.first().first().toString().contains(QLatin1String("chrislindorff-oss/photolife")));
 }
 
 QTEST_GUILESS_MAIN(TestUpdateChecker)

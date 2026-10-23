@@ -151,6 +151,9 @@ private:
     void updateReferencePhotoStatus();
     void maybeFetchReferencePhotos();
     void fetchReferencePhotos();
+    // A reference photo at its largest from iNaturalist, in the viewer.
+    void viewLargeReferencePhoto(const QModelIndex &index);
+    ImageViewer *m_refViewer = nullptr;
     void exportReferenceTreePhotos();
     void exportReferenceContactSheet();
     // After an update-mode export: lists files in the collection that this
