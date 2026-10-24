@@ -22,6 +22,7 @@ private slots:
     void observationCountReadsTotalResults();
     void fetchObservationsSendsDateRangeWhenProvided();
     void fetchObservationsOmitsDateParamsWhenInvalid();
+    void fetchObservationsWithNoTaxaSearchesEveryTaxon();
     void fetchAllObservationsSendsTaxonOnlyWhenGiven();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
@@ -277,6 +278,22 @@ void TestINatClient::fetchObservationsOmitsDateParamsWhenInvalid()
     const QString url = m_transport->received.at(0).url.toString();
     QVERIFY(!url.contains(QStringLiteral("d1=")));
     QVERIFY(!url.contains(QStringLiteral("d2=")));
+}
+
+void TestINatClient::fetchObservationsWithNoTaxaSearchesEveryTaxon()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(R"({"total_results": 0, "results": []})"));
+    });
+
+    bool done = false;
+    m_inat->fetchObservations(QStringLiteral("someone"), {}, 0, QDate(2025, 1, 9), QDate(2025, 1, 11), 1,
+                              [&](auto) { done = true; });
+    QTRY_VERIFY(done);
+
+    const QString url = m_transport->received.at(0).url.toString();
+    QVERIFY(!url.contains(QStringLiteral("taxon_id")));
+    QVERIFY(url.contains(QStringLiteral("user_login=someone")));
 }
 
 void TestINatClient::httpErrorBecomesOutcomeError()

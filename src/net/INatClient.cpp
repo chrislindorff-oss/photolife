@@ -297,7 +297,8 @@ void INatClient::fetchObservations(const QString &userLogin, const QList<qint64>
     QUrl url(m_baseUrl + QStringLiteral("/observations"));
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("user_login"), userLogin);
-    q.addQueryItem(QStringLiteral("taxon_id"), ids.join(QLatin1Char(',')));
+    if (!ids.isEmpty())   // none: every taxon
+        q.addQueryItem(QStringLiteral("taxon_id"), ids.join(QLatin1Char(',')));
     if (placeId > 0)
         q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
     if (dateFrom.isValid())

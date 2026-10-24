@@ -67,6 +67,7 @@ class ApcOriginSync;
 class InfraspecificFiller;
 class ReferencePhotoFetcher;
 class CommonNameFetcher;
+struct Observation;
 }
 namespace match {
 class MatchEngine;
@@ -336,7 +337,19 @@ private:
     void openViewer(QAbstractItemModel *model, const QModelIndex &index);
     QListView *makeCaptureGrid(QAbstractItemModel *model);
     void removeSelectedCaptures(QListView *grid);
-    void fetchCoordinatesFromInat(const QModelIndex &idx);
+    // Library photos' species and/or coordinates from one of the user's own
+    // iNaturalist observations, chosen by eye.
+    struct InatMatchTarget
+    {
+        int captureId = 0;
+        QString path;      // its preview file
+        bool isRaw = false;
+        bool hasGps = false;
+    };
+    void matchWithInatObservation(QListView *grid);
+    int applyInatCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon, bool replace);
+    void applyInatSpecies(const QList<InatMatchTarget> &targets, const taxonomy::Observation &observation,
+                          int located);
     void removeMissingCaptures();
     void fixRawGeolocation();
     void fetchPhotoLocalities();

@@ -110,7 +110,7 @@ qt_add_library(photolife_core STATIC
     ui/FileNamingDialog.h   ui/FileNamingDialog.cpp
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
-    ui/InatCoordinateConfirmDialog.h ui/InatCoordinateConfirmDialog.cpp
+    ui/InatObservationMatchDialog.h ui/InatObservationMatchDialog.cpp
     ui/InatComparePage.h    ui/InatComparePage.cpp
     ui/InatDownloadPage.h   ui/InatDownloadPage.cpp
     ui/InatScopeWidgets.h   ui/InatScopeWidgets.cpp

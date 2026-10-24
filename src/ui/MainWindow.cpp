@@ -54,7 +54,7 @@
 #include "ui/GettingStartedPanel.h"
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
-#include "ui/InatCoordinateConfirmDialog.h"
+#include "ui/InatObservationMatchDialog.h"
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
 #include "ui/InatToolsView.h"
@@ -3093,30 +3093,17 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
                 [this, grid] { setBestShotForSelection(grid, false); });
 
         menu.addSeparator();
-        QAction *fetchCoords = menu.addAction(tr("Attempt to fetch coordinates from iNat"));
-        // Exclude "pending" -- MatchEngine only leaves a match pending when
-        // its confidence fell below the auto-apply threshold, i.e. an
-        // uncertain guess that hasn't been reviewed yet, and searching
-        // iNaturalist under the wrong species (a real catalogue taxon, just
-        // not this photo's) reliably turns up no observations. "auto" is
-        // fine: it already means a high-confidence match against the real
-        // catalogue taxonomy, not merely raw filename text; "confirmed"
-        // means a human verified or reassigned it.
-        const QString matchStatus = idx.data(model::CaptureListModel::MatchStatusRole).toString();
-        const bool canFetchCoords =
-            selected == 1 && !idx.data(model::CaptureListModel::HasGpsRole).toBool()
-            && idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong() > 0
-            && matchStatus != QLatin1String("pending")
-            && !idx.data(model::CaptureListModel::CapturedOnRole).toString().isEmpty()
-            && !idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
-        fetchCoords->setEnabled(canFetchCoords);
-        if (!canFetchCoords)
-            fetchCoords->setToolTip(tr("Available for a single, JPEG-backed photo with an "
-                                       "auto or confirmed species identification (not a "
-                                       "pending, unreviewed guess), a captured date, and no "
-                                       "GPS yet."));
-        connect(fetchCoords, &QAction::triggered, this,
-                [this, idx] { fetchCoordinatesFromInat(idx); });
+        // The species and/or coordinates of one of the user's own iNat
+        // observations, matched by eye -- for photos with a date to search by.
+        QAction *matchInat = menu.addAction(tr("Attempt to Match with iNat Observation to Fetch Data…"));
+        bool anyDated = false;
+        for (const QModelIndex &s : sel)
+            anyDated = anyDated || !s.data(model::CaptureListModel::CapturedOnRole).toString().isEmpty();
+        matchInat->setEnabled(anyDated);
+        matchInat->setToolTip(anyDated ? tr("Find your iNaturalist observation of these photos, by its "
+                                            "photo, and take its species and/or coordinates.")
+                                       : tr("Needs photos with a date taken, to find the observation by."));
+        connect(matchInat, &QAction::triggered, this, [this, grid] { matchWithInatObservation(grid); });
 
         menu.addSeparator();
         QAction *remove = menu.addAction(
@@ -3223,71 +3210,182 @@ void MainWindow::removeSelectedCaptures(QListView *grid)
         tr("Removed %n photo(s) from the catalogue.", nullptr, removed), 6000);
 }
 
-void MainWindow::fetchCoordinatesFromInat(const QModelIndex &idx)
+void MainWindow::matchWithInatObservation(QListView *grid)
 {
+    const QString title = tr("Match with iNat Observation");
     const QString username = m_app.settings().inatUsername();
     if (username.isEmpty()) {
         QMessageBox::information(
-            this, tr("Attempt to Fetch Coordinates"),
+            this, title,
             tr("Set up your iNaturalist username in the iNaturalist view "
                "(iNaturalist Tools → iNaturalist Account) first."));
         return;
     }
+    if (!ensureCanEdit())
+        return;
     // The shared INatClient's token is otherwise only ever applied by the
-    // iNaturalist view's account bar -- it can't be assumed already set.
+    // iNaturalist view's account bar -- it can't be assumed already set. With
+    // it, the user's own obscured observations come back with true coordinates.
     m_app.inat().setAccessToken(m_app.settings().inatApiToken());
 
-    const int captureId = idx.data(model::CaptureListModel::IdRole).toInt();
-    const qint64 taxonInatId =
-        idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong();
-    // Never search iNaturalist under a low-confidence, unreviewed guess --
-    // see the same guard on the context-menu action for why.
-    if (taxonInatId <= 0
-        || idx.data(model::CaptureListModel::MatchStatusRole).toString()
-               == QLatin1String("pending"))
+    QList<InatMatchTarget> targets;
+    InatObservationMatchDialog::Selection selection;
+    QSet<qint64> taxa;
+    for (const QModelIndex &idx : grid->selectionModel()->selectedIndexes()) {
+        InatMatchTarget t;
+        t.captureId = idx.data(model::CaptureListModel::IdRole).toInt();
+        t.path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
+        t.isRaw = idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
+        t.hasGps = idx.data(model::CaptureListModel::HasGpsRole).toBool();
+        targets << t;
+        const QDate date = QDate::fromString(
+            idx.data(model::CaptureListModel::CapturedOnRole).toString().left(10), Qt::ISODate);
+        if (date.isValid()) {
+            selection.from = selection.from.isValid() ? std::min(selection.from, date) : date;
+            selection.to = selection.to.isValid() ? std::max(selection.to, date) : date;
+        }
+        selection.withGps += t.hasGps ? 1 : 0;
+        // An unreviewed guess doesn't count as having a species.
+        const bool pending = idx.data(model::CaptureListModel::MatchStatusRole).toString()
+                             == QLatin1String("pending");
+        taxa.insert(pending ? 0 : idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong());
+    }
+    if (targets.isEmpty() || !selection.from.isValid())
         return;
-    const QDate capturedOn = QDate::fromString(
-        idx.data(model::CaptureListModel::CapturedOnRole).toString().left(10), Qt::ISODate);
-    const QString path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
+    selection.photos = int(targets.size());
+    selection.anyNeedsSpecies = taxa.contains(0) || taxa.size() > 1;
+    selection.currentTaxonInatId = taxa.size() == 1 ? *taxa.cbegin() : 0;
 
-    InatCoordinateConfirmDialog dialog(m_app.inat(), m_app.photoCache(), taxonInatId, username,
-                                       capturedOn, this);
+    InatObservationMatchDialog dialog(m_app.inat(), m_app.photoCache(), username, selection, this);
     if (dialog.exec() != QDialog::Accepted)
         return;
-    const auto chosen = dialog.chosenObservation();
-    if (!chosen || !chosen->latitude || !chosen->longitude)
+    const std::optional<taxonomy::Observation> chosen = dialog.chosenObservation();
+    if (!chosen)
         return;
 
-    inat::ExifFields fields;
-    fields.latitude = chosen->latitude;
-    fields.longitude = chosen->longitude;
-    QString error;
-    if (!inat::writeExifSafely(path, fields, &error)) {
-        QMessageBox::warning(this, tr("Attempt to Fetch Coordinates"),
-                             tr("Could not write coordinates into %1:\n%2").arg(path, error));
-        return;
-    }
-
-    // Re-read rather than trust the values just written, so the catalogue
-    // reflects exactly what's now actually in the file.
-    const scan::ExifData reread = scan::readJpegExif(path);
-    if (!reread.hasGps()) {
-        statusBar()->showMessage(
-            tr("Coordinates were written to the file but could not be re-read."), 8000);
+    int located = 0;
+    if (dialog.applyCoordinates() && chosen->latitude && chosen->longitude)
+        located = applyInatCoordinates(targets, *chosen->latitude, *chosen->longitude,
+                                       dialog.replaceExistingCoordinates());
+    if (dialog.applySpecies() && chosen->taxonInatId > 0) {
+        applyInatSpecies(targets, *chosen, located);
         return;
     }
+    statusBar()->showMessage(tr("Added coordinates to %n photo(s) from iNaturalist observation %1.",
+                                nullptr, located)
+                                 .arg(chosen->id),
+                             8000);
+}
 
-    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
-    q.prepare(QStringLiteral("UPDATE capture SET latitude = ?, longitude = ? WHERE id = ?"));
-    q.addBindValue(*reread.latitude);
-    q.addBindValue(*reread.longitude);
-    q.addBindValue(captureId);
-    q.exec();
+int MainWindow::applyInatCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon,
+                                     bool replace)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_app.database().connectionName(), false);
+    QStringList failures;
+    int done = 0;
+    for (const InatMatchTarget &t : targets) {
+        if (t.hasGps && !replace)
+            continue;
+        double useLat = lat, useLon = lon;
+        // Into the photo itself when it's a JPEG here; RAW files (and photos
+        // kept online) carry it in the catalogue only -- a rescan never
+        // blanks coordinates the catalogue has.
+        if (!t.isRaw && !CaptureDelegate::isOnlineOnly(t.path) && QFileInfo::exists(t.path)) {
+            inat::ExifFields fields;
+            fields.latitude = lat;
+            fields.longitude = lon;
+            QString error;
+            if (inat::writeExifSafely(t.path, fields, &error)) {
+                // What's now actually in the file.
+                const scan::ExifData reread = scan::readJpegExif(t.path);
+                if (reread.hasGps()) {
+                    useLat = *reread.latitude;
+                    useLon = *reread.longitude;
+                }
+            } else {
+                failures << QStringLiteral("%1: %2").arg(QFileInfo(t.path).fileName(), error);
+            }
+        }
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("UPDATE capture SET latitude = ?, longitude = ? WHERE id = ?"));
+        q.addBindValue(useLat);
+        q.addBindValue(useLon);
+        q.addBindValue(t.captureId);
+        if (!q.exec())
+            continue;
+        m_model->applyGps(t.captureId, useLat, useLon);
+        m_taxonModel->applyGps(t.captureId, useLat, useLon);
+        m_bestShotModel->applyGps(t.captureId, useLat, useLon);
+        ++done;
+    }
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, tr("Match with iNat Observation"),
+                             tr("The coordinates couldn't be written into %n file(s), so they're "
+                                "kept in PhotoLife's catalogue only:\n\n%1",
+                                nullptr, int(failures.size()))
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    return done;
+}
 
-    m_model->applyGps(captureId, *reread.latitude, *reread.longitude);
-    m_taxonModel->applyGps(captureId, *reread.latitude, *reread.longitude);
-    m_bestShotModel->applyGps(captureId, *reread.latitude, *reread.longitude);
-    statusBar()->showMessage(tr("Coordinates added from iNaturalist."), 6000);
+void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
+                                  const taxonomy::Observation &observation, int located)
+{
+    const qint64 taxonId = observation.taxonInatId;
+    const auto confirmAll = [this, targets, observation, located] {
+        match::MatchReviewer reviewer(m_app.database().connectionName());
+        int named = 0;
+        for (const InatMatchTarget &t : targets) {
+            // No alias: the photo's file or folder name didn't give this species.
+            if (reviewer.confirm(t.captureId, observation.taxonInatId, false))
+                ++named;
+        }
+        m_taxonModel->reload();
+        m_model->reload();
+        m_bestShotModel->reload();
+        if (m_untreedModel)
+            m_untreedModel->reload();
+        m_reviewPane->reload();
+        updateEmptyState();
+        refreshCoverage();
+        updateReviewTabText();
+        updateBestShotsTabText();
+        const QString species = !observation.taxonCommonName.isEmpty() ? observation.taxonCommonName
+                                                                        : observation.taxonName;
+        QString message = tr("Set %n photo(s) to %1", nullptr, named).arg(species);
+        if (located > 0)
+            message += tr(" and added coordinates to %n", nullptr, located);
+        statusBar()->showMessage(message + tr(", from iNaturalist observation %1.").arg(observation.id), 8000);
+    };
+    // Already known here: straight on.
+    if (m_app.taxonomyStore().taxonLocalId(taxonId)) {
+        confirmAll();
+        return;
+    }
+    // Otherwise fetch it, with the ancestors not yet known, so it sits in the
+    // right place in the taxonomy (it isn't added to any reference tree).
+    statusBar()->showMessage(tr("Fetching %1 from iNaturalist…").arg(observation.taxonName));
+    m_app.inat().fetchTaxon(taxonId, [this, taxonId, confirmAll, observation](net::Outcome<net::TaxonDetail> out) {
+        if (!out.ok()) {
+            statusBar()->clearMessage();
+            QMessageBox::warning(this, tr("Match with iNat Observation"),
+                                 tr("Couldn't fetch %1 from iNaturalist, so the species wasn't set:\n%2")
+                                     .arg(observation.taxonName, out.error));
+            return;
+        }
+        taxonomy::TaxonomyStore &store = m_app.taxonomyStore();
+        for (const taxonomy::Taxon &a : out.value.ancestors) {
+            if (!store.taxonLocalId(a.inatId))
+                store.upsertTaxon(a);
+        }
+        if (store.upsertTaxon(out.value.taxon) <= 0 || !store.taxonLocalId(taxonId)) {
+            statusBar()->clearMessage();
+            QMessageBox::warning(this, tr("Match with iNat Observation"),
+                                 tr("Couldn't add %1 to the taxonomy, so the species wasn't set.")
+                                     .arg(observation.taxonName));
+            return;
+        }
+        confirmAll();
+    });
 }
 
 void MainWindow::removeMissingCaptures()
