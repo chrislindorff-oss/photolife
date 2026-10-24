@@ -10,6 +10,7 @@ class QLabel;
 class QListView;
 class QProgressBar;
 class QPushButton;
+class QTimer;
 class QToolButton;
 
 namespace pl {
@@ -51,9 +52,14 @@ signals:
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     void setFilmstrip(bool on);
+    // Places: each photo's town, looked up for the photos in view only.
+    void setShowPlaces(bool on);
+    QList<int> visibleRows() const;
+    void lookUpNextPlace();
     void updateCellSize();
     void updateCounts();
     void nameAt(int row);
@@ -77,6 +83,9 @@ private:
     QProgressBar *m_scanProgress = nullptr;
     QToolButton *m_filmstripButton = nullptr;
     QToolButton *m_gridButton = nullptr;
+    QToolButton *m_placesButton = nullptr;
+    QTimer *m_placeScan = nullptr;        // debounces lookups after scrolling
+    bool m_placeInFlight = false;
     QPushButton *m_commitButton = nullptr;
     QPushButton *m_undoButton = nullptr;
     ImageViewer *m_viewer = nullptr;

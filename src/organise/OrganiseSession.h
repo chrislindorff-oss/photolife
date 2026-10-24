@@ -8,6 +8,7 @@
 #include <QStringList>
 
 #include <functional>
+#include <optional>
 
 namespace pl::organise {
 
@@ -21,6 +22,9 @@ struct Item
     QString previewPath;    // the JPEG if there is one, else the RAW
     QDateTime taken;        // EXIF date taken, else the file's modification time
     bool takenFromExif = false;
+    std::optional<double> latitude;    // embedded GPS, decimal degrees
+    std::optional<double> longitude;
+    bool hasGps() const { return latitude.has_value() && longitude.has_value(); }
     qint64 size = 0;        // of the first rendition: with mtime, recognises the shot again
     qint64 mtime = 0;
 };

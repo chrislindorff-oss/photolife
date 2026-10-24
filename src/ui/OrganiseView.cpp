@@ -2,7 +2,9 @@
 
 #include "app/Application.h"
 #include "db/Database.h"
+#include "geo/LocalityStore.h"
 #include "match/CandidateFinder.h"
+#include "net/GeocodeClient.h"
 #include "organise/OrganiseMover.h"
 #include "settings/Settings.h"
 #include "thumb/ThumbnailCache.h"
@@ -26,11 +28,13 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QPromise>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QTimer>
 #include <QStyledItemDelegate>
 #include <QToolButton>
 #include <QUrl>
@@ -52,7 +56,33 @@ enum Role {
     RunNumberRole,
     RejectedRole,
     NamingEndRole,
+    HasGpsRole,
+    PlaceRole,      // the place's name; empty without GPS or while places are off
+    PlaceStateRole, // a PlaceState
 };
+
+enum PlaceState { NoPlace, PlaceFinding, PlaceKnown, PlaceUnavailable };
+
+// Photos within ~100 m share a place: the same rounding as the catalogue's
+// geocode_cache.
+QString placeKey(double lat, double lon)
+{
+    return QString::asprintf("%.3f,%.3f", lat, lon);
+}
+
+QString placeKey(const organise::Item &item)
+{
+    return item.hasGps() ? placeKey(*item.latitude, *item.longitude) : QString();
+}
+
+// "Town, State, Country" without the country, for a thumbnail.
+QString shortPlace(const QString &place)
+{
+    QStringList parts = place.split(QStringLiteral(", "));
+    if (parts.size() >= 3)
+        parts.removeLast();
+    return parts.join(QStringLiteral(", "));
+}
 
 // The session's shots, with their thumbnails.
 class OrganiseModel : public QAbstractListModel
@@ -79,6 +109,37 @@ public:
         endResetModel();
     }
 
+    // Places: looked up by coordinate, kept for the session (they don't
+    // depend on the folder).
+    bool showPlaces = false;
+    QHash<QString, QString> places;   // placeKey -> "Town, State, Country" ("" = none there)
+    QSet<QString> unavailable;        // lookups that failed this session
+
+    PlaceState placeState(const organise::Item &item) const
+    {
+        if (!item.hasGps())
+            return NoPlace;
+        const QString key = placeKey(item);
+        if (places.contains(key))
+            return places.value(key).isEmpty() ? NoPlace : PlaceKnown;
+        return unavailable.contains(key) ? PlaceUnavailable : PlaceFinding;
+    }
+
+    // Every photo at `key` has its place now.
+    void placeChanged(const QString &key)
+    {
+        for (int i = 0; i < m_session.count(); ++i) {
+            if (placeKey(m_session.items().at(i)) == key)
+                emit dataChanged(index(i), index(i), {PlaceRole, PlaceStateRole, Qt::ToolTipRole});
+        }
+    }
+
+    void allChanged()
+    {
+        if (m_session.count() > 0)
+            emit dataChanged(index(0), index(m_session.count() - 1));
+    }
+
     // Everything from `row` on may have changed run.
     void runChanged(int row)
     {
@@ -102,9 +163,20 @@ public:
             return item.baseName;
         case Qt::DecorationRole:
             return m_thumbs.thumbnail({}, item.previewPath, kThumbPx);
-        case Qt::ToolTipRole:
-            return QStringList(item.files).replaceInStrings(QRegularExpression(QStringLiteral(".*/")), QString())
-                .join(QLatin1Char('\n'));
+        case Qt::ToolTipRole: {
+            QString tip = QStringList(item.files)
+                              .replaceInStrings(QRegularExpression(QStringLiteral(".*/")), QString())
+                              .join(QLatin1Char('\n'));
+            if (item.hasGps()) {
+                tip += QStringLiteral("\n") + QObject::tr("Taken at %1, %2")
+                                                  .arg(*item.latitude, 0, 'f', 5)
+                                                  .arg(*item.longitude, 0, 'f', 5);
+                const QString place = places.value(placeKey(item));
+                if (!place.isEmpty())
+                    tip += QStringLiteral("\n") + place;
+            }
+            return tip;
+        }
         case KindsRole:
             return item.kinds.join(QLatin1Char('+'));
         case TakenRole:
@@ -119,6 +191,12 @@ public:
             return m_session.isRejected(row);
         case NamingEndRole:
             return m_session.isNamingEndAt(row);
+        case HasGpsRole:
+            return item.hasGps();
+        case PlaceRole:
+            return showPlaces ? places.value(placeKey(item)) : QString();
+        case PlaceStateRole:
+            return showPlaces ? placeState(item) : NoPlace;
         default:
             return {};
         }
@@ -139,19 +217,23 @@ public:
 
     QSize cell{260, 240};
     static constexpr int kBand = 24;
-    static constexpr int kCaption = 38;
+    static constexpr int kCaptionLine = 18;
     static constexpr int kMargin = 5;
+    bool showPlaces = false;   // a third caption line, for the place
+
+    // Name and kinds, the date, and the place when it's shown.
+    int captionHeight() const { return 2 + kCaptionLine * (showPlaces ? 3 : 2); }
 
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override { return cell; }
 
     static QRect frameRect(const QRect &cellRect) { return cellRect.adjusted(kMargin, kMargin, -kMargin, -kMargin); }
-    static QRect imageRect(const QRect &cellRect)
+    QRect imageRect(const QRect &cellRect) const
     {
         const QRect f = frameRect(cellRect);
-        return QRect(f.left() + 6, f.top() + kBand + 4, f.width() - 12, f.height() - kBand - kCaption - 8);
+        return QRect(f.left() + 6, f.top() + kBand + 4, f.width() - 12, f.height() - kBand - captionHeight() - 8);
     }
     // The corner button that opens the photo full size.
-    static QRect zoomRect(const QRect &cellRect)
+    QRect zoomRect(const QRect &cellRect) const
     {
         const QRect img = imageRect(cellRect);
         return QRect(img.right() - 26, img.bottom() - 26, 24, 24);
@@ -206,6 +288,8 @@ public:
             const QRect target(img.center().x() - scaled.width() / 2, img.center().y() - scaled.height() / 2,
                                scaled.width(), scaled.height());
             p->drawPixmap(target, px);
+            if (index.data(HasGpsRole).toBool())
+                drawGeoPill(p, t, target, option.font);
         } else {
             p->setPen(t.mutedText);
             p->drawText(img, Qt::AlignCenter, QObject::tr("Loading…"));
@@ -233,7 +317,7 @@ public:
         QFont small = option.font;
         p->setFont(small);
         p->setPen(rejected ? t.mutedText : t.text);
-        const QRect caption(frame.left() + 8, img.bottom() + 4, frame.width() - 16, kCaption);
+        const QRect caption(frame.left() + 8, img.bottom() + 4, frame.width() - 16, captionHeight());
         const QString line1 = index.data(Qt::DisplayRole).toString() + QStringLiteral("  ·  ")
                               + index.data(KindsRole).toString()
                               + (rejected ? QObject::tr("  ·  reject") : QString())
@@ -247,6 +331,47 @@ public:
         p->setPen(t.mutedText);
         p->drawText(caption.left(), caption.top() + fm.height() + fm.ascent(),
                     fm.elidedText(line2, Qt::ElideRight, caption.width()));
+        if (showPlaces) {
+            QString line3;
+            switch (index.data(PlaceStateRole).toInt()) {
+            case PlaceKnown:
+                line3 = shortPlace(index.data(PlaceRole).toString());
+                p->setPen(rejected ? t.mutedText : t.text);
+                break;
+            case PlaceFinding:
+                line3 = QObject::tr("Finding place…");
+                break;
+            case PlaceUnavailable:
+                line3 = QObject::tr("Place unavailable");
+                break;
+            default:
+                break;
+            }
+            p->drawText(caption.left(), caption.top() + 2 * fm.height() + fm.ascent(),
+                        fm.elidedText(line3, Qt::ElideRight, caption.width()));
+        }
+        p->restore();
+    }
+
+private:
+    // "GEO" at the picture's bottom-left (⤢ has the right), styled like the
+    // library grid's badges.
+    static void drawGeoPill(QPainter *p, const ThemeColors &t, const QRect &picture, const QFont &base)
+    {
+        QFont font = base;
+        font.setPointSize(7);
+        font.setBold(true);
+        const QFontMetrics fm(font);
+        const QString text = QStringLiteral("GEO");
+        constexpr int padH = 6, pillH = 16;
+        const QRect pill(picture.left() + 5, picture.bottom() - pillH - 4, fm.horizontalAdvance(text) + 2 * padH, pillH);
+        p->save();
+        p->setFont(font);
+        p->setPen(Qt::NoPen);
+        p->setBrush(t.badgeBackground);
+        p->drawRoundedRect(pill, pillH / 2.0, pillH / 2.0);
+        p->setPen(t.badgeText);
+        p->drawText(pill, Qt::AlignCenter, text);
         p->restore();
     }
 };
@@ -414,6 +539,13 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     m_gridButton->setCheckable(true);
     connect(m_filmstripButton, &QToolButton::clicked, this, [this] { setFilmstrip(true); });
     connect(m_gridButton, &QToolButton::clicked, this, [this] { setFilmstrip(false); });
+    m_placesButton = new QToolButton(this);
+    m_placesButton->setText(tr("Places"));
+    m_placesButton->setCheckable(true);
+    m_placesButton->setToolTip(tr("Show where each photo with GPS was taken — the town or locality, "
+                                  "looked up on OpenStreetMap for the photos in view. Photos with "
+                                  "GPS are marked GEO."));
+    connect(m_placesButton, &QToolButton::toggled, this, &OrganiseView::setShowPlaces);
 
     m_counts = new QLabel(this);
     m_scanProgress = new QProgressBar(this);
@@ -436,6 +568,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addSpacing(12);
     bar->addWidget(m_filmstripButton);
     bar->addWidget(m_gridButton);
+    bar->addWidget(m_placesButton);
     bar->addSpacing(12);
     bar->addWidget(m_undoButton);
     bar->addWidget(m_commitButton);
@@ -467,7 +600,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     m_list->installEventFilter(this);
     connect(m_list, &QListView::clicked, this, [this](const QModelIndex &index) {
         const QPoint at = m_list->viewport()->mapFromGlobal(QCursor::pos());
-        if (OrganiseDelegate::zoomRect(m_list->visualRect(index)).contains(at))
+        if (m_delegate->zoomRect(m_list->visualRect(index)).contains(at))
             showFullSize(index.row());
     });
     // A double-click opens the viewer, as V does (the first click of it has
@@ -475,7 +608,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     m_list->setEditTriggers(QAbstractItemView::NoEditTriggers);
     connect(m_list, &QListView::doubleClicked, this, [this](const QModelIndex &index) {
         const QPoint at = m_list->viewport()->mapFromGlobal(QCursor::pos());
-        if (!OrganiseDelegate::zoomRect(m_list->visualRect(index)).contains(at))
+        if (!m_delegate->zoomRect(m_list->visualRect(index)).contains(at))
             showFullSize(index.row());
     });
     connect(m_list, &QListView::customContextMenuRequested, this, &OrganiseView::contextMenuAt);
@@ -507,7 +640,16 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     layout->addWidget(m_preview, 1);
     layout->addWidget(m_previewCaption);
 
+    // Places are looked up for the photos in view once it settles.
+    m_placeScan = new QTimer(this);
+    m_placeScan->setSingleShot(true);
+    m_placeScan->setInterval(200);
+    connect(m_placeScan, &QTimer::timeout, this, &OrganiseView::lookUpNextPlace);
+    connect(m_list->horizontalScrollBar(), &QScrollBar::valueChanged, m_placeScan, qOverload<>(&QTimer::start));
+    connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, m_placeScan, qOverload<>(&QTimer::start));
+
     setFilmstrip(true);
+    m_placesButton->setChecked(m_app.settings().organiseShowPlaces());
     updateCounts();
 }
 
@@ -568,6 +710,7 @@ void OrganiseView::openFolder(const QString &folder)
             m_list->scrollTo(m_model->index(at), QAbstractItemView::PositionAtCenter);
         }
         m_list->setFocus();
+        m_placeScan->start();
     });
     watcher->setFuture(QtConcurrent::run([folder](QPromise<QList<organise::Item>> &promise) {
         promise.setProgressRange(0, 0);
@@ -602,6 +745,80 @@ void OrganiseView::setFilmstrip(bool on)
     updatePreview();
     if (m_list->currentIndex().isValid())
         m_list->scrollTo(m_list->currentIndex(), QAbstractItemView::PositionAtCenter);
+    m_placeScan->start();
+}
+
+void OrganiseView::setShowPlaces(bool on)
+{
+    m_placesButton->setChecked(on);
+    m_app.settings().setOrganiseShowPlaces(on);
+    m_model->showPlaces = on;
+    m_delegate->showPlaces = on;
+    updateCellSize();
+    m_model->allChanged();
+    updatePreview();
+    if (on)
+        m_placeScan->start();
+}
+
+QList<int> OrganiseView::visibleRows() const
+{
+    QList<int> rows;
+    const QRect view = m_list->viewport()->rect();
+    for (int i = 0; i < m_session.count(); ++i) {
+        if (m_list->visualRect(m_model->index(i)).intersects(view))
+            rows << i;
+    }
+    // The selected photo first, then outwards from it.
+    const int current = m_list->currentIndex().row();
+    if (current >= 0)
+        std::stable_sort(rows.begin(), rows.end(),
+                         [current](int a, int b) { return std::abs(a - current) < std::abs(b - current); });
+    return rows;
+}
+
+void OrganiseView::lookUpNextPlace()
+{
+    if (!m_model->showPlaces || m_placeInFlight || !isVisible())
+        return;
+    geo::LocalityStore store(m_app.database().connectionName());
+    // From what's in view now: anything scrolled away since isn't wanted.
+    for (int row : visibleRows()) {
+        const organise::Item &item = m_session.items().at(row);
+        const QString key = placeKey(item);
+        if (key.isEmpty() || m_model->places.contains(key) || m_model->unavailable.contains(key))
+            continue;
+        // Known from the library's photos: no need to ask.
+        if (const std::optional<QString> cached = store.lookup(*item.latitude, *item.longitude)) {
+            m_model->places.insert(key, *cached);
+            m_model->placeChanged(key);
+            if (row == m_list->currentIndex().row())
+                updatePreview();
+            continue;
+        }
+        // One at a time (Nominatim allows a request a second); then the next.
+        m_placeInFlight = true;
+        const double lat = *item.latitude, lon = *item.longitude;
+        QPointer<OrganiseView> self(this);
+        m_app.geocoder().reverseGeocode(lat, lon, [self, key, lat, lon](net::Outcome<QString> out) {
+            if (!self)
+                return;
+            self->m_placeInFlight = false;
+            if (out.ok()) {
+                self->m_model->places.insert(key, out.value);
+                // Kept in the catalogue too, when it may be changed, so the
+                // library's map and filters know the place later.
+                if (self->m_app.catalogueEditable())
+                    geo::LocalityStore(self->m_app.database().connectionName()).upsertLocality(lat, lon, out.value);
+            } else {
+                self->m_model->unavailable.insert(key);
+            }
+            self->m_model->placeChanged(key);
+            self->updatePreview();
+            self->lookUpNextPlace();
+        });
+        return;
+    }
 }
 
 void OrganiseView::updateCellSize()
@@ -610,11 +827,11 @@ void OrganiseView::updateCellSize()
     if (m_filmstrip) {
         // A band of 3:2 frames, about a third of the view's height.
         const int h = std::clamp(height() * 3 / 10, 200, 320);
-        const int imageH = h - OrganiseDelegate::kBand - OrganiseDelegate::kCaption - 2 * OrganiseDelegate::kMargin - 12;
+        const int imageH = h - OrganiseDelegate::kBand - m_delegate->captionHeight() - 2 * OrganiseDelegate::kMargin - 12;
         cell = QSize(imageH * 3 / 2 + 2 * OrganiseDelegate::kMargin + 12, h);
         m_list->setFixedHeight(h + m_list->horizontalScrollBar()->sizeHint().height() + 2 * m_list->frameWidth() + 2);
     } else {
-        cell = QSize(260, 240);
+        cell = QSize(260, 240 + (m_delegate->showPlaces ? OrganiseDelegate::kCaptionLine : 0));
     }
     if (cell != m_delegate->cell) {
         m_delegate->cell = cell;
@@ -629,6 +846,13 @@ void OrganiseView::resizeEvent(QResizeEvent *event)
     elideFolderLabel();
     updateCellSize();
     updatePreview();
+    m_placeScan->start();
+}
+
+void OrganiseView::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    m_placeScan->start();   // places not looked up while away
 }
 
 void OrganiseView::elideFolderLabel()
@@ -660,10 +884,12 @@ void OrganiseView::updatePreview()
         m_preview->setPixmap(scaled);
     }
     const QString run = m_session.runName(row);
+    const QString place = m_model->showPlaces ? m_model->places.value(placeKey(item)) : QString();
     m_previewCaption->setText(
-        QStringLiteral("<b>%1</b> · %2 · %3%4%5")
+        QStringLiteral("<b>%1</b> · %2 · %3%4%5%6")
             .arg(item.baseName.toHtmlEscaped(), item.kinds.join(QLatin1Char('+')),
                  QLocale().toString(item.taken, QLocale::LongFormat).toHtmlEscaped(),
+                 place.isEmpty() ? QString() : QStringLiteral(" · ") + place.toHtmlEscaped(),
                  run.isEmpty() ? tr(" · not named yet") : QStringLiteral(" · <b>%1</b>").arg(run.toHtmlEscaped()),
                  m_session.isRejected(row) ? tr(" · <span style='color:#c33'>reject</span>") : QString()));
 }
@@ -777,8 +1003,10 @@ void OrganiseView::showFullSize(int row)
         v.path = it.previewPath;
         v.title = it.baseName;
         const QString run = m_session.runName(i);
+        const QString place = m_model->showPlaces ? m_model->places.value(placeKey(it)) : QString();
         v.caption = it.baseName + QStringLiteral(" · ") + it.kinds.join(QLatin1Char('+'))
                     + QStringLiteral(" · ") + QLocale().toString(it.taken, QLocale::ShortFormat)
+                    + (place.isEmpty() ? QString() : QStringLiteral(" · ") + place)
                     + (run.isEmpty() ? QString() : QStringLiteral("\n") + run)
                     + (m_session.isRejected(i) ? tr("\nreject") : QString());
         items << v;

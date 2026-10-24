@@ -205,6 +205,9 @@ public:
     // The download folder last opened in the Organise view.
     QString organiseFolder() const;
     void setOrganiseFolder(const QString &path);
+    // Whether Organise shows each photo's place (looked up from its GPS).
+    bool organiseShowPlaces() const;
+    void setOrganiseShowPlaces(bool on);
 
     // The Getting Started guide: open it at start-up while the basics aren't
     // done; and the steps it can't see in the catalogue.

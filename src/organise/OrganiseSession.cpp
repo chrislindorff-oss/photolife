@@ -21,27 +21,53 @@ namespace pl::organise {
 
 namespace {
 
-QDateTime exifTaken(const scan::DiscoveredCapture &capture)
+// When the shot was taken and where, from its renditions' metadata: the
+// JPEG's EXIF first, then the RAW's. The RAW's GPS comes from LibRaw's own
+// parse -- the embedded JPEG's copy of it has garbled refs.
+struct Metadata
 {
+    QDateTime taken;
+    std::optional<double> latitude;
+    std::optional<double> longitude;
+};
+
+Metadata readMetadata(const scan::DiscoveredCapture &capture)
+{
+    Metadata m;
     for (const scan::DiscoveredFile &f : capture.files) {
         if (!f.isRaw) {
             const scan::ExifData exif = scan::readJpegExif(f.path);
-            if (exif.hasDate())
-                return exif.dateTimeOriginal;
+            if (!m.taken.isValid() && exif.hasDate())
+                m.taken = exif.dateTimeOriginal;
+            if (!m.latitude && exif.hasGps()) {
+                m.latitude = exif.latitude;
+                m.longitude = exif.longitude;
+            }
         }
     }
+    if (m.taken.isValid() && m.latitude)
+        return m;
     for (const scan::DiscoveredFile &f : capture.files) {
-        if (f.isRaw && raw::isAvailable()) {
+        if (!f.isRaw || !raw::isAvailable())
+            continue;
+        if (!m.taken.isValid()) {
             QByteArray bytes = raw::extractEmbeddedJpegBytes(f.path);
             QBuffer buffer(&bytes);
             if (buffer.open(QIODevice::ReadOnly)) {
                 const scan::ExifData exif = scan::readJpegExif(buffer);
                 if (exif.hasDate())
-                    return exif.dateTimeOriginal;
+                    m.taken = exif.dateTimeOriginal;
+            }
+        }
+        if (!m.latitude) {
+            const raw::RawGps gps = raw::extractGps(f.path);
+            if (gps.latitude && gps.longitude) {
+                m.latitude = gps.latitude;
+                m.longitude = gps.longitude;
             }
         }
     }
-    return {};
+    return m;
 }
 
 QString folded(const QString &name)
@@ -97,8 +123,11 @@ QList<Item> OrganiseSession::scanFolder(const QString &folder,
             item.previewPath = item.files.first();
         item.size = files.isEmpty() ? 0 : files.first().size;
         item.mtime = files.isEmpty() ? 0 : files.first().mtime;
-        item.taken = exifTaken(c);
+        const Metadata meta = readMetadata(c);
+        item.taken = meta.taken;
         item.takenFromExif = item.taken.isValid();
+        item.latitude = meta.latitude;
+        item.longitude = meta.longitude;
         if (!item.taken.isValid())
             item.taken = QDateTime::fromSecsSinceEpoch(item.mtime);
         items << item;

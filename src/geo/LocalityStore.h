@@ -4,6 +4,8 @@
 #include <QPair>
 #include <QString>
 
+#include <optional>
+
 namespace pl::geo {
 
 // The geocode_cache table: reverse-geocoded localities keyed by GPS
@@ -19,6 +21,10 @@ public:
     // that's a real result meaning nothing was found for that point, so it
     // isn't looked up again. Returns false on error (see error()).
     bool upsertLocality(double lat, double lon, const QString &locality);
+
+    // The cached locality for (lat, lon), rounded the same way; nullopt when
+    // it hasn't been looked up (an empty string means "nothing there").
+    std::optional<QString> lookup(double lat, double lon) const;
 
     // Distinct (rounded lat, rounded lon) pairs among captures with GPS that
     // have no cache entry yet -- the fetch work list, one entry per distinct

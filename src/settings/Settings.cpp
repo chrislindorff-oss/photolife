@@ -589,6 +589,16 @@ void Settings::setOrganiseFolder(const QString &path)
     m_settings.setValue(QStringLiteral("organise/folder"), path);
 }
 
+bool Settings::organiseShowPlaces() const
+{
+    return m_settings.value(QStringLiteral("organise/showPlaces"), false).toBool();
+}
+
+void Settings::setOrganiseShowPlaces(bool on)
+{
+    m_settings.setValue(QStringLiteral("organise/showPlaces"), on);
+}
+
 QString Settings::contactSheetFolder() const
 {
     return m_settings.value(QLatin1String(kContactSheetFolder)).toString();

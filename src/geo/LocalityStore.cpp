@@ -38,12 +38,31 @@ bool LocalityStore::upsertLocality(double lat, double lon, const QString &locali
                   .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));
     q.addBindValue(rounded(lat));
     q.addBindValue(rounded(lon));
-    q.addBindValue(locality);
+    // Never NULL: an empty result is still a result (the column is NOT NULL).
+    q.addBindValue(locality.isNull() ? QStringLiteral("") : locality);
     if (!q.exec()) {
         m_error = q.lastError().text();
         return false;
     }
     return true;
+}
+
+std::optional<QString> LocalityStore::lookup(double lat, double lon) const
+{
+    m_error.clear();
+
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral(
+        "SELECT locality FROM geocode_cache WHERE lat_round = ? AND lon_round = ?"));
+    q.addBindValue(rounded(lat));
+    q.addBindValue(rounded(lon));
+    if (!q.exec()) {
+        m_error = q.lastError().text();
+        return std::nullopt;
+    }
+    if (!q.next())
+        return std::nullopt;
+    return q.value(0).toString();
 }
 
 QList<QPair<double, double>> LocalityStore::coordinatesNeedingLookup() const

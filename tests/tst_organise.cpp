@@ -7,6 +7,9 @@
 #include <QImage>
 #include <QTemporaryDir>
 
+#include "db/Database.h"
+#include "geo/LocalityStore.h"
+#include "inat/ExifWriter.h"
 #include "organise/OrganiseMover.h"
 #include "organise/OrganiseSession.h"
 
@@ -63,6 +66,8 @@ class TestOrganise : public QObject
 private slots:
     void scanGroupsPairsAndSidecarsInShootingOrder();
     void scanReportsPhotoProgress();
+    void scanReadsGps();
+    void localityLookupUsesTheSameRounding();
     void runsRejectsAndMergedNames();
     void namingCanEndAndResume();
     void progressIsKeptAndRecognisesTheShots();
@@ -114,6 +119,45 @@ void TestOrganise::scanReportsPhotoProgress()
 
     QCOMPARE(items.size(), 2);
     QCOMPARE(progress, (QList<QPair<int, int>>{{0, 0}, {0, 2}, {1, 2}, {2, 2}}));
+}
+
+void TestOrganise::scanReadsGps()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.jpg"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0002.jpg"), 2000);
+    pl::inat::ExifFields fields;
+    fields.latitude = -35.27512;
+    fields.longitude = 149.12843;
+    QString error;
+    QVERIFY2(pl::inat::writeExif(dir.filePath(QStringLiteral("DSC_0001.jpg")), fields, &error),
+             qPrintable(error));
+
+    QList<Item> items = OrganiseSession::scanFolder(tmp.path());
+    QCOMPARE(items.size(), 2);
+    // (Writing the EXIF changed its file time, so sort by name.)
+    std::sort(items.begin(), items.end(), [](const Item &a, const Item &b) { return a.baseName < b.baseName; });
+    QVERIFY(items.at(0).hasGps());
+    QVERIFY(std::abs(*items.at(0).latitude - -35.27512) < 1e-4);
+    QVERIFY(std::abs(*items.at(0).longitude - 149.12843) < 1e-4);
+    QVERIFY(!items.at(1).hasGps());
+}
+
+void TestOrganise::localityLookupUsesTheSameRounding()
+{
+    QTemporaryDir tmp;
+    pl::Database db;
+    QVERIFY(db.open(QDir(tmp.path()).filePath(QStringLiteral("catalogue.sqlite"))));
+    pl::geo::LocalityStore store(db.connectionName());
+    QVERIFY(!store.lookup(-35.275, 149.128).has_value());
+    QVERIFY(store.upsertLocality(-35.27512, 149.12843, QStringLiteral("Canberra, ACT, Australia")));
+    // Within the same ~100 m square: found; further away: not.
+    QCOMPARE(store.lookup(-35.2749, 149.1281).value_or(QString()), QStringLiteral("Canberra, ACT, Australia"));
+    QVERIFY(!store.lookup(-35.29, 149.13).has_value());
+    // "Nothing there" is a result too.
+    QVERIFY(store.upsertLocality(-40.0, 150.0, QString()));
+    QCOMPARE(store.lookup(-40.0, 150.0).value_or(QStringLiteral("missing")), QString());
 }
 
 void TestOrganise::runsRejectsAndMergedNames()
