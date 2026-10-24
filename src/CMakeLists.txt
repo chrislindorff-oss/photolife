@@ -118,6 +118,7 @@ qt_add_library(photolife_core STATIC
     ui/LibraryFoldersDialog.h ui/LibraryFoldersDialog.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
     ui/OrganiseView.h       ui/OrganiseView.cpp
+    ui/GettingStartedPanel.h ui/GettingStartedPanel.cpp
     ui/ManageCataloguesDialog.h ui/ManageCataloguesDialog.cpp
     ui/MapView.h            ui/MapView.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
@@ -249,6 +250,21 @@ qt_add_resources(photolife_core "photolife_help"
     FILES
         "${CMAKE_SOURCE_DIR}/resources/help/help.html"
         "${CMAKE_SOURCE_DIR}/resources/help/catalogues.png"
+)
+
+# The Getting Started panel's diagrams (drawn in docs/diagrams/guide).
+qt_add_resources(photolife_core "photolife_guide"
+    PREFIX "/"
+    BASE "${CMAKE_SOURCE_DIR}/resources"
+    FILES
+        "${CMAKE_SOURCE_DIR}/resources/guide/flow.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/library.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/tree.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/match.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/review.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/explore.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/inat.png"
+        "${CMAKE_SOURCE_DIR}/resources/guide/organise.png"
 )
 
 # Application-wide QSS theme (see src/ui/Theme.cpp, which loads this at

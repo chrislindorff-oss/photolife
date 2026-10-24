@@ -51,6 +51,7 @@
 #include "ui/PhotosOnComputerDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/ExportDialog.h"
+#include "ui/GettingStartedPanel.h"
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
 #include "ui/InatCoordinateConfirmDialog.h"
@@ -85,6 +86,8 @@
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QScreen>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -311,6 +314,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     buildCentralWidget();
     applyCaptionFields(m_app.settings().captureCaptionFields());
     buildReferenceTreeDock();
+    buildGuideDock();
     restoreLayout();
 
     connect(m_builder, &taxonomy::ProjectBuilder::progress, this,
@@ -742,6 +746,11 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         refreshCoverageNow();
     buildCatalogueCorner();
     setupSync();
+
+    // New to PhotoLife (no library or no tree yet): the Getting Started
+    // guide opens by itself -- whatever the saved window layout says.
+    if (m_app.settings().guideShowAtStartup() && GettingStartedPanel::basicsMissing(guideState()))
+        showGuide();
 }
 
 bool MainWindow::hasAustralianTree() const
@@ -947,6 +956,9 @@ void MainWindow::buildFileMenu(QMenu *fileMenu)
         }
     });
     fileMenu->addAction(tr("&Manage Catalogues…"), this, &MainWindow::showCatalogueSettings);
+    fileMenu->addSeparator();
+    fileMenu->addAction(tr("&Getting Started…"), this, [this] { showGuide(); })
+        ->setToolTip(tr("A step-by-step guide to setting up PhotoLife"));
 
 
     fileMenu->addSeparator();
@@ -1138,6 +1150,30 @@ void MainWindow::buildMatchingMenu(QMenu *matchingMenu)
 void MainWindow::buildOrganiseMenu(QMenu *menu)
 {
     // Like buildInatMenu(): m_organiseView is built later, in buildCentralWidget().
+    // Back to the folder being organised, as it was left -- or, after a restart,
+    // the last one opened (its names and rejects are saved in the folder).
+    QAction *resume = menu->addAction(tr("&Continue Organising"), this, [this] {
+        m_viewOrganiseAction->setChecked(true);
+        if (m_organiseView->folder().isEmpty()) {
+            const QString last = m_app.settings().organiseFolder();
+            if (!last.isEmpty() && QFileInfo(last).isDir())
+                m_organiseView->openFolder(last);
+        }
+    });
+    resume->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O));
+    connect(menu, &QMenu::aboutToShow, this, [this, resume] {
+        QString folder = m_organiseView ? m_organiseView->folder() : QString();
+        if (folder.isEmpty())
+            folder = m_app.settings().organiseFolder();
+        const bool there = !folder.isEmpty() && QFileInfo(folder).isDir();
+        resume->setEnabled(there);
+        resume->setText(there ? tr("&Continue Organising \u201c%1\u201d").arg(QFileInfo(folder).fileName())
+                              : tr("&Continue Organising"));
+        resume->setToolTip(there ? QDir::toNativeSeparators(folder)
+                                 : tr("No download folder has been opened yet."));
+    });
+    menu->setToolTipsVisible(true);
+    menu->addSeparator();
     menu->addAction(tr("&Open Download Folder…"), this, [this] {
         m_viewOrganiseAction->setChecked(true);
         m_organiseView->chooseFolder();
@@ -1178,6 +1214,7 @@ void MainWindow::buildHelpMenu(QMenu *helpMenu)
     QAction *helpContents = helpMenu->addAction(
         tr("%1 &Help").arg(QString::fromLatin1(kAppName)), this, &MainWindow::showHelp);
     helpContents->setShortcut(QKeySequence::HelpContents);
+    helpMenu->addAction(tr("&Getting Started…"), this, [this] { showGuide(); });
     helpMenu->addSeparator();
     QAction *checkUpdate = helpMenu->addAction(tr("Check for &Updates…"), this, [this] {
         auto &checker = m_app.updateChecker();
@@ -1957,6 +1994,7 @@ void MainWindow::applyCaptionFields(int fields)
 
 void MainWindow::updateReviewTabText()
 {
+    scheduleGuideRefresh();
     const int n = m_reviewPane->queueCount();
     m_viewReviewAction->setText(n > 0 ? tr("&Review Unmatched (%1)").arg(n) : tr("&Review Unmatched"));
 }
@@ -2740,6 +2778,7 @@ void MainWindow::importLightroom()
 
 void MainWindow::reloadProjectList()
 {
+    scheduleGuideRefresh();
     const int previous = m_projectCombo->currentData().isValid()
                              ? m_projectCombo->currentData().toInt()
                              : -1;
@@ -3429,9 +3468,20 @@ void MainWindow::buildCentralWidget()
     m_emptyHint->setAlignment(Qt::AlignCenter);
     m_emptyHint->setWordWrap(true);
     m_emptyHint->setEnabled(false);
+    // New to PhotoLife: the guide, right where there's nothing yet.
+    m_emptyGuideButton = new QPushButton(tr("Getting Started Guide"), this);
+    m_emptyGuideButton->setToolTip(tr("Step-by-step help setting up PhotoLife"));
+    connect(m_emptyGuideButton, &QPushButton::clicked, this, [this] { showGuide(); });
+    auto *emptyPage = new QWidget(this);
+    auto *emptyLayout = new QVBoxLayout(emptyPage);
+    emptyLayout->addStretch(1);
+    emptyLayout->addWidget(m_emptyHint);
+    emptyLayout->addSpacing(8);
+    emptyLayout->addWidget(m_emptyGuideButton, 0, Qt::AlignHCenter);
+    emptyLayout->addStretch(1);
 
     m_photoStack = new QStackedWidget(this);
-    m_photoStack->addWidget(m_emptyHint);   // index 0
+    m_photoStack->addWidget(emptyPage);     // index 0
     m_photoStack->addWidget(m_grid);        // index 1
 
     m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), m_app.inat(),
@@ -3497,6 +3547,8 @@ void MainWindow::buildCentralWidget()
     connect(m_organiseView, &OrganiseView::statusMessage, this,
             [this](const QString &text, int ms) { statusBar()->showMessage(text, ms); });
     connect(m_organiseView, &OrganiseView::organised, this, [this](const QString &folder) {
+        m_app.settings().setGuideOrganised(true);
+        scheduleGuideRefresh();
         // Inside the library: catalogue the new folders (their names match).
         const QString clean = QDir::cleanPath(folder);
         for (const QString &root : m_app.settings().watchedRoots()) {
@@ -4585,6 +4637,7 @@ void MainWindow::cancelInatPipeline()
 
 void MainWindow::finishInatPipeline(const QString &message)
 {
+    scheduleGuideRefresh();
     if (m_inatPipelineActive) {
         m_inatPipelineActive = false;
         m_inatPipelineCancelled = false;
@@ -4635,20 +4688,24 @@ void MainWindow::updateEmptyState()
     if (count > 0) {
         stack->setCurrentIndex(1);
     } else if (filtered) {
+        m_emptyGuideButton->hide();
         m_emptyHint->setText(tr("No captures match this filter."));
         stack->setCurrentIndex(0);
     } else {
         const bool haveRoots = !m_app.settings().watchedRoots().isEmpty();
         m_emptyHint->setText(haveRoots
                                  ? tr("No photos catalogued yet. Rescan the library to import them.")
-                                 : tr("Add a folder of photos to start building your library."));
+                                 : tr("Add a folder of photos to start building your library — "
+                                      "or let the guide take you through setting PhotoLife up."));
         stack->setCurrentIndex(0);
+        m_emptyGuideButton->setVisible(true);
     }
 
     m_statusLabel->setText(count > 0
                                ? tr("%n capture(s)%1", nullptr, count)
                                      .arg(filtered ? tr(" (filtered)") : QString())
                                : QString());
+    scheduleGuideRefresh();
 }
 
 void MainWindow::addWatchedFolder()
@@ -4856,10 +4913,15 @@ void MainWindow::onScanFinished(const scan::ScanSummary &summary)
 void MainWindow::restoreLayout()
 {
     const QByteArray geometry = m_app.settings().mainWindowGeometry();
-    if (geometry.isEmpty())
-        resize(1100, 760);
-    else
+    if (geometry.isEmpty()) {
+        // First run: most of the screen, so the side panels -- the Getting
+        // Started guide among them -- have room beside the photos.
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        const QRect avail = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 800);
+        resize(std::max(1100, avail.width() * 9 / 10), std::max(760, avail.height() * 9 / 10));
+    } else {
         restoreGeometry(geometry);
+    }
 
     const QByteArray state = m_app.settings().mainWindowState();
     if (!state.isEmpty())
@@ -4907,9 +4969,140 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 void MainWindow::showHelp()
 {
+    showHelpAt({});
+}
+
+void MainWindow::showHelpAt(const QString &anchor)
+{
     if (!m_helpWindow)
         m_helpWindow = new HelpWindow(this);
-    m_helpWindow->showPage();
+    m_helpWindow->showPage(anchor);
+}
+
+// --- Getting Started guide ----------------------------------------------------
+
+void MainWindow::buildGuideDock()
+{
+    m_guide = new GettingStartedPanel(this);
+    m_guideDock = new QDockWidget(tr("Getting Started"), this);
+    m_guideDock->setObjectName(QStringLiteral("gettingStartedDock"));   // saved with the layout
+    m_guideDock->setWidget(m_guide);
+    m_guideDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+    addDockWidget(Qt::RightDockWidgetArea, m_guideDock);
+    m_guideDock->hide();
+    m_guide->setShowAtStartup(m_app.settings().guideShowAtStartup());
+
+    m_guideRefresh = new QTimer(this);
+    m_guideRefresh->setSingleShot(true);
+    m_guideRefresh->setInterval(250);
+    connect(m_guideRefresh, &QTimer::timeout, this, [this] {
+        if (m_guideDock->isVisible())
+            m_guide->setState(guideState());
+    });
+    connect(m_guideDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+        if (!visible)
+            return;
+        scheduleGuideRefresh();
+        // Wide enough for its pictures, once it's really on screen (a resize
+        // asked for before then is lost).
+        QTimer::singleShot(0, this, [this] {
+            if (m_guideDock->isVisible() && !m_guideDock->isFloating() && m_guideDock->width() < 380)
+                resizeDocks({m_guideDock}, {420}, Qt::Horizontal);
+        });
+    });
+    connect(m_guide, &GettingStartedPanel::actionRequested, this, &MainWindow::onGuideAction);
+    connect(m_guide, &GettingStartedPanel::helpRequested, this, &MainWindow::showHelpAt);
+    connect(m_guide, &GettingStartedPanel::showAtStartupChanged, this,
+            [this](bool on) { m_app.settings().setGuideShowAtStartup(on); });
+    connect(m_guide, &GettingStartedPanel::hideRequested, m_guideDock, &QWidget::hide);
+}
+
+void MainWindow::showGuide()
+{
+    if (!m_guideDock)
+        return;
+    m_guideDock->show();
+    m_guideDock->raise();
+    m_guide->setState(guideState());
+}
+
+void MainWindow::scheduleGuideRefresh()
+{
+    if (m_guideRefresh)
+        m_guideRefresh->start();
+}
+
+GuideState MainWindow::guideState()
+{
+    GuideState s;
+    auto &settings = m_app.settings();
+    s.folders = int(settings.watchedRoots().size());
+    if (m_app.database().isOpen()) {
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        auto count = [&q](const char *sql) {
+            return q.exec(QLatin1String(sql)) && q.next() ? q.value(0).toInt() : 0;
+        };
+        s.photos = count("SELECT COUNT(*) FROM capture");
+        s.matched = count("SELECT COUNT(DISTINCT capture_id) FROM capture_match WHERE taxon_id IS NOT NULL");
+        s.inatPhotos = count("SELECT COUNT(*) FROM capture WHERE inat_observation_id IS NOT NULL");
+        if (q.exec(QStringLiteral("SELECT name FROM project ORDER BY name"))) {
+            while (q.next())
+                s.treeNames << q.value(0).toString();
+        }
+    }
+    s.trees = int(s.treeNames.size());
+    s.toReview = m_reviewPane ? m_reviewPane->queueCount() : 0;
+    s.exploredCoverage = settings.guideExploredCoverage();
+    s.inatUser = settings.inatUsername();
+    s.organised = settings.guideOrganised();
+    s.server = settings.syncEnabled();
+    s.editable = m_app.catalogueEditable();
+    return s;
+}
+
+// A guide button: the same thing as the menu item it stands for.
+void MainWindow::onGuideAction(int step, int which)
+{
+    using G = GettingStartedPanel;
+    switch (step) {
+    case G::Library:
+        addWatchedFolder();
+        break;
+    case G::Tree:
+        if (which == 1)
+            importReferenceTree();
+        else
+            newReferenceTree();
+        break;
+    case G::Match:
+        startMatch();
+        break;
+    case G::Review:
+        m_viewReviewAction->setChecked(true);
+        break;
+    case G::Explore:
+        m_viewTreeAction->setChecked(true);
+        m_app.settings().setGuideExploredCoverage(true);
+        if (m_projectCombo->count() > 0 && m_projectCombo->currentIndex() < 0)
+            m_projectCombo->setCurrentIndex(0);
+        statusBar()->showMessage(tr("Pick a tree in the Reference Trees panel on the left, then a taxon in "
+                                    "it, to see your photos and what's still to find."),
+                                 10000);
+        break;
+    case G::Inat:
+        m_viewInatAction->setChecked(true);
+        m_inatView->showDownloadPage();
+        if (m_app.settings().inatUsername().isEmpty())
+            m_inatView->accountBar()->focusUsername();
+        break;
+    case G::Organise:
+        m_viewOrganiseAction->setChecked(true);
+        m_organiseView->chooseFolder();
+        break;
+    default:
+        break;
+    }
+    scheduleGuideRefresh();
 }
 
 void MainWindow::showAbout()
@@ -6285,6 +6478,7 @@ bool MainWindow::ensureCanEdit()
 
 void MainWindow::applyEditability()
 {
+    scheduleGuideRefresh();
     const bool editable = m_app.catalogueEditable();
     m_reviewPane->setReadOnly(!editable);
     updateSyncStatus();

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Getting Started guide diagram, written by make_svgs.py. Rendered to resources/guide/tree.png: see ../README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="400" viewBox="0 0 560 200">
+<style>
+  text { font-family: "Noto Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #1f2933; }
+  .t { font-size: 13px; font-weight: 600; }
+  .s { font-size: 11px; fill: #52606d; }
+  .w { fill: #ffffff; font-size: 12px; font-weight: 700; }
+  .num { fill: #ffffff; font-size: 13px; font-weight: 700; }
+</style>
+<rect x="1" y="1" width="558" height="198" rx="14" fill="#f6f9f7" stroke="#d6e2da" stroke-width="2"/>
+<rect x="20" y="40" width="160" height="110" rx="10" fill="#ffffff" stroke="#3b6fb6" stroke-width="2"/><text x="100" y="64" text-anchor="middle" class="t">Group: Orchids</text><text x="100" y="86" text-anchor="middle" class="t">Region: Victoria</text><path d="M100 132 c-7 -9 -9 -12 -9 -15 a9 9 0 0 1 18 0 c0 3 -2 6 -9 15z" fill="#c0392b"/><text x="100" y="168" text-anchor="middle" class="s">from iNaturalist</text><line x1="190" y1="95" x2="236" y2="95" stroke="#7b8794" stroke-width="2.5" stroke-linecap="round"/><polygon points="236,95 227.9,98.9 227.9,91.1" fill="#7b8794"/><path d="M262 36 v104 M262 64 h70 M262 88 h70 M262 112 h70 M262 136 h70" stroke="#9aa5b1" stroke-width="2" fill="none"/><circle cx="262" cy="30" r="7" fill="#2e7d4f"/><text x="276" y="34" class="t">Orchidaceae</text><circle cx="340" cy="64" r="7" fill="#2e7d4f" stroke="#2e7d4f" stroke-width="2"/><text x="352" y="68" class="s">Diuris pardina</text><circle cx="340" cy="88" r="7" fill="#ffffff" stroke="#2e7d4f" stroke-width="2"/><text x="352" y="92" class="s">Diuris sulphurea</text><circle cx="340" cy="112" r="7" fill="#2e7d4f" stroke="#2e7d4f" stroke-width="2"/><text x="352" y="116" class="s">Caladenia carnea</text><circle cx="340" cy="136" r="7" fill="#ffffff" stroke="#2e7d4f" stroke-width="2"/><text x="352" y="140" class="s">Caladenia …</text><text x="262" y="168" text-anchor="start" class="s">every species recorded there —</text><text x="262" y="184" text-anchor="start" class="s">filled = you have a photo of it</text></svg>

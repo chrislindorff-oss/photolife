@@ -206,6 +206,15 @@ public:
     QString organiseFolder() const;
     void setOrganiseFolder(const QString &path);
 
+    // The Getting Started guide: open it at start-up while the basics aren't
+    // done; and the steps it can't see in the catalogue.
+    bool guideShowAtStartup() const;
+    void setGuideShowAtStartup(bool on);
+    bool guideExploredCoverage() const;
+    void setGuideExploredCoverage(bool on);
+    bool guideOrganised() const;
+    void setGuideOrganised(bool on);
+
 private:
     // The active server's id, or empty for the Local catalogue.
     QString activeServerId() const;

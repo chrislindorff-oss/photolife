@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Getting Started guide diagram, written by make_svgs.py. Rendered to resources/guide/match.png: see ../README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="400" viewBox="0 0 560 200">
+<style>
+  text { font-family: "Noto Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #1f2933; }
+  .t { font-size: 13px; font-weight: 600; }
+  .s { font-size: 11px; fill: #52606d; }
+  .w { fill: #ffffff; font-size: 12px; font-weight: 700; }
+  .num { fill: #ffffff; font-size: 13px; font-weight: 700; }
+</style>
+<rect x="1" y="1" width="558" height="198" rx="14" fill="#f6f9f7" stroke="#d6e2da" stroke-width="2"/>
+<path d="M24 56 q0 -8 8 -8 h30.7 l8 8 h49.3 q8 0 8 8 v50 q0 8 -8 8 h-88 q-8 0 -8 -8 z" fill="#d08a1c" opacity="0.9"/><text x="72" y="134" text-anchor="middle" class="t">Flame Robin/</text><text x="72" y="152" text-anchor="middle" class="s">IMG_1234.jpg</text><line x1="140" y1="96" x2="200" y2="96" stroke="#7b8794" stroke-width="2.5" stroke-linecap="round"/><polygon points="200,96 191.9,99.9 191.9,92.1" fill="#7b8794"/><text x="170" y="84" text-anchor="middle" class="s">names</text><rect x="214" y="58" width="220" height="76" rx="10" fill="#ffffff" stroke="#2e7d4f" stroke-width="2"/><text x="234" y="86" class="t">Petroica phoenicea</text><text x="234" y="106" class="s">Flame Robin · species</text><circle cx="412" cy="82" r="9" fill="#2e7d4f"/><path d="M408 82 l3 3 l5 -6" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="214" y="160" text-anchor="start" class="s">Folder and file names (scientific or common) are</text><text x="214" y="176" text-anchor="start" class="s">matched automatically; unsure ones wait for you</text></svg>

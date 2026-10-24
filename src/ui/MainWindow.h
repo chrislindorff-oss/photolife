@@ -92,6 +92,8 @@ struct SavedFile;
 
 class CoveragePanel;
 class HelpWindow;
+class GettingStartedPanel;
+struct GuideState;
 class ImageViewer;
 class InatToolsView;
 class OrganiseView;
@@ -124,6 +126,18 @@ private:
     void restoreLayout();
     void showAbout();
     void showHelp();
+    void showHelpAt(const QString &anchor);
+
+    // --- the Getting Started guide ---
+    void buildGuideDock();
+    void showGuide();
+    GuideState guideState();
+    void scheduleGuideRefresh();
+    void onGuideAction(int step, int which);
+    QDockWidget *m_guideDock = nullptr;
+    GettingStartedPanel *m_guide = nullptr;
+    QPushButton *m_emptyGuideButton = nullptr;   // on the empty-library screen
+    QTimer *m_guideRefresh = nullptr;
     void showStorageUsage();
     void showCatalogueSettings();
 

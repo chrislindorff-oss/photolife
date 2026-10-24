@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Getting Started guide diagram, written by make_svgs.py. Rendered to resources/guide/explore.png: see ../README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="400" viewBox="0 0 560 200">
+<style>
+  text { font-family: "Noto Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #1f2933; }
+  .t { font-size: 13px; font-weight: 600; }
+  .s { font-size: 11px; fill: #52606d; }
+  .w { fill: #ffffff; font-size: 12px; font-weight: 700; }
+  .num { fill: #ffffff; font-size: 13px; font-weight: 700; }
+</style>
+<rect x="1" y="1" width="558" height="198" rx="14" fill="#f6f9f7" stroke="#d6e2da" stroke-width="2"/>
+<rect x="24" y="30" width="250" height="150" rx="10" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5"/><text x="38" y="58" class="t">Orchidaceae</text><text x="262" y="58" text-anchor="end" class="s">113 / 383</text><rect x="38" y="64" width="222" height="7" rx="3.5" fill="#e3efe7"/><rect x="38" y="64" width="65" height="7" rx="3.5" fill="#2e7d4f"/><text x="38" y="90" class="t">Caladenia</text><text x="262" y="90" text-anchor="end" class="s">41 / 120</text><rect x="38" y="96" width="222" height="7" rx="3.5" fill="#e3efe7"/><rect x="38" y="96" width="76" height="7" rx="3.5" fill="#2e7d4f"/><text x="38" y="122" class="t">Diuris</text><text x="262" y="122" text-anchor="end" class="s">18 / 30</text><rect x="38" y="128" width="222" height="7" rx="3.5" fill="#e3efe7"/><rect x="38" y="128" width="133" height="7" rx="3.5" fill="#2e7d4f"/><text x="38" y="154" class="t">Pterostylis</text><text x="262" y="154" text-anchor="end" class="s">30 / 95</text><rect x="38" y="160" width="222" height="7" rx="3.5" fill="#e3efe7"/><rect x="38" y="160" width="70" height="7" rx="3.5" fill="#2e7d4f"/><rect x="300" y="30" width="236" height="150" rx="10" fill="#e2ebf7" stroke="#9aa5b1" stroke-width="1.5"/><path d="M320 160 q40 -60 80 -40 t70 -50 t50 -30" stroke="#b9c9e0" stroke-width="10" fill="none" stroke-linecap="round"/><path d="M350 96 c-7 -9 -9 -12 -9 -15 a9 9 0 0 1 18 0 c0 3 -2 6 -9 15z" fill="#2e7d4f"/><path d="M420 118 c-7 -9 -9 -12 -9 -15 a9 9 0 0 1 18 0 c0 3 -2 6 -9 15z" fill="#2e7d4f"/><path d="M470 70 c-7 -9 -9 -12 -9 -15 a9 9 0 0 1 18 0 c0 3 -2 6 -9 15z" fill="#c0392b"/><path d="M392 64 c-7 -9 -9 -12 -9 -15 a9 9 0 0 1 18 0 c0 3 -2 6 -9 15z" fill="#2e7d4f"/><path d="M500 132 c-7 -9 -9 -12 -9 -15 a9 9 0 0 1 18 0 c0 3 -2 6 -9 15z" fill="#c0392b"/><text x="418" y="174" text-anchor="middle" class="s">map: green have · red still to find</text></svg>

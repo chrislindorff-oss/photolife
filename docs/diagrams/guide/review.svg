@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Getting Started guide diagram, written by make_svgs.py. Rendered to resources/guide/review.png: see ../README.md. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="400" viewBox="0 0 560 200">
+<style>
+  text { font-family: "Noto Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: #1f2933; }
+  .t { font-size: 13px; font-weight: 600; }
+  .s { font-size: 11px; fill: #52606d; }
+  .w { fill: #ffffff; font-size: 12px; font-weight: 700; }
+  .num { fill: #ffffff; font-size: 13px; font-weight: 700; }
+</style>
+<rect x="1" y="1" width="558" height="198" rx="14" fill="#f6f9f7" stroke="#d6e2da" stroke-width="2"/>
+<text x="96" y="36" text-anchor="middle" class="s">Your photo</text><text x="252" y="36" text-anchor="middle" class="s">iNaturalist reference</text><rect x="30" y="44" width="132" height="96" rx="3" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5"/><path d="M33 137 l39.6 -43.2 l26.4 24.0 l19.8 -14.4 l38.3 33.6 z" fill="#2e7d4f" opacity="0.75"/><circle cx="129.0" cy="72.8" r="11.5" fill="#d08a1c"/><rect x="186" y="44" width="132" height="96" rx="3" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5"/><path d="M189 137 l39.6 -43.2 l26.4 24.0 l19.8 -14.4 l38.3 33.6 z" fill="#3b6fb6" opacity="0.75"/><rect x="30" y="152" width="96" height="24" rx="6" fill="#2e7d4f"/><text x="78.0" y="168" text-anchor="middle" class="w">Confirm</text><rect x="136" y="152" width="80" height="24" rx="6" fill="#c0392b"/><text x="176.0" y="168" text-anchor="middle" class="w">Reject</text><rect x="226" y="152" width="92" height="24" rx="6" fill="#3b6fb6"/><text x="272.0" y="168" text-anchor="middle" class="w">Genus only</text><text x="350" y="70" text-anchor="start" class="s">Compare the two,</text><text x="350" y="86" text-anchor="start" class="s">pick the right taxon,</text><text x="350" y="102" text-anchor="start" class="s">and confirm.</text><text x="350" y="118" text-anchor="start" class="s"></text><text x="350" y="134" text-anchor="start" class="s">PhotoLife remembers</text><text x="350" y="150" text-anchor="start" class="s">the names you confirm.</text></svg>

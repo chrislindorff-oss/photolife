@@ -15,3 +15,21 @@ convert /tmp/catalogues.png -strip -define png:compression-level=9 resources/hel
 ```
 
 Run it from the repository root, then rebuild so the new image is compiled in.
+
+## Getting Started guide
+
+`guide/*.svg` are the pictures in the Getting Started panel (`resources/guide/*.png`, compiled
+in as `:/guide/...`). They're written by `guide/make_svgs.py` — edit that, not the SVGs — and
+rendered the same way, each at the size its `width`/`height` give (twice its layout):
+
+```sh
+cd docs/diagrams/guide && python3 make_svgs.py
+mkdir -p /tmp/ff-guide
+for f in *.svg; do
+  n=${f%.svg}
+  size=$(sed -n 's/.*<svg[^>]* width="\([0-9]*\)" height="\([0-9]*\)".*/\1,\2/p' "$f")
+  firefox --headless --no-remote --profile /tmp/ff-guide --window-size="$size" \
+      --screenshot "/tmp/$n.png" "file://$PWD/$f"
+  convert "/tmp/$n.png" -strip -define png:compression-level=9 "../../../resources/guide/$n.png"
+done
+```

@@ -549,6 +549,36 @@ void Settings::setContactSheetOptions(const collection::ContactSheetOptions &opt
                         QJsonDocument(options.toJson()).toJson(QJsonDocument::Compact));
 }
 
+bool Settings::guideShowAtStartup() const
+{
+    return m_settings.value(QStringLiteral("guide/showAtStartup"), true).toBool();
+}
+
+void Settings::setGuideShowAtStartup(bool on)
+{
+    m_settings.setValue(QStringLiteral("guide/showAtStartup"), on);
+}
+
+bool Settings::guideExploredCoverage() const
+{
+    return m_settings.value(QStringLiteral("guide/exploredCoverage"), false).toBool();
+}
+
+void Settings::setGuideExploredCoverage(bool on)
+{
+    m_settings.setValue(QStringLiteral("guide/exploredCoverage"), on);
+}
+
+bool Settings::guideOrganised() const
+{
+    return m_settings.value(QStringLiteral("guide/organised"), false).toBool();
+}
+
+void Settings::setGuideOrganised(bool on)
+{
+    m_settings.setValue(QStringLiteral("guide/organised"), on);
+}
+
 QString Settings::organiseFolder() const
 {
     return m_settings.value(QStringLiteral("organise/folder")).toString();
