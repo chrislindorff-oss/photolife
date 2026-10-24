@@ -12,6 +12,9 @@
 #include "ui/ImageViewer.h"
 #include "ui/Theme.h"
 
+#include <QFileInfo>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QDesktopServices>
@@ -136,6 +139,9 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     m_queueView->setUniformRowHeights(false);   // compact name-only headers, tall photo rows
     m_queueView->setIconSize(QSize(kQueueThumb, kQueueThumb));
     m_queueView->setMinimumWidth(320);
+    // Several photos can be picked (Ctrl/Shift-click) for matching with one
+    // iNaturalist observation; the form shows the current one.
+    m_queueView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(m_queueView->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this] { showCurrent(); });
     connect(m_queueView, &QAbstractItemView::doubleClicked, this,
@@ -153,6 +159,16 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     });
     connect(m_queueGroup, &QAbstractItemModel::modelReset, this,
             &ReviewPane::restoreGroupExpansion);
+    m_queueView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_queueView, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        const QModelIndex idx = m_queueView->indexAt(pos);
+        if (!idx.isValid() || m_queueGroup->isGroup(idx))
+            return;
+        // Right-click doesn't extend a selection: on a photo outside it, act on that alone.
+        if (!m_queueView->selectionModel()->isSelected(idx))
+            m_queueView->setCurrentIndex(idx);
+        photoMenu(idx, m_queueView->viewport()->mapToGlobal(pos));
+    });
 
     auto makePhoto = [this] {
         auto *lbl = new QLabel(this);
@@ -381,8 +397,55 @@ int ReviewPane::queueCount() const
     return m_queue->queueCount();   // total pending, ignoring the UI filter
 }
 
+void ReviewPane::photoMenu(const QModelIndex &leaf, const QPoint &globalPos)
+{
+    // The selected photos (the one clicked, when it isn't among them).
+    QModelIndexList leaves;
+    for (const QModelIndex &i : m_queueView->selectionModel()->selectedIndexes())
+        if (!m_queueGroup->isGroup(i))
+            leaves << i;
+    if (!leaves.contains(leaf))
+        leaves = {leaf};
+    QList<qint64> ids;
+    QStringList paths, names;
+    for (const QModelIndex &i : std::as_const(leaves)) {
+        const qint64 id = i.data(ReviewQueueModel::CaptureIdRole).toLongLong();
+        if (id <= 0)
+            continue;
+        ids << id;
+        paths << i.data(ReviewQueueModel::PreviewPathRole).toString();
+        // What it's filed under -- the name it was parsed from, else its
+        // folder's -- as MatchReviewer learns it on a confirm.
+        QString nameText = i.data(ReviewQueueModel::NameTextRole).toString();
+        if (nameText.isEmpty())
+            nameText = QFileInfo(i.data(ReviewQueueModel::FolderPathRole).toString()).fileName();
+        names << nameText;
+    }
+    if (ids.isEmpty())
+        return;
+    QMenu menu(this);
+    QAction *match = menu.addAction(
+        ids.size() > 1 ? tr("Attempt to Match %1 Photos with iNat Observation to Fetch Data…").arg(ids.size())
+                       : tr("Attempt to Match with iNat Observation to Fetch Data…"));
+    match->setToolTip(tr("Find your iNaturalist observation of this photo — its name there may "
+                         "have changed — and take its species and/or coordinates. Ctrl- or "
+                         "Shift-click to pick several photos of the same observation."));
+    connect(match, &QAction::triggered, this, [this, ids, paths, names] {
+        emit inatMatchRequested(ids, paths, names);   // the window checks it may edit
+    });
+    menu.addSeparator();
+    menu.addAction(tr("View Full Size"), this, [this, leaf] { openViewerAt(leaf); });
+    menu.exec(globalPos);
+}
+
 bool ReviewPane::eventFilter(QObject *watched, QEvent *event)
 {
+    if (watched == m_thumb && event->type() == QEvent::ContextMenu) {
+        const QModelIndex cur = m_queueView->currentIndex();
+        if (cur.isValid() && !m_queueGroup->isGroup(cur))
+            photoMenu(cur, static_cast<QContextMenuEvent *>(event)->globalPos());
+        return true;
+    }
     if (watched == m_thumb && event->type() == QEvent::MouseButtonDblClick) {
         openViewerAt(m_queueView->currentIndex());
         return true;

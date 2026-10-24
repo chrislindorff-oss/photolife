@@ -345,11 +345,19 @@ private:
         QString path;      // its preview file
         bool isRaw = false;
         bool hasGps = false;
+        QDate date;               // taken
+        qint64 taxonInatId = 0;   // its confirmed (or confident) species, 0 if none
     };
     void matchWithInatObservation(QListView *grid);
+    // From Review Unmatched: photos whose names are learnt for the species chosen.
+    void matchReviewPhotosWithInat(const QList<qint64> &captureIds, const QStringList &previewPaths,
+                                   const QStringList &nameTexts);
+    void matchTargetsWithInat(const QList<InatMatchTarget> &targets, bool learnAlias, const QString &photoName);
     int applyInatCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon, bool replace);
     void applyInatSpecies(const QList<InatMatchTarget> &targets, const taxonomy::Observation &observation,
-                          int located);
+                          int located, const QString &learnName, const QString &renameTo);
+    // Renames the photos' files for `name`; says what was done, for the status bar.
+    QString renameCapturesFromInat(const QList<InatMatchTarget> &targets, const QString &name);
     void removeMissingCaptures();
     void fixRawGeolocation();
     void fetchPhotoLocalities();

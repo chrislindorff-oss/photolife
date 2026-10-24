@@ -208,6 +208,14 @@ public:
     // Whether Organise shows each photo's place (looked up from its GPS).
     bool organiseShowPlaces() const;
     void setOrganiseShowPlaces(bool on);
+    // How near in time an iNaturalist observation must be to the photos it's
+    // matched with: 0 minutes, 1 hours, 2 a day either side.
+    int inatMatchWindow() const;
+    void setInatMatchWindow(int window);
+    // Renaming photos from an iNaturalist observation: with its common name
+    // (else its scientific name).
+    bool inatRenameWithCommonName() const;
+    void setInatRenameWithCommonName(bool on);
     // Whether Organise into Folders also renames the photos.
     bool organiseRenameOnOrganise() const;
     void setOrganiseRenameOnOrganise(bool on);

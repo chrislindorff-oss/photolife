@@ -31,6 +31,7 @@ private slots:
     void observationDerivesOriginalFromSquareUrl();
     void observationWithNoCoordinatesLeavesLatLonUnset();
     void observationParsesPlaceGuess();
+    void observationTimeIsTheLocalClock();
 };
 
 void TestINatParse::ancestrySplits()
@@ -210,6 +211,18 @@ void TestINatParse::observationParsesPlaceGuess()
 
     const auto withoutPlace = parseObservation(obj(R"({"id": 1, "taxon": {"id": 2}})"));
     QVERIFY(withoutPlace.placeGuess.isEmpty());
+}
+
+void TestINatParse::observationTimeIsTheLocalClock()
+{
+    // As the clock read where it was seen: the +10:00 isn't applied.
+    const auto timed = parseObservation(obj(
+        R"({"id": 1, "observed_on": "2020-06-14", "time_observed_at": "2020-06-14T10:23:51+10:00"})"));
+    QCOMPARE(timed.timeObserved.date(), QDate(2020, 6, 14));
+    QCOMPARE(timed.timeObserved.time(), QTime(10, 23, 51));
+
+    const auto dateOnly = parseObservation(obj(R"({"id": 1, "observed_on": "2020-06-14", "time_observed_at": null})"));
+    QVERIFY(!dateOnly.timeObserved.isValid());
 }
 
 QTEST_APPLESS_MAIN(TestINatParse)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDateTime>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -121,6 +122,9 @@ struct Observation
     QString taxonCommonName;
     QString taxonRank;
     QString observedOn;               // "YYYY-MM-DD", may be empty
+    // When, as the clock read where it was seen (the offset dropped, so it
+    // compares with a photo's EXIF time); invalid when only a date was given.
+    QDateTime timeObserved;
     std::optional<double> latitude;
     std::optional<double> longitude;
     QString placeGuess;               // iNat's own free-text place description, may be empty

@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QTimeZone>
 
 #include <limits>
 
@@ -152,6 +153,12 @@ pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
     pl::taxonomy::Observation o;
     o.id = optId(obj.value(QStringLiteral("id"))).value_or(0);
     o.observedOn = obj.value(QStringLiteral("observed_on")).toString();
+    // "2020-06-14T10:23:51+10:00", in the observation's own time zone: kept as
+    // that wall-clock time.
+    if (const QDateTime at = QDateTime::fromString(obj.value(QStringLiteral("time_observed_at")).toString(),
+                                                   Qt::ISODate);
+        at.isValid())
+        o.timeObserved = QDateTime(at.date(), at.time(), QTimeZone::utc());   // "UTC": no zone rules
     o.placeGuess = obj.value(QStringLiteral("place_guess")).toString();
 
     const QJsonObject taxon = obj.value(QStringLiteral("taxon")).toObject();

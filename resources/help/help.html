@@ -380,6 +380,19 @@ of alternatives, and a taxon search box. Then:</p>
   <li><b>Ignore Folder&hellip;</b> &mdash; marks a folder (and its subfolders) as not
       containing taxa at all &mdash; a place name or a staging/miscellany folder
       &mdash; and drops every pending photo in it from the queue in one go.</li>
+  <li><b>Attempt to Match with iNat Observation to Fetch Data&hellip;</b> (right-click a
+      photo in the list, or <i>Your photo</i>; Ctrl- or Shift-click first to pick several
+      photos of the same observation) &mdash; when a name won't match, perhaps
+      because iNaturalist has since renamed the species, find your own iNaturalist
+      observation of the photo and take its species and/or coordinates, as in the
+      library. It looks first at observations made within <b>10 minutes</b> of each
+      photo (iNaturalist usually takes an observation's time from its photo), read from
+      the photos' own EXIF time; <b>Taken within</b> widens it to 2 hours or a day either
+      side, and each choice shows how many it would find. Photos with no time are matched
+      by their date. The dialog shows the name the photo is filed under beside iNaturalist's;
+      taking the species confirms the photo and, as Confirm does, teaches PhotoLife
+      that name for it. Your photos are shown on the left of the dialog (its &larr; &rarr; buttons
+      step through several), beside your observations.</li>
 </ul>
 <p>Most of these have keyboard shortcuts &mdash; see <a href="#shortcuts">Keyboard
 shortcuts</a> &mdash; so you can work through a long queue without reaching for the
@@ -613,8 +626,13 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       which to apply to the selected photos. The species is set as a confirmed match.
       Coordinates are written into JPEG files' GPS data (RAW files keep them in
       PhotoLife's catalogue only), and photos that already have coordinates keep them
-      unless you tick <b>Also replace</b>. It needs your username in the iNaturalist
-      view.</li>
+      unless you tick <b>Also replace</b>. With the species you can also tick <b>Also
+      rename the photo files</b> and choose its common or scientific name: the name part
+      of each file name is replaced and the rest kept (<i>Wasp Gall 1 - Sailors Tk
+      14-6-2020 (1).JPG</i> becomes <i>Apiomorpha - Sailors Tk 14-6-2020 (1).JPG</i>), with
+      the RAW, JPEG and .xmp sidecar renamed together; a name already taken gets the next
+      number, and nothing is overwritten. Photos kept online only aren't renamed. It
+      needs your username in the iNaturalist view.</li>
 </ul>
 
 <h2 id="settings">Catalogue, appearance &amp; updates</h2>

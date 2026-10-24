@@ -599,6 +599,26 @@ void Settings::setOrganiseShowPlaces(bool on)
     m_settings.setValue(QStringLiteral("organise/showPlaces"), on);
 }
 
+int Settings::inatMatchWindow() const
+{
+    return m_settings.value(QStringLiteral("inat/matchWindow"), 0).toInt();
+}
+
+void Settings::setInatMatchWindow(int window)
+{
+    m_settings.setValue(QStringLiteral("inat/matchWindow"), window);
+}
+
+bool Settings::inatRenameWithCommonName() const
+{
+    return m_settings.value(QStringLiteral("inat/renameWithCommonName"), true).toBool();
+}
+
+void Settings::setInatRenameWithCommonName(bool on)
+{
+    m_settings.setValue(QStringLiteral("inat/renameWithCommonName"), on);
+}
+
 bool Settings::organiseRenameOnOrganise() const
 {
     return m_settings.value(QStringLiteral("organise/renameOnOrganise"), false).toBool();

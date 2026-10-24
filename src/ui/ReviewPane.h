@@ -70,6 +70,10 @@ public:
 signals:
     void queueChanged();   // a decision was applied; refresh coverage / other views
     void editRequested();
+    // "Match with iNat Observation…" on a photo: find its observation on
+    // iNaturalist (the name may have changed there) and take its data.
+    void inatMatchRequested(const QList<qint64> &captureIds, const QStringList &previewPaths,
+                            const QStringList &nameTexts);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -78,6 +82,7 @@ protected:
 private:
     void showCurrent();
     void openViewerAt(const QModelIndex &groupIndex);
+    void photoMenu(const QModelIndex &leaf, const QPoint &globalPos);
     void selectCapture(const QModelIndex &leaf);
     void restoreGroupExpansion();
     void collapseAllGroups();

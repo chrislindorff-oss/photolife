@@ -76,6 +76,7 @@ qt_add_library(photolife_core STATIC
     net/UpdateChecker.h     net/UpdateChecker.cpp
     raw/RawPreview.h        raw/RawPreview.cpp
     scan/CatalogueMaintenance.h scan/CatalogueMaintenance.cpp
+    scan/CaptureRenamer.h scan/CaptureRenamer.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp

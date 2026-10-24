@@ -26,6 +26,9 @@
 #include "net/PhotoCache.h"
 #include "net/TileCache.h"
 #include "net/UpdateChecker.h"
+#include "raw/RawPreview.h"
+#include "scan/CaptureRenamer.h"
+#include "scan/FileScanner.h"
 #include "scan/CatalogueMaintenance.h"
 #include "scan/Exif.h"
 #include "scan/LibraryWatcher.h"
@@ -73,6 +76,8 @@
 #include "ui/TaxonPickerDialog.h"
 #include "ui/Theme.h"
 
+#include <QTimeZone>
+#include <QBuffer>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -3210,7 +3215,82 @@ void MainWindow::removeSelectedCaptures(QListView *grid)
         tr("Removed %n photo(s) from the catalogue.", nullptr, removed), 6000);
 }
 
+// When a photo was taken, to the second, from its own EXIF (the catalogue
+// often has just the date its file name gives), else the catalogue's time.
+// Held as UTC: a clock reading, compared without zone rules.
+static QDateTime photoTakenAt(const QString &path, const QString &capturedOn)
+{
+    QDateTime when;
+    if (QFileInfo::exists(path)) {
+        if (!scan::FileScanner::rawExtensions().contains(QFileInfo(path).suffix().toLower())) {
+            when = scan::readJpegExif(path).dateTimeOriginal;
+        } else if (raw::isAvailable()) {
+            QByteArray bytes = raw::extractEmbeddedJpegBytes(path);
+            QBuffer buffer(&bytes);
+            if (buffer.open(QIODevice::ReadOnly))
+                when = scan::readJpegExif(buffer).dateTimeOriginal;
+        }
+    }
+    if (!when.isValid() && capturedOn.size() > 10)   // "YYYY-MM-DDTHH:MM..."
+        when = QDateTime::fromString(capturedOn.left(19), Qt::ISODate);
+    return when.isValid() ? QDateTime(when.date(), when.time(), QTimeZone::utc()) : QDateTime();
+}
+
 void MainWindow::matchWithInatObservation(QListView *grid)
+{
+    QList<InatMatchTarget> targets;
+    for (const QModelIndex &idx : grid->selectionModel()->selectedIndexes()) {
+        InatMatchTarget t;
+        t.captureId = idx.data(model::CaptureListModel::IdRole).toInt();
+        t.path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
+        t.isRaw = idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
+        t.hasGps = idx.data(model::CaptureListModel::HasGpsRole).toBool();
+        t.date = QDate::fromString(idx.data(model::CaptureListModel::CapturedOnRole).toString().left(10),
+                                   Qt::ISODate);
+        // An unreviewed guess doesn't count as having a species.
+        if (idx.data(model::CaptureListModel::MatchStatusRole).toString() != QLatin1String("pending"))
+            t.taxonInatId = idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong();
+        targets << t;
+    }
+    matchTargetsWithInat(targets, false, QString());
+}
+
+void MainWindow::matchReviewPhotosWithInat(const QList<qint64> &captureIds, const QStringList &previewPaths,
+                                           const QStringList &nameTexts)
+{
+    QList<InatMatchTarget> targets;
+    QStringList names;   // each once, as filed
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral("SELECT captured_on, latitude IS NOT NULL AND longitude IS NOT NULL "
+                             "FROM capture WHERE id = ?"));
+    for (int i = 0; i < captureIds.size(); ++i) {
+        InatMatchTarget t;
+        t.captureId = int(captureIds.at(i));
+        t.path = previewPaths.value(i);
+        t.isRaw = scan::FileScanner::rawExtensions().contains(QFileInfo(t.path).suffix().toLower());
+        q.addBindValue(captureIds.at(i));
+        if (q.exec() && q.next()) {
+            t.date = QDate::fromString(q.value(0).toString().left(10), Qt::ISODate);
+            t.hasGps = q.value(1).toBool();
+        }
+        targets << t;
+        if (!nameTexts.value(i).isEmpty() && !names.contains(nameTexts.value(i)))
+            names << nameTexts.value(i);
+    }
+    const bool anyDated = std::any_of(targets.cbegin(), targets.cend(),
+                                      [](const InatMatchTarget &t) { return t.date.isValid(); });
+    if (!anyDated) {
+        QMessageBox::information(this, tr("Match with iNat Observation"),
+                                 tr("%n photo(s) have no date taken, so their iNaturalist observation "
+                                    "can't be looked for.", nullptr, int(targets.size())));
+        return;
+    }
+    // Confirming them here teaches PhotoLife each photo's name, as Confirm does.
+    matchTargetsWithInat(targets, true, names.join(QStringLiteral("\u201d, \u201c")));
+}
+
+void MainWindow::matchTargetsWithInat(const QList<InatMatchTarget> &targets, bool learnAlias,
+                                      const QString &photoName)
 {
     const QString title = tr("Match with iNat Observation");
     const QString username = m_app.settings().inatUsername();
@@ -3228,36 +3308,64 @@ void MainWindow::matchWithInatObservation(QListView *grid)
     // it, the user's own obscured observations come back with true coordinates.
     m_app.inat().setAccessToken(m_app.settings().inatApiToken());
 
-    QList<InatMatchTarget> targets;
     InatObservationMatchDialog::Selection selection;
     QSet<qint64> taxa;
-    for (const QModelIndex &idx : grid->selectionModel()->selectedIndexes()) {
-        InatMatchTarget t;
-        t.captureId = idx.data(model::CaptureListModel::IdRole).toInt();
-        t.path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
-        t.isRaw = idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
-        t.hasGps = idx.data(model::CaptureListModel::HasGpsRole).toBool();
-        targets << t;
-        const QDate date = QDate::fromString(
-            idx.data(model::CaptureListModel::CapturedOnRole).toString().left(10), Qt::ISODate);
-        if (date.isValid()) {
-            selection.from = selection.from.isValid() ? std::min(selection.from, date) : date;
-            selection.to = selection.to.isValid() ? std::max(selection.to, date) : date;
+    for (const InatMatchTarget &t : targets) {
+        if (t.date.isValid()) {
+            selection.from = selection.from.isValid() ? std::min(selection.from, t.date) : t.date;
+            selection.to = selection.to.isValid() ? std::max(selection.to, t.date) : t.date;
         }
         selection.withGps += t.hasGps ? 1 : 0;
-        // An unreviewed guess doesn't count as having a species.
-        const bool pending = idx.data(model::CaptureListModel::MatchStatusRole).toString()
-                             == QLatin1String("pending");
-        taxa.insert(pending ? 0 : idx.data(model::CaptureListModel::MatchedTaxonInatIdRole).toLongLong());
+        taxa.insert(t.taxonInatId);
     }
     if (targets.isEmpty() || !selection.from.isValid())
         return;
     selection.photos = int(targets.size());
+    selection.photoName = photoName;
+    selection.preferCommonName = m_app.settings().inatRenameWithCommonName();
+    {
+        // One of them, to show what renaming would make of its name.
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        q.prepare(QStringLiteral("SELECT base_name, name_text FROM capture WHERE id = ?"));
+        q.addBindValue(targets.first().captureId);
+        if (q.exec() && q.next()) {
+            selection.sampleBaseName = q.value(0).toString();
+            selection.sampleNameText = q.value(1).toString();
+            selection.sampleExtension = QFileInfo(targets.first().path).suffix();
+        }
+        // The photos themselves, beside the observations, and when each was
+        // taken -- to the minute where it's known, to narrow the search.
+        QSqlQuery when(QSqlDatabase::database(m_app.database().connectionName(), false));
+        when.prepare(QStringLiteral("SELECT captured_on FROM capture WHERE id = ?"));
+        q.prepare(QStringLiteral("SELECT content_hash FROM rendition WHERE path = ?"));
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        for (const InatMatchTarget &t : targets) {
+            InatObservationMatchDialog::Selection::Photo photo;
+            photo.path = t.path;
+            photo.label = QFileInfo(t.path).fileName();
+            q.addBindValue(t.path);
+            if (q.exec() && q.next())
+                photo.contentHash = q.value(0).toString();
+            when.addBindValue(t.captureId);
+            photo.taken = photoTakenAt(t.path, when.exec() && when.next() ? when.value(0).toString() : QString());
+            if (photo.taken.isValid())
+                selection.times << photo.taken;
+            else if (t.date.isValid())
+                selection.untimedDates << t.date;
+            selection.shown << photo;
+        }
+        QApplication::restoreOverrideCursor();
+        selection.window = m_app.settings().inatMatchWindow();
+    }
     selection.anyNeedsSpecies = taxa.contains(0) || taxa.size() > 1;
     selection.currentTaxonInatId = taxa.size() == 1 ? *taxa.cbegin() : 0;
 
-    InatObservationMatchDialog dialog(m_app.inat(), m_app.photoCache(), username, selection, this);
-    if (dialog.exec() != QDialog::Accepted)
+    InatObservationMatchDialog dialog(m_app.inat(), m_app.photoCache(), username, selection, this,
+                                      &m_app.thumbnails());
+    const int accepted = dialog.exec();
+    if (!selection.times.isEmpty())   // the window chosen, when there was a choice
+        m_app.settings().setInatMatchWindow(dialog.window());
+    if (accepted != QDialog::Accepted)
         return;
     const std::optional<taxonomy::Observation> chosen = dialog.chosenObservation();
     if (!chosen)
@@ -3267,8 +3375,15 @@ void MainWindow::matchWithInatObservation(QListView *grid)
     if (dialog.applyCoordinates() && chosen->latitude && chosen->longitude)
         located = applyInatCoordinates(targets, *chosen->latitude, *chosen->longitude,
                                        dialog.replaceExistingCoordinates());
+    // Renaming goes with the species: done once it's set (and its old name
+    // learnt), after the coordinates were written into the files as named.
+    QString renameTo;
+    if (dialog.renameFiles()) {
+        m_app.settings().setInatRenameWithCommonName(dialog.renameWithCommonName());
+        renameTo = dialog.renameName();
+    }
     if (dialog.applySpecies() && chosen->taxonInatId > 0) {
-        applyInatSpecies(targets, *chosen, located);
+        applyInatSpecies(targets, *chosen, located, learnAlias ? photoName : QString(), renameTo);
         return;
     }
     statusBar()->showMessage(tr("Added coordinates to %n photo(s) from iNaturalist observation %1.",
@@ -3327,18 +3442,42 @@ int MainWindow::applyInatCoordinates(const QList<InatMatchTarget> &targets, doub
     return done;
 }
 
+QString MainWindow::renameCapturesFromInat(const QList<InatMatchTarget> &targets, const QString &name)
+{
+    scan::CaptureRenamer renamer(m_app.database().connectionName());
+    int renamed = 0;
+    QStringList failures;
+    for (const InatMatchTarget &t : targets) {
+        const scan::CaptureRenamer::Result r = renamer.rename(t.captureId, name);
+        if (r.renamed)
+            ++renamed;
+        else if (!r.error.isEmpty())
+            failures << QStringLiteral("%1: %2").arg(QFileInfo(t.path).completeBaseName(), r.error);
+    }
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, tr("Match with iNat Observation"),
+                             tr("%n photo(s) couldn't be renamed and keep their names:\n\n%1", nullptr,
+                                int(failures.size()))
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    return renamed > 0 ? tr("Renamed %n photo(s) \u201c%1\u201d.", nullptr, renamed).arg(name) : QString();
+}
+
 void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
-                                  const taxonomy::Observation &observation, int located)
+                                  const taxonomy::Observation &observation, int located,
+                                  const QString &learnName, const QString &renameTo)
 {
     const qint64 taxonId = observation.taxonInatId;
-    const auto confirmAll = [this, targets, observation, located] {
+    const auto confirmAll = [this, targets, observation, located, learnName, renameTo] {
         match::MatchReviewer reviewer(m_app.database().connectionName());
         int named = 0;
         for (const InatMatchTarget &t : targets) {
-            // No alias: the photo's file or folder name didn't give this species.
-            if (reviewer.confirm(t.captureId, observation.taxonInatId, false))
+            // An alias only when asked (from Review Unmatched, as Confirm
+            // there does): in the library the photo's file or folder name
+            // didn't give this species.
+            if (reviewer.confirm(t.captureId, observation.taxonInatId, !learnName.isEmpty()))
                 ++named;
         }
+        const QString renameNote = renameTo.isEmpty() ? QString() : renameCapturesFromInat(targets, renameTo);
         m_taxonModel->reload();
         m_model->reload();
         m_bestShotModel->reload();
@@ -3354,7 +3493,12 @@ void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
         QString message = tr("Set %n photo(s) to %1", nullptr, named).arg(species);
         if (located > 0)
             message += tr(" and added coordinates to %n", nullptr, located);
-        statusBar()->showMessage(message + tr(", from iNaturalist observation %1.").arg(observation.id), 8000);
+        message += tr(", from iNaturalist observation %1.").arg(observation.id);
+        if (!learnName.isEmpty() && named > 0)
+            message += QStringLiteral(" ") + tr("\u201c%1\u201d will now be recognised as %2.").arg(learnName, species);
+        if (!renameNote.isEmpty())
+            message += QStringLiteral(" ") + renameNote;
+        statusBar()->showMessage(message, 10000);
     };
     // Already known here: straight on.
     if (m_app.taxonomyStore().taxonLocalId(taxonId)) {
@@ -3584,6 +3728,7 @@ void MainWindow::buildCentralWidget()
 
     m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), m_app.inat(),
                                   m_app.photoCache(), this);
+    connect(m_reviewPane, &ReviewPane::inatMatchRequested, this, &MainWindow::matchReviewPhotosWithInat);
     connect(m_reviewPane, &ReviewPane::queueChanged, this, [this] {
         m_model->reload();
         if (m_bestShotModel)
