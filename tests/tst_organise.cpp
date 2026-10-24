@@ -72,6 +72,8 @@ private slots:
     void namingCanEndAndResume();
     void progressIsKeptAndRecognisesTheShots();
     void organiseAndUndo();
+    void renamedBaseNames();
+    void organiseRenamesShotsTogetherAndUndoPutsNamesBack();
     void neverOverwrites();
     void undoTakesBackOneWholeOrganiseAtATime();
 };
@@ -276,6 +278,66 @@ void TestOrganise::organiseAndUndo()
     QVERIFY(!dir.exists(QStringLiteral("Flame Robin")));   // made by it, empty again
     QVERIFY(!dir.exists(QStringLiteral("Rejects")));
     QVERIFY(!OrganiseMover::canUndo(tmp.path()));
+}
+
+void TestOrganise::renamedBaseNames()
+{
+    const QDateTime taken(QDate(2025, 10, 18), QTime(9, 30));
+    QCOMPARE(OrganiseSession::renamedBase(QStringLiteral("Scarlet Robin"), QStringLiteral("Anakie, Victoria"), taken),
+             QStringLiteral("Scarlet Robin - Anakie, Victoria, 2025-10-18"));
+    QCOMPARE(OrganiseSession::renamedBase(QStringLiteral("Scarlet Robin"), QString(), taken),
+             QStringLiteral("Scarlet Robin - 2025-10-18"));
+    // Nothing a file system can't take.
+    QCOMPARE(OrganiseSession::renamedBase(QStringLiteral("Robin?"), QStringLiteral("Mt. A/B: \"C\""), taken),
+             QStringLiteral("Robin - Mt. A B C, 2025-10-18"));
+    // Long names are cut to fit, keeping the place and date.
+    const QString longName = OrganiseSession::renamedBase(QString(300, QLatin1Char('x')), QStringLiteral("Anakie"), taken);
+    QVERIFY(longName.size() <= 200);
+    QVERIFY(longName.endsWith(QStringLiteral(" - Anakie, 2025-10-18")));
+}
+
+void TestOrganise::organiseRenamesShotsTogetherAndUndoPutsNamesBack()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.NEF"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0001.JPG"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0001.NEF.xmp"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0002.NEF"), 2000);   // RAW only
+    writeShot(dir, QStringLiteral("DSC_0003.JPG"), 3000);   // JPEG only
+    writeShot(dir, QStringLiteral("DSC_0004.NEF"), 4000);
+
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    QCOMPARE(s.count(), 4);
+    s.setName(0, QStringLiteral("Scarlet Robin"));
+    s.setRejected(3, true);
+    QList<ShotMove> moves = movesFor(s);
+    const QString base = QStringLiteral("Scarlet Robin - Anakie, Victoria, 2025-10-18");
+    for (ShotMove &m : moves) {
+        if (m.folderName == QLatin1String("Scarlet Robin"))
+            m.newBaseName = base;
+    }
+    const OrganiseMover::Result r = OrganiseMover::execute(tmp.path(), moves);
+    QVERIFY2(r.failures.isEmpty(), qPrintable(r.failures.join(QLatin1Char('\n'))));
+    QCOMPARE(r.moved, 4);
+    // One shot's files share one name; the next shots are numbered in order,
+    // never sharing a number though their extensions differ.
+    const QDir robin(dir.filePath(QStringLiteral("Scarlet Robin")));
+    QVERIFY(robin.exists(base + QStringLiteral(".NEF")));
+    QVERIFY(robin.exists(base + QStringLiteral(".JPG")));
+    QVERIFY(robin.exists(base + QStringLiteral(".NEF.xmp")));
+    QVERIFY(robin.exists(base + QStringLiteral(" (2).NEF")));
+    QVERIFY(robin.exists(base + QStringLiteral(" (3).JPG")));
+    QVERIFY(!robin.exists(base + QStringLiteral(" (2).JPG")));
+    QVERIFY(dir.exists(QStringLiteral("Rejects/DSC_0004.NEF")));   // rejects keep their names
+
+    const OrganiseMover::Result back = OrganiseMover::undo(tmp.path());
+    QVERIFY(back.failures.isEmpty());
+    for (const char *f : {"DSC_0001.NEF", "DSC_0001.JPG", "DSC_0001.NEF.xmp", "DSC_0002.NEF", "DSC_0003.JPG",
+                          "DSC_0004.NEF"})
+        QVERIFY2(dir.exists(QLatin1String(f)), f);
+    QVERIFY(!dir.exists(QStringLiteral("Scarlet Robin")));
 }
 
 void TestOrganise::neverOverwrites()

@@ -29,7 +29,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPointer>
+#include <QCheckBox>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QPromise>
 #include <QRegularExpression>
@@ -1123,24 +1125,173 @@ void OrganiseView::commit()
                         .arg(plan.folders.size() + (plan.rejects.isEmpty() ? 0 : 1))
                         .arg(QDir::toNativeSeparators(m_session.folder())),
                     QMessageBox::NoButton, this);
-    box.setInformativeText(
-        (plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr, plan.unnamed)
-                          : QString())
-        + tr("File names are kept, RAW and JPEG and sidecar files move together, nothing is "
-             "overwritten, and Undo Organise puts all of it back."));
+    const QString unnamedNote =
+        plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr, plan.unnamed)
+                         : QString();
+    box.setInformativeText(unnamedNote
+                           + tr("File names are kept, RAW and JPEG and sidecar files move together, "
+                                "nothing is overwritten, and Undo Organise puts all of it back."));
     box.setDetailedText(lines.join(QLatin1Char('\n')));
+
+    // Renaming too: "Scarlet Robin - Anakie, Victoria, 2025-10-18".
+    QList<int> named;   // the photos going into named folders
+    for (const organise::FolderMove &f : plan.folders)
+        named += f.items;
+    const QString keptInfo = box.informativeText();
+    auto *rename = new QCheckBox(&box);
+    if (!plan.folders.isEmpty()) {
+        const organise::FolderMove &first = plan.folders.first();
+        const organise::Item &it = m_session.items().at(first.items.first());
+        const QString known = shortPlace(m_model->places.value(placeKey(it)));
+        const QString example = organise::OrganiseSession::renamedBase(
+            first.folderName, it.hasGps() && known.isEmpty() ? tr("Town, State") : known, it.taken);
+        rename->setText(tr("Also rename the photos, e.g. \u201c%1\u201d").arg(example));
+        rename->setToolTip(tr("Named for their folder, where they were taken (from their GPS) and "
+                              "the date. RAW, JPEG and sidecar files keep their extensions; Undo "
+                              "Organise puts the old names back."));
+        rename->setChecked(m_app.settings().organiseRenameOnOrganise());
+        box.setCheckBox(rename);
+        const int toFind = int(placesToFind(named).size());
+        const auto explain = [&box, keptInfo, unnamedNote, toFind, this](bool on) {
+            if (!on) {
+                box.setInformativeText(keptInfo);
+                return;
+            }
+            QString text = unnamedNote
+                           + tr("The photos in named folders are renamed (rejects keep their names); "
+                                "RAW and JPEG and sidecar files move together, nothing is "
+                                "overwritten, and Undo Organise puts all of it back, old names too.");
+            if (toFind > 0)
+                text += QStringLiteral("\n\n")
+                        + tr("Where %Ln spot(s) are will be looked up on OpenStreetMap first "
+                             "(about a second each; needs the internet).",
+                             nullptr, toFind);
+            box.setInformativeText(text);
+        };
+        connect(rename, &QCheckBox::toggled, &box, explain);
+        explain(rename->isChecked());
+    }
     QPushButton *go = box.addButton(tr("Organise"), QMessageBox::AcceptRole);
     box.addButton(QMessageBox::Cancel);
     box.setDefaultButton(go);
     box.exec();
     if (box.clickedButton() != go)
         return;
+    const bool renaming = !plan.folders.isEmpty() && rename->isChecked();
+    if (!plan.folders.isEmpty())
+        m_app.settings().setOrganiseRenameOnOrganise(renaming);
+    if (renaming) {
+        // The places first; then on, unless cancelled.
+        findPlacesThen(named, [this, plan] { executePlan(plan, true); });
+        return;
+    }
+    executePlan(plan, false);
+}
 
+QSet<QString> OrganiseView::placesToFind(const QList<int> &rows) const
+{
+    // Not yet known here or from the library's photos.
+    geo::LocalityStore store(m_app.database().connectionName());
+    QSet<QString> keys;
+    for (int row : rows) {
+        const organise::Item &item = m_session.items().at(row);
+        const QString key = placeKey(item);
+        if (!key.isEmpty() && !keys.contains(key) && !m_model->places.contains(key)
+            && !m_model->unavailable.contains(key) && !store.lookup(*item.latitude, *item.longitude))
+            keys.insert(key);
+    }
+    return keys;
+}
+
+void OrganiseView::findPlacesThen(const QList<int> &rows, std::function<void()> then)
+{
+    // Known from the library's photos: no need to ask.
+    geo::LocalityStore store(m_app.database().connectionName());
+    QList<QPair<double, double>> pending;
+    QSet<QString> queued;
+    for (int row : rows) {
+        const organise::Item &item = m_session.items().at(row);
+        const QString key = placeKey(item);
+        if (key.isEmpty() || queued.contains(key) || m_model->places.contains(key)
+            || m_model->unavailable.contains(key))
+            continue;
+        queued.insert(key);
+        if (const std::optional<QString> cached = store.lookup(*item.latitude, *item.longitude)) {
+            m_model->places.insert(key, *cached);
+            m_model->placeChanged(key);
+        } else {
+            pending.append({*item.latitude, *item.longitude});
+        }
+    }
+    if (pending.isEmpty()) {
+        then();
+        return;
+    }
+
+    auto *progress = new QProgressDialog(tr("Finding where the photos were taken…"), tr("Cancel"), 0,
+                                         int(pending.size()), this);
+    progress->setWindowTitle(tr("Organise into Folders"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setValue(0);
+    // One at a time (Nominatim allows a request a second), each answer
+    // starting the next; Cancel (seen when the current answer comes back)
+    // stops the organise with nothing moved.
+    auto step = std::make_shared<std::function<void(int)>>();
+    QPointer<OrganiseView> self(this);
+    QPointer<QProgressDialog> dialog(progress);
+    *step = [self, dialog, pending, then, step](int at) {
+        if (!self || !dialog)
+            return;
+        if (dialog->wasCanceled()) {
+            dialog->deleteLater();
+            emit self->statusMessage(tr("Organise cancelled — nothing was moved."), 6000);
+            return;
+        }
+        if (at >= pending.size()) {
+            dialog->deleteLater();
+            then();
+            return;
+        }
+        dialog->setLabelText(tr("Finding where the photos were taken: %1 of %2…")
+                                 .arg(at + 1)
+                                 .arg(pending.size()));
+        const double lat = pending.at(at).first, lon = pending.at(at).second;
+        self->m_app.geocoder().reverseGeocode(lat, lon, [self, dialog, step, at, lat, lon](net::Outcome<QString> out) {
+            if (!self)
+                return;
+            const QString key = placeKey(lat, lon);
+            if (out.ok()) {
+                self->m_model->places.insert(key, out.value);
+                if (self->m_app.catalogueEditable())
+                    geo::LocalityStore(self->m_app.database().connectionName()).upsertLocality(lat, lon, out.value);
+            } else {
+                self->m_model->unavailable.insert(key);
+            }
+            self->m_model->placeChanged(key);
+            if (dialog)
+                dialog->setValue(at + 1);
+            (*step)(at + 1);
+        });
+    };
+    (*step)(0);
+}
+
+void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename)
+{
     QList<organise::ShotMove> moves;
+    int placeless = 0;   // renamed without a place: GPS, but it couldn't be found
     for (const organise::FolderMove &f : plan.folders) {
         for (int i : f.items) {
             const organise::Item &it = m_session.items().at(i);
-            moves.append({it.baseName, it.files, f.folderName});
+            organise::ShotMove move{it.baseName, it.files, f.folderName, {}};
+            if (rename) {
+                const QString place = shortPlace(m_model->places.value(placeKey(it)));
+                if (it.hasGps() && m_model->unavailable.contains(placeKey(it)))
+                    ++placeless;
+                move.newBaseName = organise::OrganiseSession::renamedBase(f.folderName, place, it.taken);
+            }
+            moves.append(move);
         }
     }
     for (int i : plan.rejects) {
@@ -1156,7 +1307,14 @@ void OrganiseView::commit()
                              tr("%Ln photo(s) couldn't be moved and were left where they were:\n\n%1",
                                 nullptr, int(result.failures.size()))
                                  .arg(result.failures.mid(0, 10).join(QLatin1Char('\n'))));
-    emit statusMessage(tr("Organised %Ln photo(s) into folders.", nullptr, result.moved), 8000);
+    emit statusMessage(
+        (rename ? tr("Organised and renamed %Ln photo(s).", nullptr, result.moved)
+                : tr("Organised %Ln photo(s) into folders.", nullptr, result.moved))
+            + (placeless > 0 ? QStringLiteral(" ")
+                                   + tr("%Ln couldn't have their place found, so their names have "
+                                        "just the date.", nullptr, placeless)
+                             : QString()),
+        10000);
     emit organised(folder);
     openFolder(folder);
 }
@@ -1178,8 +1336,8 @@ void OrganiseView::undoLast()
     list += QStringLiteral("</ul>");
     QString text = tr("<p>This undoes the whole <b>Organise into Folders</b> of %1 — every folder "
                       "it made, not just the last taxon named:</p>%2"
-                      "<p>%Ln photo(s) go back into <i>%3</i>, keeping their names and rejects, "
-                      "and the folders are removed once empty.</p>",
+                      "<p>%Ln photo(s) go back into <i>%3</i> under their original file names, "
+                      "keeping their names and rejects, and the folders are removed once empty.</p>",
                       nullptr, preview.shots)
                        .arg(QLocale().toString(preview.when, QLocale::LongFormat).toHtmlEscaped(), list,
                             QDir::toNativeSeparators(folder).toHtmlEscaped());

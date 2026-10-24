@@ -208,6 +208,9 @@ public:
     // Whether Organise shows each photo's place (looked up from its GPS).
     bool organiseShowPlaces() const;
     void setOrganiseShowPlaces(bool on);
+    // Whether Organise into Folders also renames the photos.
+    bool organiseRenameOnOrganise() const;
+    void setOrganiseRenameOnOrganise(bool on);
 
     // The Getting Started guide: open it at start-up while the basics aren't
     // done; and the steps it can't see in the catalogue.

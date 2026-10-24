@@ -98,6 +98,10 @@ public:
 
     // The folder name for a given name: sanitised for the file system.
     static QString folderNameFor(const QString &name);
+    // A photo's new base name when organising renames them:
+    // "Scarlet Robin - Anakie, Victoria, 2025-10-18", or without the place
+    // when there isn't one. Safe for the file system.
+    static QString renamedBase(const QString &folderName, const QString &place, const QDateTime &taken);
 
 private:
     QString m_folder;

@@ -102,17 +102,25 @@ QString folderOf(const QDir &root, const QString &to)
     return root.relativeFilePath(QFileInfo(to).absolutePath());
 }
 
-// The shot's files' names in the destination: as they are, or with " (n)"
-// after the base name when any of them is taken.
+// The shot's files' names in the destination: its (new) base name, with
+// " (n)" after it when a file of that stem -- any extension -- is already
+// there, so a shot's RAW, JPEG and sidecars always share one number.
 QStringList targetNames(const ShotMove &shot, const QDir &dest)
 {
+    const QString base = shot.newBaseName.isEmpty() ? shot.baseName : shot.newBaseName;
+    const QStringList existing = dest.entryList(QDir::Files | QDir::Hidden | QDir::System);
+    const auto taken = [&existing](const QString &stem) {
+        const QString prefix = stem + QLatin1Char('.');
+        return std::any_of(existing.cbegin(), existing.cend(), [&](const QString &name) {
+            return name == stem || name.startsWith(prefix, Qt::CaseInsensitive);
+        });
+    };
     for (int n = 1;; ++n) {
+        const QString stem = n > 1 ? base + QStringLiteral(" (%1)").arg(n) : base;
         QStringList names;
-        bool free = true;
+        bool free = !taken(stem);
         for (const QString &file : shot.files) {
-            QString name = QFileInfo(file).fileName();
-            if (n > 1)
-                name = shot.baseName + QStringLiteral(" (%1)").arg(n) + name.mid(shot.baseName.size());
+            const QString name = stem + QFileInfo(file).fileName().mid(shot.baseName.size());
             if (QFileInfo::exists(dest.filePath(name)))
                 free = false;
             names << name;

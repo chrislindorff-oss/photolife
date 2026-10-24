@@ -270,6 +270,23 @@ QString OrganiseSession::folderNameFor(const QString &name)
     return out;
 }
 
+QString OrganiseSession::renamedBase(const QString &folderName, const QString &place,
+                                     const QDateTime &taken)
+{
+    constexpr int kMaxStem = 200;   // room for " (2)" and an extension
+    const QString date = taken.date().toString(Qt::ISODate);
+    const QString where = util::sanitizeFilenameComponent(place.simplified()).simplified();
+    QString out = folderNameFor(folderName);
+    QString tail = where.isEmpty() ? date : where + QStringLiteral(", ") + date;
+    if (out.size() + 3 + tail.size() > kMaxStem)
+        out.truncate(std::max(0, int(kMaxStem - 3 - tail.size())));
+    out = out.trimmed();
+    if (!tail.isEmpty())
+        out = out.isEmpty() ? tail : out + QStringLiteral(" - ") + tail;
+    out.truncate(kMaxStem);
+    return folderNameFor(out);
+}
+
 OrganisePlan OrganiseSession::plan() const
 {
     OrganisePlan plan;

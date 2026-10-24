@@ -68,6 +68,10 @@ private:
     void showFullSize(int row);
     void contextMenuAt(const QPoint &pos);
     void changed(int row);   // after a name/reject: repaint the run, save
+    // Organising: the places the renamed photos still need, then the moves.
+    QSet<QString> placesToFind(const QList<int> &rows) const;
+    void findPlacesThen(const QList<int> &rows, std::function<void()> then);
+    void executePlan(const organise::OrganisePlan &plan, bool rename);
     void updatePreview();
 
     Application &m_app;

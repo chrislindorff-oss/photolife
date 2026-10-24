@@ -14,13 +14,16 @@ struct ShotMove
     QString baseName;     // DSC_1234
     QStringList files;    // absolute paths, all starting with baseName
     QString folderName;   // relative to the download folder
+    QString newBaseName;  // renamed to this (each file keeps what follows the
+                          // base name: ".NEF", ".NEF.xmp"); empty keeps it
 };
 
 // Moves shots into folders inside a download folder -- by renaming, never
-// copying -- and can put them all back. Nothing is ever overwritten or
-// deleted: a name already taken in the destination gets " (2)", " (3)"...
-// after the shot's base name, the same for every file of the shot so they
-// still go together. Every move is written to kLogFile as it happens, so an
+// copying -- optionally giving them new names, and can put them all back
+// under their old ones. Nothing is ever overwritten or deleted: a name
+// already taken in the destination (by a file of any extension) gets " (2)",
+// " (3)"... after the shot's base name, the same for every file of the shot
+// so they still go together. Every move is written to kLogFile as it happens, so an
 // interrupted run can still be undone. Each organise is kept there as its
 // own entry, and undo() takes back the most recent one -- all of it, every
 // folder -- so earlier organises can be undone in turn.
