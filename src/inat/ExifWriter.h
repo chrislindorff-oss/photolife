@@ -16,6 +16,7 @@ struct ExifFields
     std::optional<double> latitude;
     std::optional<double> longitude;
     QString taxonName;                  // -> UserComment
+    std::optional<int> rating;          // 0-5 stars -> Xmp.xmp.Rating and Exif.Image.Rating
 };
 
 // Writes `fields` into the JPEG at `path`, in place, via exiv2. Returns false
@@ -31,5 +32,11 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error = n
 // only copy of the original (as opposed to a freshly-downloaded file that's
 // disposable if something goes wrong).
 bool writeExifSafely(const QString &path, const ExifFields &fields, QString *error = nullptr);
+
+// Sets the star rating (xmp:Rating, 0-5) in the XMP sidecar at `path` --
+// for a RAW file, which is never written to itself. An existing sidecar
+// (from Lightroom, darktable...) is updated, keeping everything else in it;
+// otherwise a minimal one is created.
+bool writeSidecarRating(const QString &path, int rating, QString *error = nullptr);
 
 } // namespace pl::inat

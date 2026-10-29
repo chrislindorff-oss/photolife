@@ -1,6 +1,9 @@
 #include <QtTest>
 
 #include <QBuffer>
+#include <QFile>
+#include <QTemporaryDir>
+#include <QtEndian>
 
 #include "scan/Exif.h"
 
@@ -134,6 +137,20 @@ QByteArray sampleTiffWithGps(const QByteArray &latRef, const QByteArray &lonRef)
     return b;
 }
 
+// Like sampleTiffWithGps(), but with the GPS IFD ~300 KB in, past a big
+// maker note, as Nikon writes a NEF.
+QByteArray sampleTiffWithFarGps()
+{
+    QByteArray b = sampleTiffWithGps("S", "E");
+    const quint32 shift = 300000;
+    auto setU32 = [&b](int at, quint32 v) { qToLittleEndian(v, b.data() + at); };
+    setU32(8 + 2 + 2 * 12 + 8, 94 + shift);     // IFD0's GPS pointer
+    setU32(94 + 2 + 1 * 12 + 8, 148 + shift);   // GPSLatitude's values
+    setU32(94 + 2 + 3 * 12 + 8, 172 + shift);   // GPSLongitude's values
+    b.insert(94, QByteArray(int(shift), '\0'));
+    return b;
+}
+
 QByteArray wrapAsJpeg(const QByteArray &tiff)
 {
     QByteArray payload = QByteArrayLiteral("Exif\0\0") + tiff;
@@ -163,6 +180,7 @@ private slots:
     void truncatedSegmentDoesNotCrash();
     void parsesGpsSouthWest();
     void parsesGpsNorthEast();
+    void readsATiffRawsHeaderAndAFarGpsDirectory();
 };
 
 void TestExif::parsesDateAndMakeFromSegment()
@@ -227,6 +245,37 @@ void TestExif::parsesGpsNorthEast()
     QVERIFY(e.hasGps());
     QVERIFY(qAbs(e.latitude.value() - 10.5) < 1e-6);
     QVERIFY(qAbs(e.longitude.value() - 20.25) < 1e-6);
+}
+
+void TestExif::readsATiffRawsHeaderAndAFarGpsDirectory()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QByteArray tiff = sampleTiffWithFarGps();
+    // The first read alone doesn't reach the GPS...
+    QVERIFY(!parseExifSegment(tiff.left(64 * 1024)).hasGps());
+    const QString nef = dir.filePath(QStringLiteral("DSC_0001.NEF"));
+    {
+        QFile f(nef);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(tiff);
+        f.write(QByteArray(1024 * 1024, '\x55'));   // the picture
+    }
+    // ...so it reads on to it.
+    const ExifData e = readTiffExif(nef);
+    QCOMPARE(e.dateTimeOriginal, QDateTime(QDate(2020, 9, 28), QTime(7, 31, 0)));
+    QVERIFY(e.hasGps());
+    QVERIFY(qAbs(e.latitude.value() - (-10.5)) < 1e-6);
+    QVERIFY(qAbs(e.longitude.value() - 20.25) < 1e-6);
+
+    // Not a TIFF (a CR3, a JPEG...): nothing.
+    const QString other = dir.filePath(QStringLiteral("IMG_0001.CR3"));
+    {
+        QFile f(other);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(QByteArray("\0\0\0\x18" "ftypcrx ") + QByteArray(4096, '\0'));
+    }
+    QVERIFY(!readTiffExif(other).hasDate());
 }
 
 QTEST_APPLESS_MAIN(TestExif)

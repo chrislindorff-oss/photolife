@@ -18,7 +18,8 @@ class ImageCanvas;
 // pixel per screen pixel) at the spot under the pointer; the wheel zooms
 // around the pointer, + / - step, 0 or F fits. Zoomed in, drag with the hand
 // to pan. Stepping to another photo keeps the zoom and spot, for comparing a
-// burst's sharpness.
+// burst's sharpness. Where the owner allows it (Organise), R rejects the
+// photo -- or takes it back -- and a rejected one moves on to the next.
 class ImageViewer : public QDialog
 {
     Q_OBJECT
@@ -35,6 +36,8 @@ public:
         bool hasGps = false;
         double latitude = 0.0;      // valid only when hasGps is true
         double longitude = 0.0;
+        bool canReject = false;     // R marks it as a reject (Organise)
+        bool rejected = false;
     };
 
     explicit ImageViewer(QWidget *parent = nullptr);
@@ -45,9 +48,13 @@ public:
     // if one is showing, its button. Called back by the owner after it has
     // written the change in response to bestShotToggleRequested().
     void markBestShot(qint64 captureId, bool on);
+    // Replaces one item's details (its caption, reject mark) after the owner
+    // has acted on rejectToggleRequested(); the photo itself isn't reloaded.
+    void updateItem(int index, const Item &item);
 
 signals:
     void bestShotToggleRequested(qint64 captureId, bool nominate);
+    void rejectToggleRequested(int index, bool reject);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -67,6 +74,8 @@ private:
     void updateCounter();
     void updateBestShotButton();
     void updateMapButton();
+    void updateRejectButton();
+    void toggleReject();
 
     QScrollArea *m_scroll;
     ImageCanvas *m_image;
@@ -74,6 +83,7 @@ private:
     QLabel *m_counter;
     QPushButton *m_bestShot;
     QPushButton *m_viewOnMap;
+    QPushButton *m_reject;
 
     QVector<Item> m_items;
     int m_index = 0;

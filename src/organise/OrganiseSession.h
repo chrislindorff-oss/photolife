@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QHash>
+#include <QJsonObject>
 #include <QList>
 #include <QSet>
 #include <QString>
@@ -62,10 +63,29 @@ public:
     static QList<Item> scanFolder(const QString &folder,
                                   const std::function<void(int, int)> &progress = {});
 
-    void setItems(const QString &folder, QList<Item> items);
+    // A big folder is read a page at a time: listFolder() finds the shots
+    // quickly, without reading them -- each one's time is its file's, and
+    // they're in that order -- then readMetadata() reads each page's EXIF
+    // dates and GPS as it's needed. Both are safe on a worker thread.
+    static constexpr int kPageSize = 250;
+    static QList<Item> listFolder(const QString &folder);
+    static void readMetadata(Item &item);
+    static void sortByTaken(QList<Item> &items);
+    // How many of `listed` to read first: a page, or enough to reach the
+    // last photo the folder's saved progress names (and a page past it).
+    static int firstPageSize(const QString &folder, const QList<Item> &listed);
+
+    // `items` read; `pending` listed but not yet read, in order.
+    void setItems(const QString &folder, QList<Item> items, QList<Item> pending = {});
     QString folder() const { return m_folder; }
     const QList<Item> &items() const { return m_items; }
     int count() const { return int(m_items.size()); }
+    const QList<Item> &pending() const { return m_pending; }
+    int pendingCount() const { return int(m_pending.size()); }
+    // The front of pending(), now read: put in the order taken after the
+    // photos already here (never among them -- names, rejects and the rest
+    // are kept by position), with their saved progress. Returns how many.
+    int appendItems(QList<Item> batch);
 
     // The name given at photo `i` (empty unless it starts a run).
     QString nameAt(int i) const { return m_names.value(i); }
@@ -81,7 +101,17 @@ public:
     int runNumber(int i) const;
 
     bool isRejected(int i) const { return m_rejected.contains(i); }
-    void setRejected(int i, bool rejected);
+    void setRejected(int i, bool rejected);   // a reject isn't a best shot
+
+    // A best shot of its species: rated 5 stars when organised, so the library
+    // takes it as a Best Shot when it's added.
+    bool isBest(int i) const { return m_best.contains(i); }
+    void setBest(int i, bool best);           // ...and isn't a reject
+    QList<int> bestShots() const;             // in order
+
+    // Shot `i`'s files changed (a rating written): its size and time read
+    // again, so its progress still recognises it.
+    void refreshFileStats(int i);
 
     // The names given so far, each once, most recent first.
     QStringList recentNames() const;
@@ -98,16 +128,24 @@ public:
 
     // The folder name for a given name: sanitised for the file system.
     static QString folderNameFor(const QString &name);
+    // Rates the shot 5 stars, as a best shot: in its JPEG's metadata, and in
+    // an XMP sidecar for a RAW (the RAW itself is never written to; a new
+    // sidecar's path is put in `createdSidecar`). Files keep their dates.
+    static bool rateFiveStars(const Item &item, QString *createdSidecar = nullptr, QString *error = nullptr);
     // A photo's new base name when organising renames them:
     // "Scarlet Robin - Anakie, Victoria, 2025-10-18", or without the place
     // when there isn't one. Safe for the file system.
     static QString renamedBase(const QString &folderName, const QString &place, const QDateTime &taken);
 
 private:
+    QJsonObject applyProgress(int from);   // to the photos from `from` on; returns the file's root
+
     QString m_folder;
     QList<Item> m_items;
+    QList<Item> m_pending;
     QHash<int, QString> m_names;
     QSet<int> m_rejected;
+    QSet<int> m_best;
     QSet<int> m_namingEnds;
     QStringList m_nameOrder;   // names in the order given (for recentNames())
 };

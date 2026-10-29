@@ -48,6 +48,7 @@ private slots:
     void renamedUserDecisionIsReportedNotOverridden();
     void unrecordedAgreeingDecisionGetsItsNameRecorded();
     void groupMatchReportsRenamedDecisionInsideTheGroup();
+    void taxonInsideTheFolderTaxonAgrees();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -474,6 +475,50 @@ void TestMatchEngine::groupMatchReportsRenamedDecisionInsideTheGroup()
     QCOMPARE(stats.staleDecisions.size(), 1);
     QCOMPARE(stats.staleDecisions.first().suggestedInatId, qint64(101));
     QCOMPARE(matchRow(QStringLiteral("Caladenia carnea%")).value(0).toLongLong(), localId(111));
+}
+
+void TestMatchEngine::taxonInsideTheFolderTaxonAgrees()
+{
+    // A family folder of species, as libraries often are -- and a photo in it
+    // that really doesn't belong.
+    touch(m_root + QStringLiteral("/Insects/Formicidae/Podomyrma adelaidae - Rainbow 7-9-2014 (1).jpg"));
+    touch(m_root + QStringLiteral("/Insects/Formicidae/Caladenia carnea - Rainbow 7-9-2014.jpg"));
+    // ...and a species folder holding a photo named only to its genus.
+    touch(m_root + QStringLiteral("/Insects/Podomyrma adelaidae/Podomyrma - Rainbow 8-9-2014.jpg"));
+    scan::CatalogueWriter writer(m_db->connectionName());
+    scan::FileScanner scanner;
+    QVERIFY(writer.sync(scanner.scan({m_root}), {m_root}).ok());
+    taxonomy::TaxonomyStore store(m_db->connectionName());
+    for (const auto &[id, parent, rank, name] :
+         {std::tuple<qint64, qint64, const char *, const char *>{2000, 0, "family", "Formicidae"},
+          {2100, 2000, "genus", "Podomyrma"},
+          {2101, 2100, "species", "Podomyrma adelaidae"}}) {
+        taxonomy::Taxon t;
+        t.inatId = id;
+        if (parent > 0)
+            t.parentInatId = parent;
+        t.rank = QLatin1String(rank);
+        t.name = QLatin1String(name);
+        store.upsertTaxon(t);
+    }
+
+    MatchEngine engine(m_db->connectionName());
+    QVERIFY(engine.matchAll().ok());
+
+    auto ant = matchRow(QStringLiteral("Podomyrma adelaidae - Rainbow%"));
+    QCOMPARE(ant.value(0).toLongLong(), localId(2101));
+    QCOMPARE(ant.value(4).toString(), QStringLiteral("auto"));
+    QVERIFY(ant.value(3).toDouble() >= 0.99);
+    QCOMPARE(ant.value(6).toString(), QStringLiteral("filename within the folder's family"));
+
+    auto genusOnly = matchRow(QStringLiteral("Podomyrma - Rainbow 8%"));
+    QCOMPARE(genusOnly.value(0).toLongLong(), localId(2101));   // the folder's species
+    QCOMPARE(genusOnly.value(4).toString(), QStringLiteral("auto"));
+
+    // An orchid among the ants is still a real disagreement.
+    auto stray = matchRow(QStringLiteral("Caladenia carnea - Rainbow%"));
+    QCOMPARE(stray.value(4).toString(), QStringLiteral("pending"));
+    QCOMPARE(stray.value(6).toString(), QStringLiteral("folder and filename disagree"));
 }
 
 QTEST_GUILESS_MAIN(TestMatchEngine)

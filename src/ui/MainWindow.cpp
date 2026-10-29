@@ -1322,6 +1322,7 @@ void MainWindow::buildToolBar()
 void MainWindow::buildReferenceTreeDock()
 {
     auto *dock = new QDockWidget(tr("Reference Trees"), this);
+    m_treeDock = dock;
     dock->setObjectName(QStringLiteral("referenceTreeDock"));
     dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
@@ -1451,8 +1452,41 @@ void MainWindow::buildReferenceTreeDock()
     // be no way to get the panel back at all once closed.
     QAction *toggle = dock->toggleViewAction();
     toggle->setText(tr("Reference Trees &Panel"));
+    toggle->setShortcut(Qt::Key_F9);
+    toggle->setToolTip(tr("Show or hide the Reference Trees panel (F9). Each view remembers "
+                          "your choice; it starts hidden where the tree isn't used."));
     m_viewMenu->addSeparator();
     m_viewMenu->addAction(toggle);
+    // Shown or hidden by hand (menu, F9, its close button): kept for this view.
+    connect(dock, &QDockWidget::visibilityChanged, this, [this] {
+        if (m_applyingTreePanel || !isVisible() || isMinimized())
+            return;
+        m_app.settings().setTreePanelShown(currentViewKey(), !m_treeDock->isHidden());
+    });
+}
+
+QString MainWindow::currentViewKey() const
+{
+    if (m_viewReviewAction && m_viewReviewAction->isChecked())
+        return QStringLiteral("review");
+    if (m_viewInatAction && m_viewInatAction->isChecked())
+        return QStringLiteral("inat");
+    if (m_viewOrganiseAction && m_viewOrganiseAction->isChecked())
+        return QStringLiteral("organise");
+    if (m_viewTreeAction && m_viewTreeAction->isChecked())
+        return QStringLiteral("tree");
+    return QStringLiteral("library");
+}
+
+// The tree panel as this view has it: hidden where the tree isn't used
+// (Review Unmatched, iNaturalist, Organise), unless shown there by hand.
+void MainWindow::applyTreePanelForView()
+{
+    if (!m_treeDock)
+        return;
+    m_applyingTreePanel = true;
+    m_treeDock->setVisible(m_app.settings().treePanelShown(currentViewKey()));
+    m_applyingTreePanel = false;
 }
 
 int MainWindow::currentProjectId() const
@@ -3805,26 +3839,19 @@ void MainWindow::buildCentralWidget()
     m_centralStack->addWidget(m_organiseView);   // Organise mode
     setCentralWidget(m_centralStack);
 
-    connect(m_viewTreeAction, &QAction::toggled, this, [this](bool on) {
-        if (on)
-            m_centralStack->setCurrentWidget(m_tabs);
-    });
-    connect(m_viewLibraryAction, &QAction::toggled, this, [this](bool on) {
-        if (on)
-            m_centralStack->setCurrentWidget(m_photoStack);
-    });
-    connect(m_viewReviewAction, &QAction::toggled, this, [this](bool on) {
-        if (on)
-            m_centralStack->setCurrentWidget(m_reviewPane);
-    });
-    connect(m_viewInatAction, &QAction::toggled, this, [this](bool on) {
-        if (on)
-            m_centralStack->setCurrentWidget(m_inatView);
-    });
-    connect(m_viewOrganiseAction, &QAction::toggled, this, [this](bool on) {
-        if (on)
-            m_centralStack->setCurrentWidget(m_organiseView);
-    });
+    const auto showView = [this](QAction *action, QWidget *page) {
+        connect(action, &QAction::toggled, this, [this, page](bool on) {
+            if (!on)
+                return;
+            m_centralStack->setCurrentWidget(page);
+            applyTreePanelForView();
+        });
+    };
+    showView(m_viewTreeAction, m_tabs);
+    showView(m_viewLibraryAction, m_photoStack);
+    showView(m_viewReviewAction, m_reviewPane);
+    showView(m_viewInatAction, m_inatView);
+    showView(m_viewOrganiseAction, m_organiseView);
     m_viewLibraryAction->setChecked(true);   // start on All Photos
 
     updateReviewTabText();
@@ -5169,6 +5196,9 @@ void MainWindow::restoreLayout()
     const QByteArray state = m_app.settings().mainWindowState();
     if (!state.isEmpty())
         restoreState(state);
+    // The saved layout has the panel as it was at the last close; the view
+    // starting now decides.
+    applyTreePanelForView();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

@@ -98,6 +98,11 @@ Organise New Photos</b>). The photos appear as a filmstrip in the order they wer
 taken &mdash; RAW and JPEG of a shot together &mdash; with the selected photo large
 below it. The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
 (<b>F11</b> for full screen).</p>
+<p>A big folder opens a page of 250 photos at a time, so you can start straight away:
+the next 250 are read as you scroll towards the end of those shown (the counts say
+how many are loaded so far). When you carry on with a folder, enough is read to reach
+the last photo you named. <b>Organise into Folders</b> reads any photos not yet
+loaded first, since the last name carries on into them.</p>
 <p>Photos with a GPS position embedded are marked <b>GEO</b>. Turn on <b>Places</b>
 to show where each was taken &mdash; the town or locality, under the date &mdash; which
 can help tell similar species apart. Places are looked up on OpenStreetMap only for
@@ -110,13 +115,19 @@ known from your library's photos appear at once, even offline).</p>
       trees' common and scientific names (&darr; to choose one), or anything typed
       is used as it is. Every photo after it, up to the next named one, goes with
       that name; a coloured band shows each run.</li>
+  <li>With a photo focused, press <b>B</b> to mark it as a <b>best shot</b> (a gold star):
+      when you organise, it's rated 5 stars &mdash; in the JPEG, or in an <i>.xmp</i>
+      sidecar beside a RAW, which is never written to &mdash; so when you add it to the
+      library it arrives as a Best Shot of its species.</li>
   <li>With a photo focused, press <b>R</b> to mark it as a reject, or
       <b>V</b> (or double-click it) to view it full size. Right-click for these actions, rename or
       clear a name, and other options. <b>Delete</b> still marks the selected
       photos as rejects; the &#x2922; corner also opens a photo full size. In the full-size
       view, <b>A</b> shows it at actual pixels (1:1) to check sharpness &mdash; drag to
       pan &mdash; and the arrow keys keep that zoom and spot from photo to photo (see
-      <a href="#viewer">The image viewer</a>).</li>
+      <a href="#viewer">The image viewer</a>). <b>R</b> there marks the photo as a reject
+      and moves on to the next, so you can cull a burst full size; on a rejected photo it
+      takes the reject back. The <b>Reject</b> button beside the arrows does the same.</li>
   <li>To stop a name carrying forward, focus the <b>last</b> photo of that taxon &mdash;
       not the first photo of the next one &mdash; and press <b>E</b>, or right-click and
       choose <b>Mark as Last Photo of &ldquo;<i>name</i>&rdquo;</b> (the menu shows the
@@ -211,6 +222,10 @@ menu:</p>
   <li><b>Delete Reference Tree&hellip;</b> removes a tree you no longer need (your
       photos and their matches are untouched).</li>
 </ul>
+<p><b>Folders for a higher group.</b> A photo named for a species inside a folder named
+for its family or order (&ldquo;Formicidae/Podomyrma adelaidae&nbsp;&hellip;&rdquo;) matches
+automatically &mdash; the two agree, one is just more exact. Only a photo whose name
+isn't within its folder's group (an orchid in an ant folder) goes to Review Unmatched.</p>
 <p><b>Common names in folder and file names.</b> A folder or photo named with a
 common name (&ldquo;Flame Robin&rdquo;) matches automatically when that name means
 just one species (or subspecies) in your trees; differences in hyphens, spaces and
@@ -349,8 +364,8 @@ The <b>Show</b> box in the toolbar filters by status, and <b>View &rarr;
 Display&hellip;</b> chooses which fields (name, matched taxon, date, filename, locality,
 file type) appear under each thumbnail in the photo grids.</p>
 <p>Right-click a photo (here or in any other grid) to open it in your file manager,
-star or unstar it as a best shot, remove it from the catalogue, or <b>Attempt to fetch
-coordinates from iNat</b> (see <a href="#writes">below</a>).</p>
+star or unstar it as a best shot, remove it from the catalogue, or <b>Attempt to Match
+with iNat Observation to Fetch Data</b> (see <a href="#writes">below</a>).</p>
 
 <h2 id="review">5. Review the uncertain matches</h2>
 <p>Switch to the <b>Review Unmatched</b> view. The list on the left shows everything
@@ -468,7 +483,10 @@ instead, or be left out. Photos not yet downloaded are fetched first.</p>
 <p>Right-click any of your own photos (in any grid) to star it as the <b>Best Shot</b>
 of its species &mdash; only available once the photo is identified. Starred photos get
 a gold star badge on their thumbnail and show up together in the <b>My Best Shots</b>
-tab. The full-size viewer also has an Add/Remove Best Shot button.</p>
+tab. The full-size viewer also has an Add/Remove Best Shot button. A photo already
+rated 5 stars when it's added to the library &mdash; by Organise's <b>B</b>, or in
+Lightroom, darktable or another program (in the photo or its <i>.xmp</i> sidecar)
+&mdash; arrives as a Best Shot; unstar it here and it stays unstarred.</p>
 
 <h2 id="map">The map &amp; photo localities</h2>
 <p>The <b>Map</b> tab plots every geotagged photo in the current tree selection as a
@@ -641,6 +659,10 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       move between your Local catalogue and any server catalogues (see
       <a href="#sharing">Local and server catalogues</a>).</li>
   <li><b>View &rarr; Dark Mode</b> switches between the light and dark themes.</li>
+  <li>The <b>Reference Trees panel</b> on the left is hidden in Review Unmatched,
+      iNaturalist and Organise, which don't need it, so they have the whole width. Press
+      <b>F9</b> (or <b>View &rarr; Reference Trees Panel</b>) to show or hide it; each
+      view remembers your choice.</li>
   <li><b>Help &rarr; Check for Updates&hellip;</b> asks GitHub whether there's a newer
       release (only when you choose it &mdash; PhotoLife never checks on its own). If there is,
       <b>Go to Downloads</b> opens the download section of the PhotoLife website, which offers
@@ -865,6 +887,7 @@ It only re-reads location data; nothing else about your catalogue changes.</p>
   <tr><td><b>Wheel</b>, <b>+ / &minus;</b></td><td>Zoom in / out</td></tr>
   <tr><td><b>0</b> or <b>F</b></td><td>Fit to the window</td></tr>
   <tr><td>Drag</td><td>Pan a zoomed photo</td></tr>
+  <tr><td><b>R</b></td><td>Reject / keep the photo (Organise)</td></tr>
   <tr><td><b>Esc</b></td><td>Close the viewer</td></tr>
 </table>
 

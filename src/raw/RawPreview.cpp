@@ -128,14 +128,9 @@ bool isRef(char c, char a, char b)
     const int u = std::toupper(static_cast<unsigned char>(c));
     return u == std::toupper(static_cast<unsigned char>(a)) || u == std::toupper(static_cast<unsigned char>(b));
 }
-} // namespace
 
-RawGps extractGps(const QString &path)
+RawGps gpsOf(const LibRaw &raw)
 {
-    LibRaw raw;
-    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
-        return {};
-
     RawGps out;
     const libraw_gps_info_t &gps = raw.imgdata.other.parsed_gps;
     // gpsparsed can be set even when the file carries an empty/placeholder GPS
@@ -150,6 +145,31 @@ RawGps extractGps(const QString &path)
         out.longitude = dmsToDecimalDegrees(gps.longitude[0], gps.longitude[1], gps.longitude[2],
                                             gps.longref, 'W');
     }
+    return out;
+}
+} // namespace
+
+RawGps extractGps(const QString &path)
+{
+    LibRaw raw;
+    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
+        return {};
+    RawGps out = gpsOf(raw);
+    raw.recycle();
+    return out;
+}
+
+RawInfo readInfo(const QString &path)
+{
+    LibRaw raw;
+    if (raw.open_file(path.toLocal8Bit().constData()) != LIBRAW_SUCCESS)
+        return {};
+    RawInfo out;
+    // LibRaw turns the EXIF date into a time with mktime(), as local time;
+    // turning it back as local time gives the camera's clock reading again.
+    if (const time_t at = raw.imgdata.other.timestamp; at > 0)
+        out.taken = QDateTime::fromSecsSinceEpoch(qint64(at));
+    out.gps = gpsOf(raw);
     raw.recycle();
     return out;
 }
@@ -167,6 +187,11 @@ QByteArray extractEmbeddedJpegBytes(const QString &)
 }
 
 RawGps extractGps(const QString &)
+{
+    return {};
+}
+
+RawInfo readInfo(const QString &)
 {
     return {};
 }

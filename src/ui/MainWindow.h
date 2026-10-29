@@ -136,6 +136,11 @@ private:
     void scheduleGuideRefresh();
     void onGuideAction(int step, int which);
     QDockWidget *m_guideDock = nullptr;
+    // The Reference Trees panel: shown or hidden per view (Settings::treePanelShown).
+    QDockWidget *m_treeDock = nullptr;
+    bool m_applyingTreePanel = false;
+    QString currentViewKey() const;
+    void applyTreePanelForView();
     GettingStartedPanel *m_guide = nullptr;
     QPushButton *m_emptyGuideButton = nullptr;   // on the empty-library screen
     QTimer *m_guideRefresh = nullptr;

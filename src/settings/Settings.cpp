@@ -423,6 +423,17 @@ void Settings::setDarkModeEnabled(bool enabled)
     m_settings.setValue(QLatin1String(kDarkMode), enabled);
 }
 
+bool Settings::treePanelShown(const QString &view) const
+{
+    const bool byDefault = view == QLatin1String("tree") || view == QLatin1String("library");
+    return m_settings.value(QStringLiteral("ui/treePanel/") + view, byDefault).toBool();
+}
+
+void Settings::setTreePanelShown(const QString &view, bool shown)
+{
+    m_settings.setValue(QStringLiteral("ui/treePanel/") + view, shown);
+}
+
 bool Settings::showMapLocality() const
 {
     return m_settings.value(QLatin1String(kShowMapLocality), true).toBool();

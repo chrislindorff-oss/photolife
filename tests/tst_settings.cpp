@@ -31,6 +31,7 @@ private slots:
     void windowStateRoundTrip();
     void captureCaptionFieldsDefaultsToNameOnly();
     void captureCaptionFieldsRoundTrip();
+    void treePanelShownOnlyWhereTheTreeIsUsed();
     void inatSettingsDefaultEmptyAndRoundTrip();
 
 private:
@@ -122,6 +123,23 @@ void TestSettings::windowStateRoundTrip()
 void TestSettings::captureCaptionFieldsDefaultsToNameOnly()
 {
     QCOMPARE(Settings().captureCaptionFields(), 1);   // CaptionName
+}
+
+void TestSettings::treePanelShownOnlyWhereTheTreeIsUsed()
+{
+    Settings settings;
+    QVERIFY(settings.treePanelShown(QStringLiteral("tree")));
+    QVERIFY(settings.treePanelShown(QStringLiteral("library")));
+    QVERIFY(!settings.treePanelShown(QStringLiteral("review")));
+    QVERIFY(!settings.treePanelShown(QStringLiteral("inat")));
+    QVERIFY(!settings.treePanelShown(QStringLiteral("organise")));
+
+    // Each view keeps what it was given.
+    settings.setTreePanelShown(QStringLiteral("review"), true);
+    settings.setTreePanelShown(QStringLiteral("library"), false);
+    QVERIFY(Settings().treePanelShown(QStringLiteral("review")));
+    QVERIFY(!Settings().treePanelShown(QStringLiteral("library")));
+    QVERIFY(!Settings().treePanelShown(QStringLiteral("organise")));
 }
 
 void TestSettings::captureCaptionFieldsRoundTrip()

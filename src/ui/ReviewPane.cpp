@@ -225,7 +225,8 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
 
     m_useTreeTaxon = new QPushButton(this);
     m_useTreeTaxon->setToolTip(tr("Confirm this photo as the taxon currently "
-                                  "selected in the Reference Trees dock. (Ctrl+T)"));
+                                  "selected in the Reference Trees panel. (Ctrl+T; F9 shows "
+                                  "the panel)"));
     connect(m_useTreeTaxon, &QPushButton::clicked, this, &ReviewPane::useTreeTaxon);
 
     m_confirmButton = new QPushButton(tr("&Confirm"), this);

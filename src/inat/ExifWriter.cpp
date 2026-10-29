@@ -77,8 +77,60 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
                 QStringLiteral("charset=Ascii %1").arg(fields.taxonName).toStdString();
         }
 
+        if (fields.rating) {
+            // Both where photo programs look: XMP (Lightroom, darktable,
+            // digiKam) and the EXIF tag (Windows).
+            Exiv2::XmpData &xmp = image->xmpData();
+            xmp["Xmp.xmp.Rating"] = std::to_string(*fields.rating);
+            exif["Exif.Image.Rating"] = uint16_t(*fields.rating);
+        }
+
         image->setExifData(exif);
         image->writeMetadata();
+        return true;
+    } catch (const Exiv2::Error &e) {
+        if (error)
+            *error = QString::fromStdString(e.what());
+        return false;
+    }
+}
+
+bool writeSidecarRating(const QString &path, int rating, QString *error)
+{
+    if (!QFile::exists(path)) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly)) {
+            if (error)
+                *error = QStringLiteral("could not create %1").arg(path);
+            return false;
+        }
+        // The packet's begin attribute is a UTF-8 byte-order mark.
+        QByteArray packet("<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+                          "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
+                          " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+                          "  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n"
+                          "    xmp:Rating=\"");
+        packet += QByteArray::number(rating);
+        packet += "\"/>\n"
+                  " </rdf:RDF>\n"
+                  "</x:xmpmeta>\n"
+                  "<?xpacket end=\"w\"?>\n";
+        if (file.write(packet) != packet.size()) {
+            if (error)
+                *error = QStringLiteral("could not write %1").arg(path);
+            return false;
+        }
+        return true;
+    }
+    try {
+        ImagePtr sidecar = Exiv2::ImageFactory::open(path.toStdString());
+        if (!sidecar.get())
+            throw Exiv2::Error(Exiv2::ErrorCode::kerErrorMessage, "open failed");
+        sidecar->readMetadata();
+        Exiv2::XmpData xmp = sidecar->xmpData();
+        xmp["Xmp.xmp.Rating"] = std::to_string(rating);
+        sidecar->setXmpData(xmp);
+        sidecar->writeMetadata();
         return true;
     } catch (const Exiv2::Error &e) {
         if (error)

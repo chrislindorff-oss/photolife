@@ -143,6 +143,12 @@ public:
 
     // Whether the map draws the active reference tree's region outline. Set
     // from the View menu's "Show Tree Locality on Map" toggle; on by default.
+    // Whether the Reference Trees panel is shown in a view ("tree",
+    // "library", "review", "inat", "organise"): by default only where the
+    // tree is used -- the Reference Tree and All Library Photos views.
+    bool treePanelShown(const QString &view) const;
+    void setTreePanelShown(const QString &view, bool shown);
+
     bool showMapLocality() const;
     void setShowMapLocality(bool show);
 

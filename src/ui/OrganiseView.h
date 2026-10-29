@@ -1,6 +1,7 @@
 #pragma once
 
 #include "organise/OrganiseSession.h"
+#include "ui/ImageViewer.h"
 
 #include <QWidget>
 
@@ -16,7 +17,6 @@ class QToolButton;
 namespace pl {
 
 class Application;
-class ImageViewer;
 
 namespace ui_organise {
 class OrganiseModel;
@@ -65,7 +65,9 @@ private:
     void nameAt(int row);
     void toggleRejected(int row = -1);
     void toggleNamingEnd(int row);
+    void toggleBest();   // the selected photos
     void showFullSize(int row);
+    ImageViewer::Item viewerItem(int row) const;
     void contextMenuAt(const QPoint &pos);
     void changed(int row);   // after a name/reject: repaint the run, save
     // Organising: the places the renamed photos still need, then the moves.
@@ -73,6 +75,10 @@ private:
     void findPlacesThen(const QList<int> &rows, std::function<void()> then);
     void executePlan(const organise::OrganisePlan &plan, bool rename);
     void updatePreview();
+    // A big folder comes a page at a time: the next page is read when the
+    // view nears the end of those loaded; all of them before organising.
+    void maybeLoadMore();
+    void loadMore(bool all = false);
 
     Application &m_app;
     organise::OrganiseSession m_session;
@@ -98,6 +104,9 @@ private:
     QString m_previewKey;                 // its thumbnail key, while loading
     bool m_filmstrip = true;
     bool m_loading = false;
+    bool m_loadingMore = false;
+    bool m_commitWhenLoaded = false;      // Organise into Folders waits for the rest
+    int m_loadGeneration = 0;             // each open bumps it: pages for an earlier one are dropped
 };
 
 } // namespace pl

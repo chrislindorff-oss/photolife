@@ -22,6 +22,25 @@
 namespace pl::scan {
 namespace {
 
+// A shot rated 5 stars: in a JPEG's own XMP, or in an XMP sidecar beside the
+// RAW ("DSC_1234.xmp" as Lightroom names it, "DSC_1234.NEF.xmp" as darktable does).
+bool isFiveStar(const DiscoveredCapture &cap)
+{
+    QStringList sources;
+    sources << QDir(cap.dirPath).filePath(cap.baseName + QStringLiteral(".xmp"));
+    for (const DiscoveredFile &f : cap.files) {
+        if (!f.isRaw)
+            sources << f.path;
+        sources << f.path + QStringLiteral(".xmp");
+    }
+    for (const QString &path : std::as_const(sources)) {
+        if (QFileInfo::exists(path) && readXmpRating(path).value_or(0) >= 5)
+            return true;
+    }
+    return false;
+}
+
+
 QString isoNow()
 {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
@@ -298,6 +317,17 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
                 return bail(ins.lastError().text());
             captureId = ins.value(0).toInt();
             ++summary.capturesAdded;
+            // Rated 5 stars before it came in (Organise's Best Shot, or
+            // another photo program): a best shot. Only when first added, so
+            // unstarring it here later sticks.
+            if (isFiveStar(cap)) {
+                QSqlQuery best(db);
+                best.prepare(QStringLiteral("INSERT INTO best_shot (capture_id) VALUES (?) "
+                                            "ON CONFLICT(capture_id) DO NOTHING"));
+                best.addBindValue(captureId);
+                if (!best.exec())
+                    return bail(best.lastError().text());
+            }
         }
 
         QDateTime earliestExif;

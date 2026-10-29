@@ -170,11 +170,16 @@ ImageViewer::ImageViewer(QWidget *parent)
             .arg(item.longitude, 0, 'f', 6)));
     });
 
+    m_reject = new QPushButton(this);
+    m_reject->hide();
+    connect(m_reject, &QPushButton::clicked, this, &ImageViewer::toggleReject);
+
     auto *nav = new QHBoxLayout;
     nav->addWidget(prev);
     nav->addStretch(1);
     nav->addWidget(m_bestShot);
     nav->addWidget(m_viewOnMap);
+    nav->addWidget(m_reject);
     nav->addStretch(1);
     nav->addWidget(m_counter);
     nav->addStretch(1);
@@ -219,6 +224,7 @@ void ImageViewer::showCurrent()
         m_counter->clear();
         m_bestShot->hide();
         m_viewOnMap->hide();
+        m_reject->hide();
         return;
     }
 
@@ -247,6 +253,51 @@ void ImageViewer::showCurrent()
     setWindowTitle(item.title.isEmpty() ? tr("Photo") : item.title);
     updateBestShotButton();
     updateMapButton();
+    updateRejectButton();
+}
+
+void ImageViewer::updateRejectButton()
+{
+    if (m_items.isEmpty() || !m_items.at(m_index).canReject) {
+        m_reject->hide();
+        return;
+    }
+    const bool rejected = m_items.at(m_index).rejected;
+    m_reject->setText(rejected ? tr("✕ Rejected — R to keep") : tr("✕ Reject (R)"));
+    m_reject->setStyleSheet(rejected ? QStringLiteral("QPushButton { color: #c33; font-weight: bold; }")
+                                     : QString());
+    m_reject->show();
+}
+
+void ImageViewer::toggleReject()
+{
+    if (m_items.isEmpty() || !m_items.at(m_index).canReject)
+        return;
+    const int index = m_index;
+    const bool reject = !m_items.at(index).rejected;
+    emit rejectToggleRequested(index, reject);
+    // On to the next photo, as when culling; taking one back stays on it.
+    if (reject && m_items.at(index).rejected && index == m_index)
+        step(1);
+}
+
+void ImageViewer::updateItem(int index, const Item &item)
+{
+    if (index < 0 || index >= m_items.size())
+        return;
+    const bool samePhoto = m_items.at(index).path == item.path;
+    m_items[index] = item;
+    if (index != m_index)
+        return;
+    if (!samePhoto) {
+        showCurrent();
+        return;
+    }
+    m_caption->setText(item.caption);
+    setWindowTitle(item.title.isEmpty() ? tr("Photo") : item.title);
+    updateBestShotButton();
+    updateMapButton();
+    updateRejectButton();
 }
 
 void ImageViewer::updateMapButton()
@@ -481,6 +532,12 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
     case Qt::Key_F:
         m_spot = QPointF(0.5, 0.5);
         zoomTo(0, viewportCenter());
+        break;
+    case Qt::Key_R:
+        if (!m_items.isEmpty() && m_items.at(m_index).canReject)
+            toggleReject();
+        else
+            QDialog::keyPressEvent(event);
         break;
     default:
         QDialog::keyPressEvent(event);

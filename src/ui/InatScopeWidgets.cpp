@@ -114,7 +114,7 @@ void TaxonLimitRow::setTreeSelection(qint64 inatId, const QString &name)
     m_useTreeSelectionButton->setToolTip(
         inatId > 0 ? tr("Limit to \"%1\", the taxon selected in the Reference Trees panel.")
                          .arg(name)
-                   : tr("Select a taxon in the Reference Trees panel first."));
+                   : tr("Select a taxon in the Reference Trees panel first (F9 shows the panel)."));
     updateButtons();
 }
 

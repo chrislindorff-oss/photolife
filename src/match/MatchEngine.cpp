@@ -229,6 +229,21 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId,
         out.note = topFile->matchedVia == QLatin1String("synonym")
                        ? QStringLiteral("folder and filename reconcile via a synonym")
                        : QString();
+    } else if (topFile && topFolder && isAtOrBelow(topFile->taxonId, topFolder->taxonId)) {
+        // Not a disagreement: the file names a taxon inside the folder's
+        // (Formicidae/Podomyrma adelaidae -- a family folder of species).
+        out.taxonId = topFile->taxonId;
+        out.matchedRank = topFile->rank;
+        out.method = QStringLiteral("folder+file");
+        out.confidence = std::min(1.0, topFile->score + 0.05);
+        out.note = QStringLiteral("filename within the folder's %1").arg(topFolder->rank);
+    } else if (topFile && topFolder && isAtOrBelow(topFolder->taxonId, topFile->taxonId)) {
+        // ...or the other way round: the folder is the more exact.
+        out.taxonId = topFolder->taxonId;
+        out.matchedRank = topFolder->rank;
+        out.method = QStringLiteral("folder+file");
+        out.confidence = std::min(1.0, topFolder->score + 0.05);
+        out.note = QStringLiteral("folder within the filename's %1").arg(topFile->rank);
     } else if (topFile && topFolder && topFile->taxonId != topFolder->taxonId) {
         const TaxonCandidate *pick = topFile->score >= topFolder->score ? topFile : topFolder;
         out.taxonId = pick->taxonId;

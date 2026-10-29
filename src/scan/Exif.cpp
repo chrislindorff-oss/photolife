@@ -1,6 +1,9 @@
 #include "scan/Exif.h"
 
+#include <algorithm>
+
 #include <QFile>
+#include <QRegularExpression>
 #include <QIODevice>
 #include <QtEndian>
 
@@ -233,6 +236,55 @@ ExifData readJpegExif(QIODevice &device)
     }
 
     return {};
+}
+
+std::optional<int> readXmpRating(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return std::nullopt;
+    // XMP sits near the start of a JPEG; a sidecar is all XMP.
+    const QByteArray head = file.read(kMaxScanBytes * 4);
+    // xmp:Rating="5" (an attribute) or <xmp:Rating>5</xmp:Rating>.
+    static const QRegularExpression rating(QStringLiteral("xmp:Rating\\s*(?:=\\s*[\"']|>)\\s*(-?\\d)"));
+    const int at = head.indexOf("xmp:Rating");
+    if (at < 0)
+        return std::nullopt;
+    const QRegularExpressionMatch m = rating.match(QString::fromLatin1(head.mid(at, 64)));
+    if (!m.hasMatch())
+        return std::nullopt;
+    return m.captured(1).toInt();
+}
+
+ExifData readTiffExif(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    QByteArray head = file.read(64 * 1024);
+    ExifData out = parseExifSegment(head);
+    if (out.hasDate() && out.hasGps())
+        return out;
+    // The GPS directory can lie past a large maker note (Nikon puts it ~250 KB
+    // in): read on to just past the furthest directory IFD0 points to.
+    if (head.size() < 8 || (head.left(2) != "II" && head.left(2) != "MM"))
+        return out;
+    const bool bigEndian = head.at(0) == 'M';
+    bool ok = true;
+    const quint32 ifd0 = read<quint32>(head, 4, bigEndian, &ok);
+    if (!ok || ifd0 >= quint32(head.size()))
+        return out;
+    quint32 furthest = 0;
+    IfdReader reader{head, bigEndian};
+    reader.walk(ifd0, [&](quint16 tag, quint16, quint32, int valuePos) {
+        if (tag == 0x8769 || tag == 0x8825)
+            furthest = std::max(furthest, read<quint32>(head, valuePos, bigEndian, &ok));
+    });
+    constexpr quint32 kMaxRead = 4 * 1024 * 1024;
+    if (furthest < quint32(head.size()) || furthest > kMaxRead)
+        return out;
+    head += file.read(qint64(furthest) + 4096 - head.size());
+    return parseExifSegment(head);
 }
 
 ExifData readJpegExif(const QString &path)

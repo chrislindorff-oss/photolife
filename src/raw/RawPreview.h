@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QDateTime>
 #include <QImage>
 #include <QString>
 
@@ -44,6 +45,17 @@ struct RawGps
 // an empty result for a missing/non-RAW file, a RAW file with no GPS, or
 // when LibRaw isn't compiled in.
 RawGps extractGps(const QString &path);
+
+// When a RAW was taken and where, from one quick read of its own metadata --
+// neither the preview nor the image data is read, so it's the cheap way to
+// date a folder of RAWs. `taken` is the camera's clock time (local, as the
+// JPEG EXIF reader gives it); invalid when the file has no date.
+struct RawInfo
+{
+    QDateTime taken;
+    RawGps gps;
+};
+RawInfo readInfo(const QString &path);
 
 // Pure DMS -> decimal-degrees conversion, exposed for testing: deg + min/60
 // + sec/3600, negated when `ref` case-insensitively matches `negativeRef`

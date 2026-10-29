@@ -5,14 +5,20 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 
 #include "db/Database.h"
 #include "geo/LocalityStore.h"
 #include "inat/ExifWriter.h"
 #include "organise/OrganiseMover.h"
+#include "scan/CatalogueWriter.h"
+#include "scan/Exif.h"
+#include "scan/FileScanner.h"
 #include "organise/OrganiseSession.h"
 
+using namespace pl;
 using namespace pl::organise;
 
 namespace {
@@ -67,12 +73,16 @@ private slots:
     void scanGroupsPairsAndSidecarsInShootingOrder();
     void scanReportsPhotoProgress();
     void scanReadsGps();
+    void bigFoldersLoadAPageAtATime();
     void localityLookupUsesTheSameRounding();
     void runsRejectsAndMergedNames();
     void namingCanEndAndResume();
     void progressIsKeptAndRecognisesTheShots();
     void organiseAndUndo();
     void renamedBaseNames();
+    void bestShotsAreKeptAndExcludeRejects();
+    void bestShotsAreRatedFiveStars();
+    void fiveStarPhotosArriveAsBestShots();
     void organiseRenamesShotsTogetherAndUndoPutsNamesBack();
     void neverOverwrites();
     void undoTakesBackOneWholeOrganiseAtATime();
@@ -144,6 +154,62 @@ void TestOrganise::scanReadsGps()
     QVERIFY(std::abs(*items.at(0).latitude - -35.27512) < 1e-4);
     QVERIFY(std::abs(*items.at(0).longitude - 149.12843) < 1e-4);
     QVERIFY(!items.at(1).hasGps());
+}
+
+void TestOrganise::bigFoldersLoadAPageAtATime()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    const int total = OrganiseSession::kPageSize + 60;
+    for (int i = 0; i < total; ++i)
+        writeShot(dir, QStringLiteral("DSC_%1.NEF").arg(i, 4, 10, QLatin1Char('0')), 1000 + i);
+
+    // Listed in file-time order, quickly: nothing read yet.
+    QList<Item> listed = OrganiseSession::listFolder(tmp.path());
+    QCOMPARE(listed.size(), total);
+    QCOMPARE(listed.first().baseName, QStringLiteral("DSC_0000"));
+    QCOMPARE(listed.last().baseName, QStringLiteral("DSC_%1").arg(total - 1, 4, 10, QLatin1Char('0')));
+    QCOMPARE(listed.at(5).taken, QDateTime::fromSecsSinceEpoch(1005));
+    // No progress: one page first.
+    QCOMPARE(OrganiseSession::firstPageSize(tmp.path(), listed), OrganiseSession::kPageSize);
+
+    // Name a photo beyond the first page, and one in it.
+    const int beyond = OrganiseSession::kPageSize + 20;
+    {
+        OrganiseSession all;
+        all.setItems(tmp.path(), listed);
+        all.setName(3, QStringLiteral("Flame Robin"));
+        all.setName(beyond, QStringLiteral("Scarlet Robin"));
+        QVERIFY(all.saveProgress());
+    }
+    // Carrying on reads far enough to reach it (and a page past, here the lot).
+    QCOMPARE(OrganiseSession::firstPageSize(tmp.path(), listed), total);
+
+    // A page at a time: the second page arrives with its saved names.
+    OrganiseSession s;
+    QList<Item> first = listed.mid(0, OrganiseSession::kPageSize);
+    s.setItems(tmp.path(), first, listed.mid(OrganiseSession::kPageSize));
+    s.loadProgress();
+    QCOMPARE(s.count(), OrganiseSession::kPageSize);
+    QCOMPARE(s.pendingCount(), 60);
+    QCOMPARE(s.nameAt(3), QStringLiteral("Flame Robin"));
+    // Flame Robin runs to the end of what's loaded.
+    QCOMPARE(s.runName(OrganiseSession::kPageSize - 1), QStringLiteral("Flame Robin"));
+
+    // Saving with only the first page loaded keeps the later photo's name.
+    s.setRejected(10, true);
+    QVERIFY(s.saveProgress());
+
+    QList<Item> next = s.pending().mid(0, 30);
+    for (Item &item : next)
+        OrganiseSession::readMetadata(item);
+    QCOMPARE(s.appendItems(next), 30);
+    QCOMPARE(s.count(), OrganiseSession::kPageSize + 30);
+    QCOMPARE(s.pendingCount(), 30);
+    QCOMPARE(s.items().at(beyond).baseName, listed.at(beyond).baseName);
+    QCOMPARE(s.nameAt(beyond), QStringLiteral("Scarlet Robin"));
+    QCOMPARE(s.runName(beyond - 1), QStringLiteral("Flame Robin"));
+    QVERIFY(s.isRejected(10));
 }
 
 void TestOrganise::localityLookupUsesTheSameRounding()
@@ -278,6 +344,96 @@ void TestOrganise::organiseAndUndo()
     QVERIFY(!dir.exists(QStringLiteral("Flame Robin")));   // made by it, empty again
     QVERIFY(!dir.exists(QStringLiteral("Rejects")));
     QVERIFY(!OrganiseMover::canUndo(tmp.path()));
+}
+
+void TestOrganise::bestShotsAreKeptAndExcludeRejects()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.jpg"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0002.jpg"), 2000);
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    s.setRejected(0, true);
+    s.setBest(0, true);   // a best shot isn't a reject
+    QVERIFY(s.isBest(0) && !s.isRejected(0));
+    s.setBest(1, true);
+    s.setRejected(1, true);   // ...and a reject isn't a best shot
+    QVERIFY(!s.isBest(1) && s.isRejected(1));
+    QCOMPARE(s.bestShots(), (QList<int>{0}));
+    QVERIFY(s.saveProgress());
+
+    OrganiseSession again;
+    again.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    again.loadProgress();
+    QVERIFY(again.isBest(0));
+    QVERIFY(!again.isBest(1));
+}
+
+void TestOrganise::bestShotsAreRatedFiveStars()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.jpg"), 1000);   // JPEG only
+    writeShot(dir, QStringLiteral("DSC_0002.NEF"), 2000);   // RAW + JPEG
+    writeShot(dir, QStringLiteral("DSC_0002.jpg"), 2000);
+    writeShot(dir, QStringLiteral("DSC_0003.NEF"), 3000);   // RAW with darktable's sidecar
+    QVERIFY(inat::writeSidecarRating(dir.filePath(QStringLiteral("DSC_0003.NEF.xmp")), 1));
+    const QByteArray raw = [&] {
+        QFile f(dir.filePath(QStringLiteral("DSC_0002.NEF")));
+        f.open(QIODevice::ReadOnly);
+        return f.readAll();
+    }();
+
+    const QList<Item> items = OrganiseSession::scanFolder(tmp.path());
+    QCOMPARE(items.size(), 3);
+    QString created, error;
+    QVERIFY2(OrganiseSession::rateFiveStars(items.at(0), &created, &error), qPrintable(error));
+    QVERIFY(created.isEmpty());   // the JPEG holds it
+    QCOMPARE(scan::readXmpRating(dir.filePath(QStringLiteral("DSC_0001.jpg"))).value_or(0), 5);
+    QCOMPARE(QFileInfo(dir.filePath(QStringLiteral("DSC_0001.jpg"))).lastModified().toSecsSinceEpoch(), 1000);
+
+    QVERIFY2(OrganiseSession::rateFiveStars(items.at(1), &created, &error), qPrintable(error));
+    QCOMPARE(QFileInfo(created).fileName(), QStringLiteral("DSC_0002.xmp"));
+    QCOMPARE(scan::readXmpRating(created).value_or(0), 5);
+    QCOMPARE(scan::readXmpRating(dir.filePath(QStringLiteral("DSC_0002.jpg"))).value_or(0), 5);
+    QFile f(dir.filePath(QStringLiteral("DSC_0002.NEF")));
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    QCOMPARE(f.readAll(), raw);   // the RAW untouched
+
+    created.clear();
+    QVERIFY2(OrganiseSession::rateFiveStars(items.at(2), &created, &error), qPrintable(error));
+    QVERIFY(created.isEmpty());   // its own sidecar, updated
+    QCOMPARE(scan::readXmpRating(dir.filePath(QStringLiteral("DSC_0003.NEF.xmp"))).value_or(0), 5);
+}
+
+void TestOrganise::fiveStarPhotosArriveAsBestShots()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("Robin 1.jpg"), 1000);
+    writeShot(dir, QStringLiteral("Robin 2.jpg"), 2000);
+    writeShot(dir, QStringLiteral("Robin 3.NEF"), 3000);
+    inat::ExifFields five;
+    five.rating = 5;
+    QVERIFY(inat::writeExif(dir.filePath(QStringLiteral("Robin 1.jpg")), five));
+    inat::ExifFields three;
+    three.rating = 3;
+    QVERIFY(inat::writeExif(dir.filePath(QStringLiteral("Robin 2.jpg")), three));
+    QVERIFY(inat::writeSidecarRating(dir.filePath(QStringLiteral("Robin 3.xmp")), 5));
+
+    Database db;
+    QVERIFY(db.open(dir.filePath(QStringLiteral("catalogue.sqlite"))));
+    scan::CatalogueWriter writer(db.connectionName());
+    scan::FileScanner scanner;
+    QVERIFY(writer.sync(scanner.scan({tmp.path()}), {tmp.path()}).ok());
+    QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+    QVERIFY(q.exec(QStringLiteral("SELECT c.base_name FROM best_shot b JOIN capture c ON c.id = b.capture_id "
+                                  "ORDER BY c.base_name")));
+    QStringList best;
+    while (q.next())
+        best << q.value(0).toString();
+    QCOMPARE(best, (QStringList{QStringLiteral("Robin 1"), QStringLiteral("Robin 3")}));
 }
 
 void TestOrganise::renamedBaseNames()

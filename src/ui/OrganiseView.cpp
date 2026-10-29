@@ -59,6 +59,7 @@ enum Role {
     RejectedRole,
     NamingEndRole,
     HasGpsRole,
+    BestRole,
     PlaceRole,      // the place's name; empty without GPS or while places are off
     PlaceStateRole, // a PlaceState
 };
@@ -109,6 +110,16 @@ public:
         for (int i = 0; i < m_session.count(); ++i)
             m_rowByKey.insert(thumb::ThumbnailCache::keyFor({}, m_session.items().at(i).previewPath), i);
         endResetModel();
+    }
+
+    // Rows from..to have been added at the end, by `apply`.
+    void appendRows(int from, int to, const std::function<void()> &apply)
+    {
+        beginInsertRows({}, from, to);
+        apply();
+        for (int i = from; i <= to && i < m_session.count(); ++i)
+            m_rowByKey.insert(thumb::ThumbnailCache::keyFor({}, m_session.items().at(i).previewPath), i);
+        endInsertRows();
     }
 
     // Places: looked up by coordinate, kept for the session (they don't
@@ -195,6 +206,8 @@ public:
             return m_session.isNamingEndAt(row);
         case HasGpsRole:
             return item.hasGps();
+        case BestRole:
+            return m_session.isBest(row);
         case PlaceRole:
             return showPlaces ? places.value(placeKey(item)) : QString();
         case PlaceStateRole:
@@ -209,6 +222,22 @@ private:
     thumb::ThumbnailCache &m_thumbs;
     QHash<QString, int> m_rowByKey;
 };
+
+// A five-pointed star filling `box`.
+QPolygonF starIn(const QRectF &box)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    const QPointF c = box.center();
+    const qreal outer = std::min(box.width(), box.height()) / 2.0;
+    const qreal inner = outer * 0.42;
+    QPolygonF star;
+    for (int i = 0; i < 10; ++i) {
+        const qreal r = i % 2 == 0 ? outer : inner;
+        const qreal a = -kPi / 2.0 + i * kPi / 5.0;
+        star << QPointF(c.x() + r * std::cos(a), c.y() + r * std::sin(a));
+    }
+    return star;
+}
 
 // A framed photo: its run's band and name on top, the picture, then the file
 // name and when it was taken; rejects crossed out.
@@ -292,6 +321,12 @@ public:
             p->drawPixmap(target, px);
             if (index.data(HasGpsRole).toBool())
                 drawGeoPill(p, t, target, option.font);
+            // A best shot: a gold star at the top right.
+            if (index.data(BestRole).toBool()) {
+                p->setPen(QPen(QColor(0, 0, 0, 120), 1.2));
+                p->setBrush(t.bestShotGold);
+                p->drawPolygon(starIn(QRectF(target.right() - 30, target.top() + 6, 24, 24)));
+            }
         } else {
             p->setPen(t.mutedText);
             p->drawText(img, Qt::AlignCenter, QObject::tr("Loading…"));
@@ -323,6 +358,7 @@ public:
         const QString line1 = index.data(Qt::DisplayRole).toString() + QStringLiteral("  ·  ")
                               + index.data(KindsRole).toString()
                               + (rejected ? QObject::tr("  ·  reject") : QString())
+                              + (index.data(BestRole).toBool() ? QObject::tr("  ·  ★ best shot") : QString())
                               + (index.data(NamingEndRole).toBool()
                                      ? QObject::tr("  ·  last of its taxon")
                                      : QString());
@@ -576,7 +612,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addWidget(m_commitButton);
 
     m_hint = new QLabel(tr("Click a photo to focus and preview it. N names it · R marks it as a "
-                           "reject · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1) · "
+                           "reject · B marks it as a best shot · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
                            "right-click for actions. The photos after a named one go with it, "
                            "up to the next name or end. The wheel scrolls · F11 full screen."),
                         this);
@@ -649,6 +685,13 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     connect(m_placeScan, &QTimer::timeout, this, &OrganiseView::lookUpNextPlace);
     connect(m_list->horizontalScrollBar(), &QScrollBar::valueChanged, m_placeScan, qOverload<>(&QTimer::start));
     connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, m_placeScan, qOverload<>(&QTimer::start));
+    // Nearing the end of the photos loaded: the next page.
+    for (QScrollBar *bar : {m_list->horizontalScrollBar(), m_list->verticalScrollBar()}) {
+        connect(bar, &QScrollBar::valueChanged, this, &OrganiseView::maybeLoadMore);
+        connect(bar, &QScrollBar::rangeChanged, this, &OrganiseView::maybeLoadMore);
+    }
+    connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &OrganiseView::maybeLoadMore);
 
     setFilmstrip(true);
     m_placesButton->setChecked(m_app.settings().organiseShowPlaces());
@@ -673,6 +716,8 @@ void OrganiseView::openFolder(const QString &folder)
     if (m_loading)
         return;
     m_loading = true;
+    ++m_loadGeneration;
+    m_commitWhenLoaded = false;
     m_app.settings().setOrganiseFolder(folder);
     m_folderText = QDir::toNativeSeparators(folder);
     m_folderLabel->setToolTip(m_folderText);
@@ -683,20 +728,27 @@ void OrganiseView::openFolder(const QString &folder)
     m_scanProgress->show();
     m_commitButton->setEnabled(false);
     m_undoButton->setEnabled(false);
-    auto *watcher = new QFutureWatcher<QList<organise::Item>>(this);
-    connect(watcher, &QFutureWatcher<QList<organise::Item>>::progressRangeChanged, this,
+    // The shots are listed (quick), then the first page of them read.
+    struct FirstPage
+    {
+        QList<organise::Item> read;
+        QList<organise::Item> pending;
+    };
+    auto *watcher = new QFutureWatcher<FirstPage>(this);
+    connect(watcher, &QFutureWatcher<FirstPage>::progressRangeChanged, this,
             [this](int minimum, int maximum) {
                 m_scanProgress->setRange(minimum, maximum);
                 m_scanProgress->setFormat(maximum == 0 ? tr("Finding photos…")
                                                        : tr("%v / %m photos"));
             });
-    connect(watcher, &QFutureWatcher<QList<organise::Item>>::progressValueChanged,
+    connect(watcher, &QFutureWatcher<FirstPage>::progressValueChanged,
             m_scanProgress, &QProgressBar::setValue);
-    connect(watcher, &QFutureWatcher<QList<organise::Item>>::finished, this, [this, watcher, folder] {
+    connect(watcher, &QFutureWatcher<FirstPage>::finished, this, [this, watcher, folder] {
         watcher->deleteLater();
         m_loading = false;
         m_scanProgress->hide();
-        m_session.setItems(folder, watcher->result());
+        FirstPage page = watcher->result();
+        m_session.setItems(folder, std::move(page.read), std::move(page.pending));
         m_session.loadProgress();
         m_model->reset();
         updateCellSize();
@@ -713,18 +765,87 @@ void OrganiseView::openFolder(const QString &folder)
         }
         m_list->setFocus();
         m_placeScan->start();
+        maybeLoadMore();
     });
-    watcher->setFuture(QtConcurrent::run([folder](QPromise<QList<organise::Item>> &promise) {
+    watcher->setFuture(QtConcurrent::run([folder](QPromise<FirstPage> &promise) {
         promise.setProgressRange(0, 0);
-        QList<organise::Item> items = organise::OrganiseSession::scanFolder(
-            folder, [&promise](int done, int total) {
-            if (total > 0) {
-                if (done == 0)
-                    promise.setProgressRange(0, total);
-                promise.setProgressValue(done);
+        FirstPage page;
+        page.pending = organise::OrganiseSession::listFolder(folder);
+        const int first = organise::OrganiseSession::firstPageSize(folder, page.pending);
+        promise.setProgressRange(0, first);
+        page.read = page.pending.mid(0, first);
+        page.pending.remove(0, first);
+        for (int i = 0; i < page.read.size(); ++i) {
+            organise::OrganiseSession::readMetadata(page.read[i]);
+            promise.setProgressValue(i + 1);
+        }
+        organise::OrganiseSession::sortByTaken(page.read);
+        promise.addResult(std::move(page));
+    }));
+}
+
+void OrganiseView::maybeLoadMore()
+{
+    if (m_loading || m_loadingMore || m_session.pendingCount() == 0)
+        return;
+    // Within a few screens of the end, or the focus on one of the last 50
+    // photos: early enough that the page is usually there before you are.
+    const QScrollBar *bar = m_filmstrip ? m_list->horizontalScrollBar() : m_list->verticalScrollBar();
+    const bool nearEnd = bar->maximum() - bar->value() <= 3 * bar->pageStep();
+    if (nearEnd || m_list->currentIndex().row() >= m_session.count() - 50)
+        loadMore();
+}
+
+void OrganiseView::loadMore(bool all)
+{
+    if (m_loadingMore || m_session.pendingCount() == 0)
+        return;
+    m_loadingMore = true;
+    const int generation = m_loadGeneration;
+    QList<organise::Item> batch =
+        m_session.pending().mid(0, all ? m_session.pendingCount() : organise::OrganiseSession::kPageSize);
+    m_scanProgress->setRange(0, int(batch.size()));
+    m_scanProgress->setValue(0);
+    m_scanProgress->setFormat(all ? tr("Reading the rest of the photos before organising… %v / %m")
+                                  : tr("Loading more photos… %v / %m"));
+    m_scanProgress->show();
+    auto *watcher = new QFutureWatcher<QList<organise::Item>>(this);
+    connect(watcher, &QFutureWatcher<QList<organise::Item>>::progressValueChanged,
+            m_scanProgress, &QProgressBar::setValue);
+    connect(watcher, &QFutureWatcher<QList<organise::Item>>::finished, this, [this, watcher, generation] {
+        watcher->deleteLater();
+        if (generation != m_loadGeneration) {
+            m_loadingMore = false;
+            return;   // another folder (or this one again) has been opened since
+        }
+        m_scanProgress->hide();
+        const QList<organise::Item> read = watcher->result();
+        const int from = m_session.count();
+        if (!read.isEmpty()) {
+            m_model->appendRows(from, from + int(read.size()) - 1, [&] { m_session.appendItems(read); });
+            m_model->runChanged(from - 1);   // the last run carries on into them
+        }
+        m_loadingMore = false;
+        updateCounts();
+        if (m_commitWhenLoaded) {
+            if (m_session.pendingCount() > 0) {
+                loadMore(true);
+            } else {
+                m_commitWhenLoaded = false;
+                commit();
             }
-        });
-        promise.addResult(std::move(items));
+            return;
+        }
+        m_placeScan->start();
+        maybeLoadMore();
+    });
+    watcher->setFuture(QtConcurrent::run([batch](QPromise<QList<organise::Item>> &promise) mutable {
+        promise.setProgressRange(0, int(batch.size()));
+        for (int i = 0; i < batch.size(); ++i) {
+            organise::OrganiseSession::readMetadata(batch[i]);
+            promise.setProgressValue(i + 1);
+        }
+        promise.addResult(std::move(batch));
     }));
 }
 
@@ -893,7 +1014,9 @@ void OrganiseView::updatePreview()
                  QLocale().toString(item.taken, QLocale::LongFormat).toHtmlEscaped(),
                  place.isEmpty() ? QString() : QStringLiteral(" · ") + place.toHtmlEscaped(),
                  run.isEmpty() ? tr(" · not named yet") : QStringLiteral(" · <b>%1</b>").arg(run.toHtmlEscaped()),
-                 m_session.isRejected(row) ? tr(" · <span style='color:#c33'>reject</span>") : QString()));
+                 m_session.isRejected(row) ? tr(" · <span style='color:#c33'>reject</span>")
+                 : m_session.isBest(row)   ? tr(" · ★ best shot")
+                                           : QString()));
 }
 
 void OrganiseView::updateCounts()
@@ -917,10 +1040,18 @@ void OrganiseView::updateCounts()
         return;
     }
     const organise::OrganisePlan plan = m_session.plan();
-    m_counts->setText(tr("%Ln photo(s)", nullptr, m_session.count()) + QStringLiteral(" · ")
+    const int total = m_session.count() + m_session.pendingCount();
+    m_counts->setText((m_session.pendingCount() > 0
+                           ? tr("%1 of %Ln photo(s) loaded — more as you scroll", nullptr, total)
+                                 .arg(QLocale().toString(m_session.count()))
+                           : tr("%Ln photo(s)", nullptr, m_session.count()))
+                      + QStringLiteral(" · ")
                       + tr("%Ln taxa", nullptr, int(plan.folders.size())) + QStringLiteral(" · ")
                       + tr("%Ln reject(s)", nullptr, int(plan.rejects.size())) + QStringLiteral(" · ")
-                      + tr("%Ln unnamed", nullptr, plan.unnamed));
+                      + tr("%Ln unnamed", nullptr, plan.unnamed)
+                      + (m_session.bestShots().isEmpty()
+                             ? QString()
+                             : QStringLiteral(" · ") + tr("%Ln best", nullptr, int(m_session.bestShots().size()))));
     m_commitButton->setEnabled(!plan.folders.isEmpty() || !plan.rejects.isEmpty());
 }
 
@@ -994,27 +1125,66 @@ void OrganiseView::toggleNamingEnd(int row)
     changed(row);
 }
 
+void OrganiseView::toggleBest()
+{
+    const QModelIndexList rows = m_list->selectionModel()->selectedIndexes();
+    if (rows.isEmpty())
+        return;
+    // All best shots already: unmark; otherwise mark them all.
+    bool all = true;
+    for (const QModelIndex &i : rows)
+        all = all && m_session.isBest(i.row());
+    int first = m_session.count();
+    for (const QModelIndex &i : rows) {
+        m_session.setBest(i.row(), !all);
+        first = std::min(first, i.row());
+    }
+    emit statusMessage(all ? tr("No longer a best shot.", nullptr, int(rows.size()))
+                           : tr("%n best shot(s) — rated 5 stars when organised, so the library "
+                                "takes them as Best Shots when you add them.", nullptr, int(rows.size())),
+                       6000);
+    changed(first);
+}
+
+ImageViewer::Item OrganiseView::viewerItem(int row) const
+{
+    const organise::Item &it = m_session.items().at(row);
+    ImageViewer::Item v;
+    v.path = it.previewPath;
+    v.title = it.baseName;
+    const QString run = m_session.runName(row);
+    const QString place = m_model->showPlaces ? m_model->places.value(placeKey(it)) : QString();
+    v.caption = it.baseName + QStringLiteral(" · ") + it.kinds.join(QLatin1Char('+'))
+                + QStringLiteral(" · ") + QLocale().toString(it.taken, QLocale::ShortFormat)
+                + (place.isEmpty() ? QString() : QStringLiteral(" · ") + place)
+                + (run.isEmpty() ? QString() : QStringLiteral("\n") + run)
+                + (m_session.isBest(row) ? tr(" · ★ best shot") : QString());
+    v.canReject = true;
+    v.rejected = m_session.isRejected(row);
+    return v;
+}
+
 void OrganiseView::showFullSize(int row)
 {
     if (row < 0 || row >= m_session.count())
         return;
     QVector<ImageViewer::Item> items;
-    for (int i = 0; i < m_session.count(); ++i) {
-        const organise::Item &it = m_session.items().at(i);
-        ImageViewer::Item v;
-        v.path = it.previewPath;
-        v.title = it.baseName;
-        const QString run = m_session.runName(i);
-        const QString place = m_model->showPlaces ? m_model->places.value(placeKey(it)) : QString();
-        v.caption = it.baseName + QStringLiteral(" · ") + it.kinds.join(QLatin1Char('+'))
-                    + QStringLiteral(" · ") + QLocale().toString(it.taken, QLocale::ShortFormat)
-                    + (place.isEmpty() ? QString() : QStringLiteral(" · ") + place)
-                    + (run.isEmpty() ? QString() : QStringLiteral("\n") + run)
-                    + (m_session.isRejected(i) ? tr("\nreject") : QString());
-        items << v;
-    }
-    if (!m_viewer)
+    for (int i = 0; i < m_session.count(); ++i)
+        items << viewerItem(i);
+    if (!m_viewer) {
         m_viewer = new ImageViewer(window());
+        // R in the viewer: reject it here too, and keep the filmstrip on it.
+        connect(m_viewer, &ImageViewer::rejectToggleRequested, this, [this](int i, bool reject) {
+            if (i < 0 || i >= m_session.count())
+                return;
+            m_session.setRejected(i, reject);
+            changed(i);
+            m_viewer->updateItem(i, viewerItem(i));
+            const QModelIndex at = m_model->index(i);
+            m_list->setCurrentIndex(at);
+            m_list->scrollTo(at);
+        });
+    }
     m_viewer->show();
     m_viewer->raise();
     m_viewer->activateWindow();
@@ -1041,6 +1211,12 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
         });
     menu.addAction(m_session.isRejected(row) ? tr("Not a Reject") : tr("Reject"), this,
                    [this, row] { toggleRejected(row); });
+    QAction *best = menu.addAction(tr("Best Shot"), this, [this] { toggleBest(); });
+    best->setCheckable(true);
+    best->setChecked(m_session.isBest(row));
+    best->setShortcut(Qt::Key_B);
+    best->setToolTip(tr("Rated 5 stars when organised, so the library takes it as a Best Shot "
+                        "of its species when you add it."));
     // Named for the taxon it closes, so it's clear the mark goes on its LAST
     // photo (not on the first photo of the next one).
     const QString taxon = m_session.runName(row);
@@ -1089,6 +1265,9 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
         case Qt::Key_E:
             toggleNamingEnd(row);
             return true;
+        case Qt::Key_B:
+            toggleBest();
+            return true;
         case Qt::Key_Delete:
             toggleRejected();
             return true;
@@ -1110,6 +1289,12 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
 
 void OrganiseView::commit()
 {
+    // The last name carries on into photos not loaded yet: read them all first.
+    if (m_session.pendingCount() > 0 || m_loadingMore) {
+        m_commitWhenLoaded = true;
+        loadMore(true);
+        return;
+    }
     const organise::OrganisePlan plan = m_session.plan();
     if (plan.folders.isEmpty() && plan.rejects.isEmpty())
         return;
@@ -1125,9 +1310,14 @@ void OrganiseView::commit()
                         .arg(plan.folders.size() + (plan.rejects.isEmpty() ? 0 : 1))
                         .arg(QDir::toNativeSeparators(m_session.folder())),
                     QMessageBox::NoButton, this);
+    const int bestCount = int(m_session.bestShots().size());
     const QString unnamedNote =
-        plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr, plan.unnamed)
-                         : QString();
+        (plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr, plan.unnamed)
+                          : QString())
+        + (bestCount > 0 ? tr("%Ln best shot(s) are rated 5 stars (in the JPEG, or an .xmp sidecar "
+                              "beside a RAW) so the library takes them as Best Shots. ",
+                              nullptr, bestCount)
+                         : QString());
     box.setInformativeText(unnamedNote
                            + tr("File names are kept, RAW and JPEG and sidecar files move together, "
                                 "nothing is overwritten, and Undo Organise puts all of it back."));
@@ -1279,12 +1469,37 @@ void OrganiseView::findPlacesThen(const QList<int> &rows, std::function<void()> 
 
 void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename)
 {
+    // Best shots first: rated 5 stars, so the library takes them as Best
+    // Shots. A new sidecar goes with its photo.
+    QHash<int, QString> sidecars;
+    QStringList ratingFailures;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    for (int i : m_session.bestShots()) {
+        QString created, error;
+        if (!organise::OrganiseSession::rateFiveStars(m_session.items().at(i), &created, &error))
+            ratingFailures << QStringLiteral("%1: %2").arg(m_session.items().at(i).baseName, error);
+        if (!created.isEmpty())
+            sidecars.insert(i, created);
+        m_session.refreshFileStats(i);   // still recognised after an undo
+    }
+    QApplication::restoreOverrideCursor();
+    if (!m_session.bestShots().isEmpty())
+        m_session.saveProgress();
+    if (!ratingFailures.isEmpty())
+        QMessageBox::warning(this, tr("Organise into Folders"),
+                             tr("%Ln best shot(s) couldn't be rated, so the library won't know them "
+                                "as best shots (star them there instead):\n\n%1",
+                                nullptr, int(ratingFailures.size()))
+                                 .arg(ratingFailures.mid(0, 10).join(QLatin1Char('\n'))));
+
     QList<organise::ShotMove> moves;
     int placeless = 0;   // renamed without a place: GPS, but it couldn't be found
     for (const organise::FolderMove &f : plan.folders) {
         for (int i : f.items) {
             const organise::Item &it = m_session.items().at(i);
             organise::ShotMove move{it.baseName, it.files, f.folderName, {}};
+            if (sidecars.contains(i))
+                move.files << sidecars.value(i);
             if (rename) {
                 const QString place = shortPlace(m_model->places.value(placeKey(it)));
                 if (it.hasGps() && m_model->unavailable.contains(placeKey(it)))
