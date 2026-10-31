@@ -128,3 +128,32 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+        id: test
+
+      # Job logs can only be read signed in to GitHub, but annotations are
+      # public -- and on Windows the failing tests' output hasn't been
+      # reaching ctest's log anyway. So re-run just the failing tests, with
+      # QtTest's report written to a file, and raise each FAIL! as an
+      # annotation on the run.
+      - name: Report failing tests
+        if: failure() && steps.test.outcome == 'failure'
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cd build
+          [ -f Testing/Temporary/LastTestsFailed.log ] || exit 0
+          for t in $(sed 's/^[0-9]*://' Testing/Temporary/LastTestsFailed.log); do
+            exe=tests/$t; [ -f "$exe.exe" ] && exe="$exe.exe"
+            rc=0; "$exe" -o "$t.txt,txt" > /dev/null 2>&1 || rc=$?
+            echo "===== $t (exit $rc) ====="
+            cat "$t.txt" 2>/dev/null || echo "(no report written)"
+            if [ ! -s "$t.txt" ]; then
+              echo "::error title=$t::exit $rc and no QtTest report: it stopped before writing one"
+              continue
+            fi
+            # Each failure with the lines after it (the values compared, the location).
+            { grep -A3 -E '^(FAIL!|XPASS|QFATAL)' "$t.txt" || true; } \
+              | awk -v t="$t" 'BEGIN { RS = "--\n" } NF { gsub(/%/, "%25"); gsub(/\r/, ""); gsub(/\n/, "%0A"); print "::error title=" t "::" $0 }' \
+              | head -10
+          done

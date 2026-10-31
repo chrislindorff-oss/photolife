@@ -413,6 +413,11 @@ void TestExportEngine::updateReportsFilesNoLongerInTheExport()
 
 void TestExportEngine::failsFastWhenDestinationIsNotWritable()
 {
+#ifdef Q_OS_WIN
+    // Windows ignores the read-only attribute on a folder (setPermissions
+    // sets only that), so there's no unwritable folder to make here.
+    QSKIP("a folder can't be made unwritable with QFile::setPermissions on Windows");
+#endif
     match::MatchEngine(m_db->connectionName()).matchAll();
 
     const QString readOnly = m_tmp.filePath(QStringLiteral("read-only"));
