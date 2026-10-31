@@ -131,29 +131,38 @@ jobs:
         id: test
 
       # Job logs can only be read signed in to GitHub, but annotations are
-      # public -- and on Windows the failing tests' output hasn't been
-      # reaching ctest's log anyway. So re-run just the failing tests, with
-      # QtTest's report written to a file, and raise each FAIL! as an
-      # annotation on the run.
+      # public. On Windows a failing test's output doesn't reach ctest's log
+      # at all (a test that aborts loses its buffered stdout), so re-run just
+      # the failing tests -- QtTest's report to a file, stderr (where a crash
+      # or qFatal says why) to another -- and raise what they say, with the
+      # exit code, as an annotation on the run. PowerShell, so the Qt and
+      # vcpkg DLLs are found on Windows as they are under ctest.
       - name: Report failing tests
         if: failure() && steps.test.outcome == 'failure'
-        shell: bash
+        shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          cd build
-          [ -f Testing/Temporary/LastTestsFailed.log ] || exit 0
-          for t in $(sed 's/^[0-9]*://' Testing/Temporary/LastTestsFailed.log); do
-            exe=tests/$t; [ -f "$exe.exe" ] && exe="$exe.exe"
-            rc=0; "$exe" -o "$t.txt,txt" > /dev/null 2>&1 || rc=$?
-            echo "===== $t (exit $rc) ====="
-            cat "$t.txt" 2>/dev/null || echo "(no report written)"
-            if [ ! -s "$t.txt" ]; then
-              echo "::error title=$t::exit $rc and no QtTest report: it stopped before writing one"
-              continue
-            fi
-            # Each failure with the lines after it (the values compared, the location).
-            { grep -A3 -E '^(FAIL!|XPASS|QFATAL)' "$t.txt" || true; } \
-              | awk -v t="$t" 'BEGIN { RS = "--\n" } NF { gsub(/%/, "%25"); gsub(/\r/, ""); gsub(/\n/, "%0A"); print "::error title=" t "::" $0 }' \
-              | head -10
-          done
+          $log = "build/Testing/Temporary/LastTestsFailed.log"
+          if (-not (Test-Path $log)) { exit 0 }
+          foreach ($line in Get-Content $log) {
+            $t = ($line -split ':', 2)[1]
+            $exe = Get-ChildItem -Path build/tests -Filter "$t*" -File |
+                   Where-Object { $_.BaseName -eq $t } | Select-Object -First 1
+            if (-not $exe) { Write-Output "::error title=$t::the test program wasn't found"; continue }
+            $report = "build/$t.txt"; $errors = "build/$t.err"
+            & $exe.FullName -o "$report,txt" 2> $errors | Out-Null
+            $rc = $LASTEXITCODE
+            Write-Output "===== $t (exit $rc) ====="
+            $text = if (Test-Path $report) { Get-Content $report } else { @() }
+            $stderr = if (Test-Path $errors) { Get-Content $errors } else { @() }
+            $text; $stderr
+            # The failures with what they compared, else where it stopped.
+            $fails = $text | Select-String -Pattern '^(FAIL!|XPASS|QFATAL)' -Context 0,3 |
+                     ForEach-Object { $_.Line; $_.Context.PostContext }
+            $parts = @("exit $rc")
+            if ($fails) { $parts += $fails } else { $parts += ($text | Select-Object -Last 8) }
+            if ($stderr) { $parts += "stderr:"; $parts += ($stderr | Select-Object -Last 15) }
+            $msg = ($parts -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Output "::error title=$t::$msg"
+          }
