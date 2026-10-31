@@ -57,6 +57,8 @@
 #include "ui/GettingStartedPanel.h"
 #include "ui/HelpWindow.h"
 #include "ui/ImageViewer.h"
+#include "geo/GeotagWriter.h"
+#include "ui/GeotagDialog.h"
 #include "ui/InatObservationMatchDialog.h"
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
@@ -3143,6 +3145,10 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
                                             "photo, and take its species and/or coordinates.")
                                        : tr("Needs photos with a date taken, to find the observation by."));
         connect(matchInat, &QAction::triggered, this, [this, grid] { matchWithInatObservation(grid); });
+        QAction *locate = menu.addAction(tr("Set Location on Map…"));
+        locate->setToolTip(tr("Put a pin on a map where these photos were taken, or move it: written "
+                              "into a JPEG, an .xmp sidecar beside a RAW, and the catalogue."));
+        connect(locate, &QAction::triggered, this, [this, grid] { setLocationOnMap(grid); });
 
         menu.addSeparator();
         QAction *remove = menu.addAction(
@@ -3407,8 +3413,8 @@ void MainWindow::matchTargetsWithInat(const QList<InatMatchTarget> &targets, boo
 
     int located = 0;
     if (dialog.applyCoordinates() && chosen->latitude && chosen->longitude)
-        located = applyInatCoordinates(targets, *chosen->latitude, *chosen->longitude,
-                                       dialog.replaceExistingCoordinates());
+        located = applyCoordinates(targets, *chosen->latitude, *chosen->longitude,
+                                   dialog.replaceExistingCoordinates(), false, tr("Match with iNat Observation"));
     // Renaming goes with the species: done once it's set (and its old name
     // learnt), after the coordinates were written into the files as named.
     QString renameTo;
@@ -3426,33 +3432,43 @@ void MainWindow::matchTargetsWithInat(const QList<InatMatchTarget> &targets, boo
                              8000);
 }
 
-int MainWindow::applyInatCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon,
-                                     bool replace)
+int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon,
+                                 bool replace, bool intoRaw, const QString &title)
 {
     QSqlDatabase db = QSqlDatabase::database(m_app.database().connectionName(), false);
     QStringList failures;
     int done = 0;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
     for (const InatMatchTarget &t : targets) {
         if (t.hasGps && !replace)
             continue;
         double useLat = lat, useLon = lon;
-        // Into the photo itself when it's a JPEG here; RAW files (and photos
-        // kept online) carry it in the catalogue only -- a rescan never
-        // blanks coordinates the catalogue has.
-        if (!t.isRaw && !CaptureDelegate::isOnlineOnly(t.path) && QFileInfo::exists(t.path)) {
-            inat::ExifFields fields;
-            fields.latitude = lat;
-            fields.longitude = lon;
-            QString error;
-            if (inat::writeExifSafely(t.path, fields, &error)) {
-                // What's now actually in the file.
-                const scan::ExifData reread = scan::readJpegExif(t.path);
+        // Into the photo's files where they're here (photos kept online carry
+        // it in the catalogue only -- a rescan never blanks coordinates the
+        // catalogue has).
+        QStringList renditions;
+        QSqlQuery files(db);
+        files.prepare(QStringLiteral("SELECT path FROM rendition WHERE capture_id = ? ORDER BY path"));
+        files.addBindValue(t.captureId);
+        if (files.exec()) {
+            while (files.next()) {
+                const QString path = files.value(0).toString();
+                if (!CaptureDelegate::isOnlineOnly(path) && QFileInfo::exists(path))
+                    renditions << path;
+            }
+        }
+        if (!renditions.isEmpty()) {
+            const geo::GeotagWriter::Result written = geo::GeotagWriter::writeShot(
+                renditions, QFileInfo(renditions.first()).completeBaseName(), lat, lon, intoRaw);
+            failures << written.failures;
+            // What's now actually in a JPEG, to the precision EXIF keeps.
+            for (const QString &path : std::as_const(renditions)) {
+                const scan::ExifData reread = scan::readJpegExif(path);
                 if (reread.hasGps()) {
                     useLat = *reread.latitude;
                     useLon = *reread.longitude;
+                    break;
                 }
-            } else {
-                failures << QStringLiteral("%1: %2").arg(QFileInfo(t.path).fileName(), error);
             }
         }
         QSqlQuery q(db);
@@ -3467,13 +3483,80 @@ int MainWindow::applyInatCoordinates(const QList<InatMatchTarget> &targets, doub
         m_bestShotModel->applyGps(t.captureId, useLat, useLon);
         ++done;
     }
+    QApplication::restoreOverrideCursor();
     if (!failures.isEmpty())
-        QMessageBox::warning(this, tr("Match with iNat Observation"),
-                             tr("The coordinates couldn't be written into %n file(s), so they're "
-                                "kept in PhotoLife's catalogue only:\n\n%1",
+        QMessageBox::warning(this, title,
+                             tr("The location couldn't be written into %n file(s), so for those "
+                                "it's kept in PhotoLife's catalogue only:\n\n%1",
                                 nullptr, int(failures.size()))
                                  .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
     return done;
+}
+
+void MainWindow::setLocationOnMap(QListView *grid)
+{
+    if (!ensureCanEdit())
+        return;
+    QSqlDatabase db = QSqlDatabase::database(m_app.database().connectionName(), false);
+    QList<InatMatchTarget> targets;
+    QList<GeotagDialog::Photo> photos;
+    QSet<int> ids;
+    QSet<QString> dates;
+    QSqlQuery hash(db);
+    hash.prepare(QStringLiteral("SELECT content_hash FROM rendition WHERE path = ?"));
+    for (const QModelIndex &idx : grid->selectionModel()->selectedIndexes()) {
+        InatMatchTarget t;
+        t.captureId = idx.data(model::CaptureListModel::IdRole).toInt();
+        t.path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
+        t.isRaw = idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
+        t.hasGps = idx.data(model::CaptureListModel::HasGpsRole).toBool();
+        targets << t;
+        ids.insert(t.captureId);
+        GeotagDialog::Photo p;
+        p.path = t.path;
+        p.label = QFileInfo(t.path).fileName();
+        p.isRaw = t.isRaw;
+        const QString on = idx.data(model::CaptureListModel::CapturedOnRole).toString();
+        p.taken = QDateTime::fromString(on, Qt::ISODate);
+        if (!p.taken.isValid())
+            p.taken = QDateTime(QDate::fromString(on.left(10), Qt::ISODate), QTime(12, 0));
+        if (on.size() >= 10)
+            dates.insert(on.left(10));
+        if (t.hasGps) {
+            p.latitude = idx.data(model::CaptureListModel::LatitudeRole).toDouble();
+            p.longitude = idx.data(model::CaptureListModel::LongitudeRole).toDouble();
+        }
+        hash.addBindValue(t.path);
+        if (hash.exec() && hash.next())
+            p.contentHash = hash.value(0).toString();
+        photos << p;
+    }
+    if (targets.isEmpty())
+        return;
+    // Clues: other photos with a location taken the same day.
+    QList<GeotagDialog::Clue> clues;
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT id, base_name, captured_on, latitude, longitude FROM capture "
+                             "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
+                             "AND substr(captured_on, 1, 10) = ? LIMIT 300"));
+    for (const QString &day : std::as_const(dates)) {
+        q.addBindValue(day);
+        if (!q.exec())
+            continue;
+        while (q.next()) {
+            if (ids.contains(q.value(0).toInt()))
+                continue;
+            clues << GeotagDialog::Clue{q.value(3).toDouble(), q.value(4).toDouble(), q.value(1).toString(),
+                                        QDateTime::fromString(q.value(2).toString(), Qt::ISODate)};
+        }
+    }
+
+    GeotagDialog dialog(m_app, photos, clues, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int done = applyCoordinates(targets, dialog.latitude(), dialog.longitude(), dialog.replaceExisting(),
+                                      dialog.writeIntoRaw(), tr("Set Location on Map"));
+    statusBar()->showMessage(tr("Set the location of %n photo(s).", nullptr, done), 6000);
 }
 
 QString MainWindow::renameCapturesFromInat(const QList<InatMatchTarget> &targets, const QString &name)

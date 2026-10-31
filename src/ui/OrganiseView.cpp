@@ -9,6 +9,8 @@
 #include "settings/Settings.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/ImageViewer.h"
+#include "scan/FileScanner.h"
+#include "ui/GeotagDialog.h"
 #include "ui/Theme.h"
 
 #include <QAbstractListModel>
@@ -612,7 +614,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addWidget(m_commitButton);
 
     m_hint = new QLabel(tr("Click a photo to focus and preview it. N names it · R marks it as a "
-                           "reject · B marks it as a best shot · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
+                           "reject · B marks it as a best shot · G sets its location on a map · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
                            "right-click for actions. The photos after a named one go with it, "
                            "up to the next name or end. The wheel scrolls · F11 full screen."),
                         this);
@@ -1164,6 +1166,70 @@ ImageViewer::Item OrganiseView::viewerItem(int row) const
     return v;
 }
 
+void OrganiseView::setLocationOnMap()
+{
+    QList<int> rows;
+    for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes())
+        rows << i.row();
+    std::sort(rows.begin(), rows.end());
+    if (rows.isEmpty())
+        return;
+    QList<GeotagDialog::Photo> photos;
+    QSet<int> chosen;
+    QDateTime from, to;
+    for (int r : std::as_const(rows)) {
+        const organise::Item &it = m_session.items().at(r);
+        GeotagDialog::Photo p;
+        p.path = it.previewPath;
+        p.label = it.baseName;
+        p.taken = it.taken;
+        p.latitude = it.latitude;
+        p.longitude = it.longitude;
+        p.isRaw = std::any_of(it.files.cbegin(), it.files.cend(), [](const QString &f) {
+            return scan::FileScanner::rawExtensions().contains(QFileInfo(f).suffix().toLower());
+        });
+        photos << p;
+        chosen.insert(r);
+        from = from.isValid() ? std::min(from, it.taken) : it.taken;
+        to = to.isValid() ? std::max(to, it.taken) : it.taken;
+    }
+    // Clues: the other photos with a location taken within a few hours.
+    QList<GeotagDialog::Clue> clues;
+    for (int i = 0; i < m_session.count(); ++i) {
+        const organise::Item &it = m_session.items().at(i);
+        if (chosen.contains(i) || !it.hasGps())
+            continue;
+        if (from.isValid() && (it.taken < from.addSecs(-6 * 3600) || it.taken > to.addSecs(6 * 3600)))
+            continue;
+        clues << GeotagDialog::Clue{*it.latitude, *it.longitude, it.baseName, it.taken};
+    }
+
+    GeotagDialog dialog(m_app, photos, clues, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QStringList failures;
+    int set = 0;
+    for (int r : std::as_const(rows)) {
+        if (m_session.items().at(r).hasGps() && !dialog.replaceExisting())
+            continue;
+        const geo::GeotagWriter::Result result =
+            m_session.setLocation(r, dialog.latitude(), dialog.longitude(), dialog.writeIntoRaw());
+        failures << result.failures;
+        ++set;
+        m_model->runChanged(r);
+    }
+    QApplication::restoreOverrideCursor();
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, tr("Set Location on Map"),
+                             tr("The location couldn't be written into %n file(s):\n\n%1", nullptr,
+                                int(failures.size()))
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    emit statusMessage(tr("Set the location of %n photo(s).", nullptr, set), 6000);
+    updatePreview();
+    m_placeScan->start();
+}
+
 void OrganiseView::showFullSize(int row)
 {
     if (row < 0 || row >= m_session.count())
@@ -1204,6 +1270,25 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
     QMenu menu(this);
     menu.addAction(m_session.nameAt(row).isEmpty() ? tr("Name This Photo…") : tr("Rename…"), this,
                    [this, row] { nameAt(row); });
+    // The names given so far this session, most recent first: one click (or
+    // its number) names this photo.
+    const QStringList recent = m_session.recentNames().mid(0, 15);
+    if (!recent.isEmpty()) {
+        QMenu *nameAs = menu.addMenu(tr("Name As"));
+        const QString current = m_session.runName(row);
+        for (int i = 0; i < recent.size(); ++i) {
+            const QString &name = recent.at(i);
+            // "&1 Scarlet Robin": the number picks it; a name's own '&' stays one.
+            const QString label = (i < 9 ? QStringLiteral("&%1  ").arg(i + 1) : QStringLiteral("    "))
+                                  + QString(name).replace(QLatin1Char('&'), QStringLiteral("&&"));
+            QAction *a = nameAs->addAction(label, this, [this, row, name] {
+                m_session.setName(row, name);
+                changed(row);
+            });
+            a->setCheckable(true);
+            a->setChecked(name == current);
+        }
+    }
     if (!m_session.nameAt(row).isEmpty())
         menu.addAction(tr("Clear Name"), this, [this, row] {
             m_session.setName(row, QString());
@@ -1230,6 +1315,10 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
     last->setShortcut(Qt::Key_E);
     last->setToolTip(tr("This photo keeps the name; the photos after it are left unnamed until "
                         "you name the next taxon."));
+    QAction *locate = menu.addAction(tr("Set Location on Map…"), this, [this] { setLocationOnMap(); });
+    locate->setShortcut(Qt::Key_G);
+    locate->setToolTip(tr("Put a pin on a map where the selected photos were taken, or move it: "
+                          "written into the JPEG, and an .xmp sidecar beside a RAW."));
     menu.addSeparator();
     menu.addAction(tr("View Full Size"), this, [this, row] { showFullSize(row); });
     menu.addAction(tr("Show in File Manager"), this, [this] {
@@ -1267,6 +1356,9 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
             return true;
         case Qt::Key_B:
             toggleBest();
+            return true;
+        case Qt::Key_G:
+            setLocationOnMap();
             return true;
         case Qt::Key_Delete:
             toggleRejected();

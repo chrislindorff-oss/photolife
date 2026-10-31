@@ -83,6 +83,7 @@ private slots:
     void bestShotsAreKeptAndExcludeRejects();
     void bestShotsAreRatedFiveStars();
     void fiveStarPhotosArriveAsBestShots();
+    void locationIsWrittenAndKeptWithTheShot();
     void organiseRenamesShotsTogetherAndUndoPutsNamesBack();
     void neverOverwrites();
     void undoTakesBackOneWholeOrganiseAtATime();
@@ -226,6 +227,18 @@ void TestOrganise::localityLookupUsesTheSameRounding()
     // "Nothing there" is a result too.
     QVERIFY(store.upsertLocality(-40.0, 150.0, QString()));
     QCOMPARE(store.lookup(-40.0, 150.0).value_or(QStringLiteral("missing")), QString());
+
+    // A place cached with no town before the locality keys were read is
+    // looked up once more; one cached since is kept.
+    QVERIFY(store.upsertLocality(-25.954, 153.105, QStringLiteral("Queensland, Australia")));
+    QCOMPARE(store.lookup(-25.954, 153.105).value_or(QString()), QStringLiteral("Queensland, Australia"));
+    QSqlQuery q(QSqlDatabase::database(db.connectionName()));
+    QVERIFY(q.exec(QStringLiteral("UPDATE geocode_cache SET fetched_at = '2026-10-20T08:00:00.000Z'")));
+    QVERIFY(!store.lookup(-25.954, 153.105).has_value());
+    QCOMPARE(store.lookup(-35.2749, 149.1281).value_or(QString()), QStringLiteral("Canberra, ACT, Australia"));
+    QCOMPARE(store.lookup(-40.0, 150.0).value_or(QStringLiteral("missing")), QString());
+    QVERIFY(store.upsertLocality(-25.954, 153.105, QStringLiteral("Cooloola, Queensland, Australia")));
+    QCOMPARE(store.lookup(-25.954, 153.105).value_or(QString()), QStringLiteral("Cooloola, Queensland, Australia"));
 }
 
 void TestOrganise::runsRejectsAndMergedNames()
@@ -434,6 +447,55 @@ void TestOrganise::fiveStarPhotosArriveAsBestShots()
     while (q.next())
         best << q.value(0).toString();
     QCOMPARE(best, (QStringList{QStringLiteral("Robin 1"), QStringLiteral("Robin 3")}));
+}
+
+void TestOrganise::locationIsWrittenAndKeptWithTheShot()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.jpg"), 1000);   // a JPEG
+    writeShot(dir, QStringLiteral("DSC_0002.NEF"), 2000);   // RAW + JPEG
+    writeShot(dir, QStringLiteral("DSC_0002.jpg"), 2000);
+    writeShot(dir, QStringLiteral("DSC_0003.NEF"), 3000);   // a RAW alone
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    QCOMPARE(s.count(), 3);
+    s.setName(0, QStringLiteral("Bar-shouldered Dove"));
+    s.setRejected(2, true);
+    QVERIFY(s.saveProgress());
+    for (int i = 0; i < 3; ++i) {
+        QVERIFY(!s.items().at(i).hasGps());
+        QVERIFY(s.setLocation(i, -25.954, 153.105, false).ok());
+        QVERIFY(s.items().at(i).hasGps());
+        QVERIFY(std::abs(*s.items().at(i).latitude - -25.954) < 1e-5);
+    }
+    // The JPEGs carry it themselves; the lone RAW in a new sidecar, which
+    // now goes with the shot.
+    QVERIFY(scan::readJpegExif(dir.filePath(QStringLiteral("DSC_0002.jpg"))).hasGps());
+    QVERIFY(s.items().at(2).files.contains(dir.filePath(QStringLiteral("DSC_0003.xmp"))));
+    QCOMPARE(s.items().at(1).files.size(), 3);   // NEF, JPEG and its new sidecar
+
+    // Opened again: every shot has its location, and is still recognised.
+    OrganiseSession again;
+    again.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    again.loadProgress();
+    QCOMPARE(again.count(), 3);
+    for (int i = 0; i < 3; ++i)
+        QVERIFY2(again.items().at(i).hasGps(), qPrintable(again.items().at(i).baseName));
+    QCOMPARE(again.nameAt(0), QStringLiteral("Bar-shouldered Dove"));
+    QVERIFY(again.isRejected(2));
+
+    // Added to the library, the lone RAW brings its sidecar's location.
+    Database db;
+    QVERIFY(db.open(dir.filePath(QStringLiteral("catalogue.sqlite"))));
+    scan::CatalogueWriter writer(db.connectionName());
+    scan::FileScanner scanner;
+    QVERIFY(writer.sync(scanner.scan({tmp.path()}), {tmp.path()}).ok());
+    QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+    QVERIFY(q.exec(QStringLiteral("SELECT latitude, longitude FROM capture WHERE base_name = 'DSC_0003'")));
+    QVERIFY(q.next());
+    QVERIFY(std::abs(q.value(0).toDouble() - -25.954) < 1e-5);
+    QVERIFY(std::abs(q.value(1).toDouble() - 153.105) < 1e-5);
 }
 
 void TestOrganise::renamedBaseNames()

@@ -66,6 +66,7 @@ private:
     void toggleRejected(int row = -1);
     void toggleNamingEnd(int row);
     void toggleBest();   // the selected photos
+    void setLocationOnMap();   // the selected photos
     void showFullSize(int row);
     ImageViewer::Item viewerItem(int row) const;
     void contextMenuAt(const QPoint &pos);

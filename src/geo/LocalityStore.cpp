@@ -53,7 +53,8 @@ std::optional<QString> LocalityStore::lookup(double lat, double lon) const
 
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
-        "SELECT locality FROM geocode_cache WHERE lat_round = ? AND lon_round = ?"));
+        "SELECT locality FROM geocode_cache WHERE lat_round = ? AND lon_round = ? AND NOT %1")
+                  .arg(staleCondition(QStringLiteral("geocode_cache"))));
     q.addBindValue(rounded(lat));
     q.addBindValue(rounded(lon));
     if (!q.exec()) {
@@ -63,6 +64,15 @@ std::optional<QString> LocalityStore::lookup(double lat, double lon) const
     if (!q.next())
         return std::nullopt;
     return q.value(0).toString();
+}
+
+QString LocalityStore::staleCondition(const QString &table)
+{
+    // "State, Country" without a town, looked up before the locality keys
+    // were read: worth one more look (the timestamps are ISO text on both
+    // backends, so they compare as strings).
+    return QStringLiteral("(%1.locality <> '' AND %1.locality NOT LIKE '%, %, %' AND %1.fetched_at < '%2')")
+        .arg(table, QLatin1String(kLocalityKeysSince));
 }
 
 QList<QPair<double, double>> LocalityStore::coordinatesNeedingLookup() const
@@ -81,7 +91,8 @@ QList<QPair<double, double>> LocalityStore::coordinatesNeedingLookup() const
             "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
             "AND NOT EXISTS (SELECT 1 FROM geocode_cache g "
             "  WHERE g.lat_round = ROUND(CAST(capture.latitude AS NUMERIC), 3) "
-            "    AND g.lon_round = ROUND(CAST(capture.longitude AS NUMERIC), 3))"))) {
+            "    AND g.lon_round = ROUND(CAST(capture.longitude AS NUMERIC), 3) "
+            "    AND NOT %1)").arg(staleCondition(QStringLiteral("g"))))) {
         m_error = q.lastError().text();
         return out;
     }

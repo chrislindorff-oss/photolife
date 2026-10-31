@@ -38,5 +38,10 @@ bool writeExifSafely(const QString &path, const ExifFields &fields, QString *err
 // (from Lightroom, darktable...) is updated, keeping everything else in it;
 // otherwise a minimal one is created.
 bool writeSidecarRating(const QString &path, int rating, QString *error = nullptr);
+// Sets the GPS position (exif:GPSLatitude/GPSLongitude) in the XMP sidecar at
+// `path`, the same way: an existing sidecar keeps everything else in it.
+bool writeSidecarGps(const QString &path, double latitude, double longitude, QString *error = nullptr);
+// One coordinate in XMP's form: "25,57.25440S".
+QString xmpCoordinate(double value, bool latitude);
 
 } // namespace pl::inat

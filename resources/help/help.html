@@ -114,11 +114,23 @@ known from your library's photos appear at once, even offline).</p>
       <b>Name This Photo</b>) to enter its name &mdash; suggestions come from your
       trees' common and scientific names (&darr; to choose one), or anything typed
       is used as it is. Every photo after it, up to the next named one, goes with
-      that name; a coloured band shows each run.</li>
+      that name; a coloured band shows each run. To use a name you've already given
+      in this folder (back to a species seen earlier in the day), right-click the photo
+      and choose it under <b>Name As</b> &mdash; most recent first, and its number key
+      picks it while the menu is open.</li>
   <li>With a photo focused, press <b>B</b> to mark it as a <b>best shot</b> (a gold star):
       when you organise, it's rated 5 stars &mdash; in the JPEG, or in an <i>.xmp</i>
       sidecar beside a RAW, which is never written to &mdash; so when you add it to the
       library it arrives as a Best Shot of its species.</li>
+  <li>Photos without a <b>GEO</b> mark can be given a location: select them and press
+      <b>G</b> (or right-click &rarr; <b>Set Location on Map&hellip;</b>), then put a pin
+      where they were taken &mdash; click the map, search for a place, or paste
+      coordinates such as <i>-25.954, 153.105</i>. Other photos in the folder taken within
+      a few hours that have a location show as grey dots, and the map opens on the one
+      nearest in time: double-click a dot to use it. The place name under the map is the
+      one renaming will use. It's written straight away (see
+      <a href="#writes">below</a>), so the GEO mark and place appear at once; use it on a
+      geotagged photo to move its location. Undo Organise doesn't remove a location.</li>
   <li>With a photo focused, press <b>R</b> to mark it as a reject, or
       <b>V</b> (or double-click it) to view it full size. Right-click for these actions, rename or
       clear a name, and other options. <b>Delete</b> still marks the selected
@@ -364,8 +376,9 @@ The <b>Show</b> box in the toolbar filters by status, and <b>View &rarr;
 Display&hellip;</b> chooses which fields (name, matched taxon, date, filename, locality,
 file type) appear under each thumbnail in the photo grids.</p>
 <p>Right-click a photo (here or in any other grid) to open it in your file manager,
-star or unstar it as a best shot, remove it from the catalogue, or <b>Attempt to Match
-with iNat Observation to Fetch Data</b> (see <a href="#writes">below</a>).</p>
+star or unstar it as a best shot, remove it from the catalogue, <b>Attempt to Match
+with iNat Observation to Fetch Data</b>, or <b>Set Location on Map&hellip;</b> to give the
+selected photos a location or move theirs, as in Organise (see <a href="#writes">below</a>).</p>
 
 <h2 id="review">5. Review the uncertain matches</h2>
 <p>Switch to the <b>Review Unmatched</b> view. The list on the left shows everything
@@ -642,8 +655,8 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       photos &mdash; any species, so it works for unmatched photos too. Pick the one
       that matches by its photo; its species and coordinates are shown, and you tick
       which to apply to the selected photos. The species is set as a confirmed match.
-      Coordinates are written into JPEG files' GPS data (RAW files keep them in
-      PhotoLife's catalogue only), and photos that already have coordinates keep them
+      Coordinates are written as <b>Set Location on Map</b> writes them (below), and
+      photos that already have coordinates keep them
       unless you tick <b>Also replace</b>. With the species you can also tick <b>Also
       rename the photo files</b> and choose its common or scientific name: the name part
       of each file name is replaced and the rest kept (<i>Wasp Gall 1 - Sailors Tk
@@ -651,6 +664,17 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       the RAW, JPEG and .xmp sidecar renamed together; a name already taken gets the next
       number, and nothing is overwritten. Photos kept online only aren't renamed. It
       needs your username in the iNaturalist view.</li>
+  <li><b>Set Location on Map&hellip;</b> (right-click photos in Organise or the library)
+      writes the location into a JPEG's GPS data, keeping the file's date. A RAW file
+      gets it in an <i>.xmp</i> sidecar beside it &mdash; its existing one (Lightroom's
+      <i>DSC_1234.xmp</i> or darktable's <i>DSC_1234.NEF.xmp</i>) or a new
+      <i>DSC_1234.xmp</i>, which moves with the photo when organised; Lightroom,
+      darktable and PhotoLife's own scan read it. The RAW itself isn't changed unless you
+      tick <b>Also write it into the RAW files themselves</b> (remembered): then NEF, CR2,
+      ARW, DNG, ORF, PEF and RW2 files get it too, written into a copy that replaces the
+      original only once it reads back with the same date, camera and the new location
+      (never CR3 or RAF). In the library the catalogue is updated as well, and photos
+      kept online only have it in the catalogue alone.</li>
 </ul>
 
 <h2 id="settings">Catalogue, appearance &amp; updates</h2>

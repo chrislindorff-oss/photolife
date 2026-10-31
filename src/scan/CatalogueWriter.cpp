@@ -40,6 +40,23 @@ bool isFiveStar(const DiscoveredCapture &cap)
     return false;
 }
 
+// A location in an XMP sidecar beside the shot (Set Location on Map, or
+// another program): for a RAW, which PhotoLife doesn't write to.
+std::optional<ExifData> sidecarGps(const DiscoveredCapture &cap)
+{
+    QStringList sources;
+    sources << QDir(cap.dirPath).filePath(cap.baseName + QStringLiteral(".xmp"));
+    for (const DiscoveredFile &f : cap.files)
+        sources << f.path + QStringLiteral(".xmp");
+    for (const QString &path : std::as_const(sources)) {
+        if (!QFileInfo::exists(path))
+            continue;
+        const ExifData xmp = readXmpGps(path);
+        if (xmp.hasGps())
+            return xmp;
+    }
+    return std::nullopt;
+}
 
 QString isoNow()
 {
@@ -467,6 +484,14 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             setDate.addBindValue(captureId);
             if (!setDate.exec())
                 return bail(setDate.lastError().text());
+        }
+
+        // A new photo without GPS in its files may have it in a sidecar.
+        if (!captureExisted && !(lat && lon)) {
+            if (const std::optional<ExifData> xmp = sidecarGps(cap)) {
+                lat = xmp->latitude;
+                lon = xmp->longitude;
+            }
         }
 
         // Only write GPS when found: unchanged renditions are skipped above

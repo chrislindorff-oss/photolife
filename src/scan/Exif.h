@@ -32,6 +32,12 @@ ExifData readJpegExif(const QString &path);
 // The star rating (0-5) in a JPEG's XMP or in an XMP sidecar file, as photo
 // programs write it (xmp:Rating); nullopt when there's none.
 std::optional<int> readXmpRating(const QString &path);
+// The GPS position in an XMP sidecar (exif:GPSLatitude/GPSLongitude, in XMP's
+// "DDD,MM.mmmmk" or "DDD,MM,SSk" form), as Lightroom, darktable and
+// PhotoLife's Set Location write it; empty when there's none.
+ExifData readXmpGps(const QString &path);
+// One XMP GPS coordinate ("25,57.2544S") as signed decimal degrees.
+std::optional<double> parseXmpCoordinate(const QString &text);
 ExifData readJpegExif(QIODevice &device);
 // Reads EXIF from a TIFF-based camera RAW (NEF, CR2, ARW, DNG, PEF...) from
 // the start of the file alone -- one small read, which matters on a slow

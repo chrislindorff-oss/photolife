@@ -50,4 +50,32 @@ void GeocodeClient::reverseGeocode(double lat, double lon,
     });
 }
 
+void GeocodeClient::search(const QString &query,
+                           std::function<void(Outcome<QList<geocode::Place>>)> done)
+{
+    QUrl url(QStringLiteral("https://nominatim.openstreetmap.org/search"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("q"), query);
+    q.addQueryItem(QStringLiteral("format"), QStringLiteral("jsonv2"));
+    q.addQueryItem(QStringLiteral("limit"), QStringLiteral("5"));
+    url.setQuery(q);
+
+    m_http.get(url, [done = std::move(done)](HttpResponse resp) {
+        Outcome<QList<geocode::Place>> out;
+        if (!resp.error.isEmpty() || !resp.ok()) {
+            out.error = resp.error.isEmpty() ? QStringLiteral("HTTP %1").arg(resp.status) : resp.error;
+            done(out);
+            return;
+        }
+        const QJsonDocument doc = QJsonDocument::fromJson(resp.body);
+        if (!doc.isArray()) {
+            out.error = QStringLiteral("invalid JSON");
+            done(out);
+            return;
+        }
+        out.value = geocode::parseSearch(doc.array());
+        done(out);
+    });
+}
+
 } // namespace pl::net

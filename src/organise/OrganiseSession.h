@@ -1,5 +1,7 @@
 #pragma once
 
+#include "geo/GeotagWriter.h"
+
 #include <QDateTime>
 #include <QHash>
 #include <QJsonObject>
@@ -108,6 +110,11 @@ public:
     bool isBest(int i) const { return m_best.contains(i); }
     void setBest(int i, bool best);           // ...and isn't a reject
     QList<int> bestShots() const;             // in order
+
+    // Gives shot `i` a location (Set Location on Map), written straight into
+    // its files (geo::GeotagWriter: the JPEG, a RAW's sidecar -- which then
+    // moves with it -- and the RAW itself with `intoRaw`), and kept here.
+    geo::GeotagWriter::Result setLocation(int i, double latitude, double longitude, bool intoRaw);
 
     // Shot `i`'s files changed (a rating written): its size and time read
     // again, so its progress still recognises it.

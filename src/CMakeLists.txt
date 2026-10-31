@@ -20,6 +20,7 @@ qt_add_library(photolife_core STATIC
     geo/GeoShape.h          geo/GeoShape.cpp
     geo/LocalityFetcher.h   geo/LocalityFetcher.cpp
     geo/LocalityStore.h     geo/LocalityStore.cpp
+    geo/GeotagWriter.h      geo/GeotagWriter.cpp
     geo/PinClusterer.h      geo/PinClusterer.cpp
     geo/WebMercator.h       geo/WebMercator.cpp
     inat/ExifWriter.h        inat/ExifWriter.cpp
@@ -122,6 +123,9 @@ qt_add_library(photolife_core STATIC
     ui/GettingStartedPanel.h ui/GettingStartedPanel.cpp
     ui/ManageCataloguesDialog.h ui/ManageCataloguesDialog.cpp
     ui/MapView.h            ui/MapView.cpp
+    ui/MapTiles.h           ui/MapTiles.cpp
+    ui/LocationPickerMap.h  ui/LocationPickerMap.cpp
+    ui/GeotagDialog.h       ui/GeotagDialog.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
     ui/PhotosOnComputerDialog.h ui/PhotosOnComputerDialog.cpp
     ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp

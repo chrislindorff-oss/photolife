@@ -8,6 +8,7 @@
 
 #include <QSettings>
 #include <QDateTime>
+#include <QPointF>
 #include <QString>
 #include <QList>
 #include <QStringList>
@@ -218,6 +219,15 @@ public:
     // matched with: 0 minutes, 1 hours, 2 a day either side.
     int inatMatchWindow() const;
     void setInatMatchWindow(int window);
+
+    // Set Location on Map: where the map was last left (a new photo with
+    // nothing nearer to go by starts there), and whether a location is also
+    // written into RAW files themselves (else only their XMP sidecars).
+    QPointF geotagLastLocation() const;   // x = longitude, y = latitude; null if never set
+    int geotagLastZoom() const;
+    void setGeotagLastView(double latitude, double longitude, int zoom);
+    bool geotagWriteIntoRaw() const;
+    void setGeotagWriteIntoRaw(bool on);
     // Renaming photos from an iNaturalist observation: with its common name
     // (else its scientific name).
     bool inatRenameWithCommonName() const;

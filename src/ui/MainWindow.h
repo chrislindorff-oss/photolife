@@ -358,7 +358,12 @@ private:
     void matchReviewPhotosWithInat(const QList<qint64> &captureIds, const QStringList &previewPaths,
                                    const QStringList &nameTexts);
     void matchTargetsWithInat(const QList<InatMatchTarget> &targets, bool learnAlias, const QString &photoName);
-    int applyInatCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon, bool replace);
+    // Gives the photos a location: into their files where they're here (a
+    // JPEG's EXIF, a RAW's .xmp sidecar, and with `intoRaw` the RAW itself --
+    // geo::GeotagWriter) and the catalogue. `title` heads any warning.
+    int applyCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon, bool replace,
+                         bool intoRaw, const QString &title);
+    void setLocationOnMap(QListView *grid);
     void applyInatSpecies(const QList<InatMatchTarget> &targets, const taxonomy::Observation &observation,
                           int located, const QString &learnName, const QString &renameTo);
     // Renames the photos' files for `name`; says what was done, for the status bar.

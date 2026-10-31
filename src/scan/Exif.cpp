@@ -1,6 +1,7 @@
 #include "scan/Exif.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QFile>
 #include <QRegularExpression>
@@ -254,6 +255,42 @@ std::optional<int> readXmpRating(const QString &path)
     if (!m.hasMatch())
         return std::nullopt;
     return m.captured(1).toInt();
+}
+
+std::optional<double> parseXmpCoordinate(const QString &text)
+{
+    static const QRegularExpression form(
+        QStringLiteral("^\\s*(\\d+(?:\\.\\d+)?),(\\d+(?:\\.\\d+)?)(?:,(\\d+(?:\\.\\d+)?))?\\s*([NSEWnsew])\\s*$"));
+    const QRegularExpressionMatch m = form.match(text);
+    if (!m.hasMatch())
+        return std::nullopt;
+    double value = m.captured(1).toDouble() + m.captured(2).toDouble() / 60.0;
+    if (!m.captured(3).isEmpty())
+        value += m.captured(3).toDouble() / 3600.0;
+    const QChar ref = m.captured(4).at(0).toUpper();
+    return ref == QLatin1Char('S') || ref == QLatin1Char('W') ? -value : value;
+}
+
+ExifData readXmpGps(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    const QString text = QString::fromUtf8(file.read(kMaxScanBytes * 4));
+    // exif:GPSLatitude="25,57.2544S" (an attribute) or <exif:GPSLatitude>...</exif:GPSLatitude>.
+    auto value = [&text](const QString &tag) -> std::optional<double> {
+        const QRegularExpression re(QStringLiteral("exif:%1\\s*(?:=\\s*[\"']|>)\\s*([^\"'<]+)").arg(tag));
+        const QRegularExpressionMatch m = re.match(text);
+        return m.hasMatch() ? parseXmpCoordinate(m.captured(1)) : std::nullopt;
+    };
+    ExifData out;
+    const std::optional<double> lat = value(QStringLiteral("GPSLatitude"));
+    const std::optional<double> lon = value(QStringLiteral("GPSLongitude"));
+    if (lat && lon && std::abs(*lat) <= 90 && std::abs(*lon) <= 180) {
+        out.latitude = lat;
+        out.longitude = lon;
+    }
+    return out;
 }
 
 ExifData readTiffExif(const QString &path)

@@ -620,6 +620,36 @@ void Settings::setInatMatchWindow(int window)
     m_settings.setValue(QStringLiteral("inat/matchWindow"), window);
 }
 
+QPointF Settings::geotagLastLocation() const
+{
+    if (!m_settings.contains(QStringLiteral("geotag/lastLat")))
+        return {};
+    return QPointF(m_settings.value(QStringLiteral("geotag/lastLon")).toDouble(),
+                   m_settings.value(QStringLiteral("geotag/lastLat")).toDouble());
+}
+
+int Settings::geotagLastZoom() const
+{
+    return m_settings.value(QStringLiteral("geotag/lastZoom"), 13).toInt();
+}
+
+void Settings::setGeotagLastView(double latitude, double longitude, int zoom)
+{
+    m_settings.setValue(QStringLiteral("geotag/lastLat"), latitude);
+    m_settings.setValue(QStringLiteral("geotag/lastLon"), longitude);
+    m_settings.setValue(QStringLiteral("geotag/lastZoom"), zoom);
+}
+
+bool Settings::geotagWriteIntoRaw() const
+{
+    return m_settings.value(QStringLiteral("geotag/writeIntoRaw"), false).toBool();
+}
+
+void Settings::setGeotagWriteIntoRaw(bool on)
+{
+    m_settings.setValue(QStringLiteral("geotag/writeIntoRaw"), on);
+}
+
 bool Settings::inatRenameWithCommonName() const
 {
     return m_settings.value(QStringLiteral("inat/renameWithCommonName"), true).toBool();

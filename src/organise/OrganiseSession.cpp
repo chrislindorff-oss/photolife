@@ -140,6 +140,19 @@ void OrganiseSession::readMetadata(Item &item)
             item.longitude = longitude;
         }
     }
+    // A location set on the map, or by another program, for a RAW: in its sidecar.
+    if (!item.hasGps()) {
+        for (const QString &path : item.files.mid(item.kinds.size())) {
+            if (!path.endsWith(QLatin1String(".xmp"), Qt::CaseInsensitive))
+                continue;
+            const scan::ExifData xmp = scan::readXmpGps(path);
+            if (xmp.hasGps()) {
+                item.latitude = xmp.latitude;
+                item.longitude = xmp.longitude;
+                break;
+            }
+        }
+    }
     item.takenFromExif = taken.isValid();
     item.taken = taken.isValid() ? taken : QDateTime::fromSecsSinceEpoch(item.mtime);
 }
@@ -298,6 +311,27 @@ void OrganiseSession::refreshFileStats(int i)
     const QFileInfo first(m_items.at(i).files.first());
     m_items[i].size = first.size();
     m_items[i].mtime = first.lastModified().toSecsSinceEpoch();
+}
+
+geo::GeotagWriter::Result OrganiseSession::setLocation(int i, double latitude, double longitude, bool intoRaw)
+{
+    if (i < 0 || i >= count())
+        return {};
+    Item &item = m_items[i];
+    geo::GeotagWriter::Result result = geo::GeotagWriter::writeShot(
+        item.files.mid(0, item.kinds.size()), item.baseName, latitude, longitude, intoRaw);
+    if (!result.createdSidecar.isEmpty() && !item.files.contains(result.createdSidecar))
+        item.files << result.createdSidecar;   // it moves with the shot
+    // What the files now hold: read back, so the place shown is the one written.
+    Item reread = item;
+    reread.latitude.reset();
+    reread.longitude.reset();
+    readMetadata(reread);
+    item.latitude = reread.hasGps() ? reread.latitude : std::optional<double>(latitude);
+    item.longitude = reread.hasGps() ? reread.longitude : std::optional<double>(longitude);
+    refreshFileStats(i);
+    saveProgress();
+    return result;
 }
 
 void OrganiseSession::setNamingEndAt(int i, bool ends)

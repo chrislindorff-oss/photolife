@@ -23,8 +23,13 @@ QString formatLocality(const QJsonObject &response)
     if (address.isEmpty())
         return {};
 
+    // Away from towns -- national parks, coast and bush -- OpenStreetMap
+    // still names the gazetted locality (Australia's suburbs and localities):
+    // as "locality", or as "city_district" for an admin boundary
+    // ("Cooloola", "Murray-Sunset", "Cape Bridgewater").
     const QString town =
-        firstOf(address, {"city", "town", "village", "hamlet", "suburb", "municipality"});
+        firstOf(address, {"city", "town", "village", "hamlet", "suburb", "municipality", "locality",
+                          "city_district", "neighbourhood", "quarter", "isolated_dwelling"});
     const QString state = firstOf(address, {"state", "state_district", "region"});
     const QString country = firstOf(address, {"country"});
 
@@ -36,6 +41,23 @@ QString formatLocality(const QJsonObject &response)
     if (!country.isEmpty())
         parts << country;
     return parts.join(QStringLiteral(", "));
+}
+
+QList<Place> parseSearch(const QJsonArray &response)
+{
+    QList<Place> out;
+    for (const QJsonValue &v : response) {
+        const QJsonObject o = v.toObject();
+        bool latOk = false, lonOk = false;
+        Place p;
+        // Nominatim gives the coordinates as strings.
+        p.latitude = o.value(QStringLiteral("lat")).toString().toDouble(&latOk);
+        p.longitude = o.value(QStringLiteral("lon")).toString().toDouble(&lonOk);
+        p.name = o.value(QStringLiteral("display_name")).toString();
+        if (latOk && lonOk && !p.name.isEmpty())
+            out << p;
+    }
+    return out;
 }
 
 } // namespace pl::net::geocode

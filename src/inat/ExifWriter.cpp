@@ -5,6 +5,7 @@
 #include <QFile>
 
 #include <cmath>
+#include <functional>
 
 namespace pl::inat {
 namespace {
@@ -95,7 +96,11 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
     }
 }
 
-bool writeSidecarRating(const QString &path, int rating, QString *error)
+namespace {
+
+// Opens the sidecar at `path` -- creating a minimal empty one first if there
+// isn't one -- lets `set` change its XMP, and writes it back.
+bool updateSidecar(const QString &path, const std::function<void(Exiv2::XmpData &)> &set, QString *error)
 {
     if (!QFile::exists(path)) {
         QFile file(path);
@@ -105,22 +110,18 @@ bool writeSidecarRating(const QString &path, int rating, QString *error)
             return false;
         }
         // The packet's begin attribute is a UTF-8 byte-order mark.
-        QByteArray packet("<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
-                          "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
-                          " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
-                          "  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n"
-                          "    xmp:Rating=\"");
-        packet += QByteArray::number(rating);
-        packet += "\"/>\n"
-                  " </rdf:RDF>\n"
-                  "</x:xmpmeta>\n"
-                  "<?xpacket end=\"w\"?>\n";
+        const QByteArray packet("<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+                                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
+                                " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+                                "  <rdf:Description rdf:about=\"\"/>\n"
+                                " </rdf:RDF>\n"
+                                "</x:xmpmeta>\n"
+                                "<?xpacket end=\"w\"?>\n");
         if (file.write(packet) != packet.size()) {
             if (error)
                 *error = QStringLiteral("could not write %1").arg(path);
             return false;
         }
-        return true;
     }
     try {
         ImagePtr sidecar = Exiv2::ImageFactory::open(path.toStdString());
@@ -128,8 +129,12 @@ bool writeSidecarRating(const QString &path, int rating, QString *error)
             throw Exiv2::Error(Exiv2::ErrorCode::kerErrorMessage, "open failed");
         sidecar->readMetadata();
         Exiv2::XmpData xmp = sidecar->xmpData();
-        xmp["Xmp.xmp.Rating"] = std::to_string(rating);
+        set(xmp);
         sidecar->setXmpData(xmp);
+        // Reading a sidecar also converts its XMP into EXIF, which writing
+        // converts back over the XMP -- undoing a changed position. The XMP is
+        // the whole of it, so the converted copy goes.
+        sidecar->clearExifData();
         sidecar->writeMetadata();
         return true;
     } catch (const Exiv2::Error &e) {
@@ -137,6 +142,33 @@ bool writeSidecarRating(const QString &path, int rating, QString *error)
             *error = QString::fromStdString(e.what());
         return false;
     }
+}
+
+} // namespace
+
+bool writeSidecarRating(const QString &path, int rating, QString *error)
+{
+    return updateSidecar(path, [rating](Exiv2::XmpData &xmp) {
+        xmp["Xmp.xmp.Rating"] = std::to_string(rating);
+    }, error);
+}
+
+QString xmpCoordinate(double value, bool latitude)
+{
+    const double a = std::abs(value);
+    const int degrees = int(a);
+    const QChar ref = latitude ? (value < 0 ? QLatin1Char('S') : QLatin1Char('N'))
+                               : (value < 0 ? QLatin1Char('W') : QLatin1Char('E'));
+    return QStringLiteral("%1,%2%3").arg(degrees).arg((a - degrees) * 60.0, 0, 'f', 5).arg(ref);
+}
+
+bool writeSidecarGps(const QString &path, double latitude, double longitude, QString *error)
+{
+    return updateSidecar(path, [latitude, longitude](Exiv2::XmpData &xmp) {
+        xmp["Xmp.exif.GPSVersionID"] = "2.2.0.0";
+        xmp["Xmp.exif.GPSLatitude"] = xmpCoordinate(latitude, true).toStdString();
+        xmp["Xmp.exif.GPSLongitude"] = xmpCoordinate(longitude, false).toStdString();
+    }, error);
 }
 
 bool writeExifSafely(const QString &path, const ExifFields &fields, QString *error)

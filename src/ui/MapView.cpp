@@ -1,5 +1,7 @@
 #include "ui/MapView.h"
 
+#include "ui/MapTiles.h"
+
 #include "geo/WebMercator.h"
 #include "model/CaptureListModel.h"
 #include "net/TileCache.h"
@@ -299,28 +301,7 @@ void MapView::paintEvent(QPaintEvent *)
     painter.fillRect(rect(), QColor(0xdd, 0xdd, 0xd5));
 
     const QPointF origin = centerWorldPixel() - QPointF(width() / 2.0, height() / 2.0);
-    const int tilesPerSide = 1 << m_zoom;
-
-    const int firstTx = int(std::floor(origin.x() / geo::kTileSize));
-    const int firstTy = int(std::floor(origin.y() / geo::kTileSize));
-    const int lastTx = int(std::floor((origin.x() + width()) / geo::kTileSize));
-    const int lastTy = int(std::floor((origin.y() + height()) / geo::kTileSize));
-
-    m_tiles.beginFrame();
-    for (int ty = firstTy; ty <= lastTy; ++ty) {
-        if (ty < 0 || ty >= tilesPerSide)
-            continue;
-        for (int tx = firstTx; tx <= lastTx; ++tx) {
-            if (tx < 0 || tx >= tilesPerSide)
-                continue;
-            const QPixmap pm = m_tiles.tile(m_zoom, tx, ty);
-            if (pm.isNull())
-                continue;
-            const QPointF topLeft(tx * geo::kTileSize - origin.x(), ty * geo::kTileSize - origin.y());
-            painter.drawPixmap(topLeft, pm);
-        }
-    }
-    m_tiles.endFrame();
+    drawMapTiles(painter, m_tiles, origin, m_zoom, size());
 
     painter.setRenderHint(QPainter::Antialiasing);
     paintLocality(painter, origin);

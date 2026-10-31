@@ -1,5 +1,6 @@
 #pragma once
 
+#include "net/GeocodeParse.h"
 #include "net/INatClient.h"   // for Outcome<T>, reused the same way ReferencePhotoFetcher does
 
 #include <QObject>
@@ -26,6 +27,9 @@ public:
     // locality string. An empty value (not an error) means Nominatim had no
     // address for that point, e.g. open ocean.
     void reverseGeocode(double lat, double lon, std::function<void(Outcome<QString>)> done);
+
+    // Finds places by name ("Poona Lake, Queensland"): up to five, best first.
+    void search(const QString &query, std::function<void(Outcome<QList<geocode::Place>>)> done);
 
 private:
     HttpClient &m_http;
