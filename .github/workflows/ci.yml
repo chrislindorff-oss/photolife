@@ -147,11 +147,16 @@ jobs:
           if (-not (Test-Path $log)) { exit 0 }
           foreach ($line in Get-Content $log) {
             $t = ($line -split ':', 2)[1]
-            $exe = Get-ChildItem -Path build/tests -Filter "$t*" -File |
-                   Where-Object { $_.BaseName -eq $t } | Select-Object -First 1
-            if (-not $exe) { Write-Output "::error title=$t::the test program wasn't found"; continue }
+            # ctest knows the program it ran -- ask it rather than search.
+            $info = ctest --test-dir build -R "^$t`$" --show-only=json-v1 | Out-String | ConvertFrom-Json
+            $exe = $info.tests | Select-Object -First 1 | ForEach-Object { $_.command[0] }
+            if (-not $exe -or -not (Test-Path $exe)) {
+              $seen = (Get-ChildItem -Path build -Recurse -Filter "$t*" -File | ForEach-Object FullName) -join ', '
+              Write-Output "::error title=$t::the test program wasn't found (ctest says '$exe'; found: $seen)"
+              continue
+            }
             $report = "build/$t.txt"; $errors = "build/$t.err"
-            & $exe.FullName -o "$report,txt" 2> $errors | Out-Null
+            & $exe -o "$report,txt" 2> $errors | Out-Null
             $rc = $LASTEXITCODE
             Write-Output "===== $t (exit $rc) ====="
             $text = if (Test-Path $report) { Get-Content $report } else { @() }
