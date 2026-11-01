@@ -45,4 +45,9 @@ QString captureBaseName(const QString &fileName);
 // common-name pair "Jacky Winter_White-winged Triller").
 bool isOrganTag(const QString &word);
 
+// True for a name a camera or phone gave the file -- "DSC_1234", "IMG_1234",
+// "_MG_1234", "P1010001", "PXL_20240101_123456789", "20240101_123456" -- which
+// says nothing about what is in it.
+bool isCameraFileName(const QString &name);
+
 } // namespace pl::scan

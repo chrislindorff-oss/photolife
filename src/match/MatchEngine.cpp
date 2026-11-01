@@ -4,6 +4,7 @@
 #include "match/NameParser.h"
 #include "match/PathClassifier.h"
 #include "match/TaxonResolver.h"
+#include "scan/FilenameParser.h"
 
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -153,7 +154,10 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId,
     }
     const int folderId = cap.value(0).toInt();
     const QString baseName = cap.value(1).toString();
-    const QString nameText = cap.value(2).toString();
+    // A camera's "DSC_1234" names nothing; the folder decides.
+    const QString nameText = scan::isCameraFileName(cap.value(2).toString())
+                                 ? QString()
+                                 : cap.value(2).toString();
 
     const FolderContext folder = loadFolderContext(db, folderId);
 

@@ -40,15 +40,6 @@ bool isCommonName(const TaxonCandidate &c)
            || c.matchedVia == taxonomy::TaxonomyStore::kUserVernacular;
 }
 
-// "Thornbill, Brown" -> "Brown Thornbill" (one comma, a few words each side).
-QString uninverted(const QString &raw)
-{
-    static const QRegularExpression re(QStringLiteral(R"(^([^,]{2,40}),\s*([^,]{2,40})$)"));
-    const auto m = re.match(raw.trimmed());
-    return m.hasMatch() ? m.captured(2).trimmed() + QLatin1Char(' ') + m.captured(1).trimmed()
-                        : QString();
-}
-
 } // namespace
 
 TaxonResolver::TaxonResolver(QString connectionName)
@@ -307,7 +298,7 @@ QList<TaxonCandidate> TaxonResolver::resolveOne(const ParsedName &parsed,
     // lookup above can't tell), and found loosely or inverted too.
     QList<TaxonCandidate> common = commonNameCandidates(parsed.raw);
     if (common.isEmpty()) {
-        if (const QString flipped = uninverted(parsed.raw); !flipped.isEmpty())
+        if (const QString flipped = uninvertedName(parsed.raw); !flipped.isEmpty())
             common = commonNameCandidates(flipped);
     }
     if (!common.isEmpty())

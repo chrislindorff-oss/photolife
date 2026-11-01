@@ -9,6 +9,7 @@ class TestFilenameParser : public QObject
     Q_OBJECT
 
 private slots:
+    void cameraFileNames();
     void canonicalFloraName();
     void organTagInParentheses();
     void underscoreOrganSuffix();
@@ -136,6 +137,17 @@ void TestFilenameParser::emptyStem()
     const ParsedFilename p = parseStem(QString());
     QVERIFY(p.name.isEmpty());
     QVERIFY(p == ParsedFilename{});
+}
+
+void TestFilenameParser::cameraFileNames()
+{
+    for (const char *name : {"DSC_1234", "IMG_0001", "_MG_1234", "_DSC1234", "DSCN1234", "DSCF0012",
+                             "P1010001", "PXL_20240101_123456789", "20240101_123456", "IMG_20240101_123456",
+                             "MVI_1234", "GOPR0001", "DJI_0001", "DSC_1234-2"})
+        QVERIFY2(isCameraFileName(QLatin1String(name)), name);
+    for (const char *name : {"Emu_0001", "Crimson Rosella", "Eastern Rosella - Stawell 1-9-2024",
+                             "Diuris pardina", "Rosella, Crimson", ""})
+        QVERIFY2(!isCameraFileName(QLatin1String(name)), name);
 }
 
 QTEST_APPLESS_MAIN(TestFilenameParser)

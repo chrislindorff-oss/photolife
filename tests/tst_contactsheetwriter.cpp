@@ -268,7 +268,10 @@ void TestContactSheetWriter::longNamesWrapRatherThanBeingCutOff()
 
     // Short names fit one page; names far too long for the cell take a second
     // caption line, so the same count spills onto another page.
+    // (Short in any font: "Genus species000" wraps in Windows' wider one.)
     QList<ContactSheetEntry> entries = makeEntries(oneLine.perPage());
+    for (int i = 0; i < entries.size(); ++i)
+        entries[i].name = QStringLiteral("Ab c%1").arg(i);
     int pages = 0;
     QVERIFY(writeContactSheet(dir.filePath(QStringLiteral("a.pdf")), entries, o, nullptr, &pages));
     QCOMPARE(pages, 1);

@@ -140,6 +140,15 @@ bool isOrganTag(const QString &word)
     return organTagWords().contains(word.trimmed().toLower());
 }
 
+bool isCameraFileName(const QString &name)
+{
+    static const QRegularExpression re(
+        // Upper case only, as cameras write them: "Emu_0001" is a name.
+        QStringLiteral(R"(^(?:_?[A-Z0-9]{3}_\d{4,5}|_MG_\d{4}|_?DSC[FN]?\d{4,5}|P[A-Z0-9]\d{6}|)"
+                       R"((?:PXL_|IMG_|VID_)?\d{8}_\d{6,9}(?:_\w+)?|GOPR\d{4}|DJI_\d{4})(?:-\d+)?$)"));
+    return re.match(name.trimmed()).hasMatch();
+}
+
 ParsedFilename parseStem(const QString &stem)
 {
     ParsedFilename out;

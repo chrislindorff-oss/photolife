@@ -56,6 +56,11 @@ ParsedName parseName(const QString &raw);
 // Thornbill" -- split into its names; empty when it isn't such a pair.
 QStringList splitNamePair(const QString &text);
 
+// A field-guide style inverted name put back in reading order: "Rosella,
+// Crimson" -> "Crimson Rosella", "Cuckoo-shrike, Black-faced" -> "Black-faced
+// Cuckoo-shrike". One comma, a few words each side; empty otherwise.
+QString uninvertedName(const QString &raw);
+
 // A quick "this is not a taxon" check for folder names: localities, staging
 // folders, pure punctuation. Conservative — a false negative just means the
 // resolver gets a shot and probably fails anyway.

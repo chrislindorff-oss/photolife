@@ -212,6 +212,9 @@ int classifyFolders(const QString &connectionName)
                 break;
             hits = names->lookup(part);
         }
+        // Field-guide order: "Rosella, Crimson".
+        if (const QString flipped = uninvertedName(text); hits.isEmpty() && !flipped.isEmpty())
+            hits = names->lookup(flipped);
         if (hits.isEmpty())
             continue;
         r.klass.kind = FolderKind::Taxon;
@@ -262,6 +265,13 @@ int classifyFolders(const QString &connectionName)
             r.klass.kind = FolderKind::Taxon;
             r.klass.rank = QStringLiteral("species");
             r.klass.inferredName = stripNumbering(r.name);
+        } else if (const QString flipped = uninvertedName(stripNumbering(r.name));
+                   underGroup && !underTaxon && commonNameRe.match(flipped).hasMatch()) {
+            // ...or the same in field-guide order ("Rosella, Crimson"), kept in
+            // reading order so the resolver can look it up.
+            r.klass.kind = FolderKind::Taxon;
+            r.klass.rank = QStringLiteral("species");
+            r.klass.inferredName = flipped;
         } else if (underTaxon) {
             r.klass.kind = FolderKind::Locality;
         }

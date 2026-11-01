@@ -269,6 +269,14 @@ bool looksNonTaxonomic(const QString &raw)
     return false;
 }
 
+QString uninvertedName(const QString &raw)
+{
+    static const QRegularExpression re(QStringLiteral(R"(^([^,]{2,40}),\s*([^,]{2,40})$)"));
+    const auto m = re.match(raw.trimmed());
+    return m.hasMatch() ? m.captured(2).trimmed() + QLatin1Char(' ') + m.captured(1).trimmed()
+                        : QString();
+}
+
 QStringList splitNamePair(const QString &text)
 {
     static const QRegularExpression sepRe(

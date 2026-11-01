@@ -28,6 +28,7 @@ private slots:
     void classifyFoldersUsesTreeContext();
     void faunaCommonNameFolderUnderGroup();
     void commonNameFoldersAreTaxaWhereverTheyAre();
+    void invertedCommonNameFolders();
 };
 
 void TestPathClassifier::groupFolders()
@@ -234,6 +235,81 @@ void TestPathClassifier::commonNameFoldersAreTaxaWhereverTheyAre()
     QCOMPARE(matched(QStringLiteral("IMG_0002")), QStringLiteral("Malurus cyaneus/auto"));
     QCOMPARE(matched(QStringLiteral("IMG_0003")), QStringLiteral("Acanthiza pusilla/auto"));
     QCOMPARE(matched(QStringLiteral("IMG_0005")), QStringLiteral("Thelymitra/pending"));
+}
+
+// Field-guide order folders ("Rosella, Crimson") are the same taxa; camera-named
+// photos in them follow the folder, and a file naming a species of its own is
+// the suggestion but waits for review.
+void TestPathClassifier::invertedCommonNameFolders()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString root = tmp.filePath(QStringLiteral("Fauna Photos"));
+    auto touch = [](const QString &p) {
+        QDir().mkpath(QFileInfo(p).absolutePath());
+        QFile f(p);
+        f.open(QIODevice::WriteOnly);
+        f.write("x");
+    };
+    touch(root + QStringLiteral("/Birds/Rosella, Crimson/DSC_0001.NEF"));
+    touch(root + QStringLiteral("/Birds/Rosella, Crimson/Eastern Rosella - Stawell 1-9-2024.jpg"));
+    touch(root + QStringLiteral("/Birds/Rosella, Eastern/DSC_0002.NEF"));
+    touch(root + QStringLiteral("/Birds/Cuckoo-shrike, Black-faced/IMG_0003.jpg"));
+    touch(root + QStringLiteral("/Birds/Harrier, Swamp/P1010004.jpg"));
+    touch(root + QStringLiteral("/Birds/Wattlebird, Little/DSC_0005.jpg"));   // not in the taxonomy
+
+    Database db;
+    QVERIFY(db.open(QStringLiteral(":memory:")));
+    taxonomy::TaxonomyStore store(db.connectionName());
+    auto add = [&](qint64 id, const char *name, const char *common) {
+        taxonomy::Taxon t;
+        t.inatId = id;
+        t.rank = QStringLiteral("species");
+        t.name = QLatin1String(name);
+        t.commonName = QLatin1String(common);
+        t.vernacular = {t.commonName};
+        QVERIFY(store.upsertTaxon(t) > 0);
+    };
+    add(1, "Platycercus elegans", "Crimson Rosella");
+    add(2, "Platycercus eximius", "Eastern Rosella");
+    add(3, "Coracina novaehollandiae", "Black-faced Cuckooshrike");
+    add(4, "Circus approximans", "Swamp Harrier");
+
+    scan::CatalogueWriter writer(db.connectionName());
+    scan::FileScanner scanner;
+    QVERIFY(writer.sync(scanner.scan({root}), {root}).ok());
+    QVERIFY(classifyFolders(db.connectionName()) > 0);
+
+    auto folder = [&](const QString &name) {
+        QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+        q.prepare(QStringLiteral("SELECT kind, inferred_name FROM folder WHERE name = ?"));
+        q.addBindValue(name);
+        q.exec();
+        return q.next() ? q.value(0).toString() + QLatin1Char('/') + q.value(1).toString() : QString();
+    };
+    QCOMPARE(folder(QStringLiteral("Rosella, Crimson")), QStringLiteral("taxon/Platycercus elegans"));
+    QCOMPARE(folder(QStringLiteral("Rosella, Eastern")), QStringLiteral("taxon/Platycercus eximius"));
+    QCOMPARE(folder(QStringLiteral("Cuckoo-shrike, Black-faced")),
+             QStringLiteral("taxon/Coracina novaehollandiae"));
+    QCOMPARE(folder(QStringLiteral("Harrier, Swamp")), QStringLiteral("taxon/Circus approximans"));
+    QCOMPARE(folder(QStringLiteral("Wattlebird, Little")), QStringLiteral("taxon/Little Wattlebird"));
+
+    MatchEngine engine(db.connectionName());
+    engine.matchAll();
+    auto matched = [&](const QString &baseName) {
+        QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
+        q.prepare(QStringLiteral("SELECT t.name, m.status FROM capture_match m JOIN capture c ON c.id = m.capture_id "
+                                 "LEFT JOIN taxon t ON t.id = m.taxon_id WHERE c.base_name = ?"));
+        q.addBindValue(baseName);
+        q.exec();
+        return q.next() ? q.value(0).toString() + QLatin1Char('/') + q.value(1).toString() : QString();
+    };
+    QCOMPARE(matched(QStringLiteral("DSC_0001")), QStringLiteral("Platycercus elegans/auto"));
+    QCOMPARE(matched(QStringLiteral("DSC_0002")), QStringLiteral("Platycercus eximius/auto"));
+    QCOMPARE(matched(QStringLiteral("IMG_0003")), QStringLiteral("Coracina novaehollandiae/auto"));
+    QCOMPARE(matched(QStringLiteral("P1010004")), QStringLiteral("Circus approximans/auto"));
+    QCOMPARE(matched(QStringLiteral("Eastern Rosella - Stawell 1-9-2024")),
+             QStringLiteral("Platycercus eximius/pending"));
 }
 
 QTEST_GUILESS_MAIN(TestPathClassifier)

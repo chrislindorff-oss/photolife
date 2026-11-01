@@ -9,6 +9,7 @@ class TestNameParser : public QObject
     Q_OBJECT
 
 private slots:
+    void invertedNames();
     void plainBinomial();
     void bareGenus();
     void spMarker();
@@ -182,6 +183,16 @@ void TestNameParser::realNamesAreTaxonomic()
                           QStringLiteral("Pterostylis nutans")}) {
         QVERIFY2(!looksNonTaxonomic(s), qPrintable(s));
     }
+}
+
+void TestNameParser::invertedNames()
+{
+    QCOMPARE(uninvertedName(QStringLiteral("Rosella, Crimson")), QStringLiteral("Crimson Rosella"));
+    QCOMPARE(uninvertedName(QStringLiteral("Cuckoo-shrike, Black-faced")),
+             QStringLiteral("Black-faced Cuckoo-shrike"));
+    QCOMPARE(uninvertedName(QStringLiteral(" Eagle,Little ")), QStringLiteral("Little Eagle"));
+    QCOMPARE(uninvertedName(QStringLiteral("Caladenia carnea")), QString());
+    QCOMPARE(uninvertedName(QStringLiteral("Robin, Scarlet, male")), QString());
 }
 
 QTEST_APPLESS_MAIN(TestNameParser)
