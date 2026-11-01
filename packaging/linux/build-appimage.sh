@@ -22,7 +22,9 @@ fetch() {  # fetch <url> <dest>
     curl -fL --retry 3 -o "$2" "$1"
     chmod +x "$2"
 }
-BASE="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
+# linuxdeploy is pinned: its "continuous" build of 2026-11-01 brought an
+# appimagetool that refuses the SVG-only icon and fails the release.
+BASE="https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1"
 QTBASE="https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous"
 fetch "$BASE/linuxdeploy-x86_64.AppImage"            "$TOOLS_DIR/linuxdeploy"
 fetch "$QTBASE/linuxdeploy-plugin-qt-x86_64.AppImage" "$TOOLS_DIR/linuxdeploy-plugin-qt"
