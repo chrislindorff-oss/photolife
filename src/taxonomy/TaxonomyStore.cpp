@@ -959,6 +959,225 @@ bool TaxonomyStore::clearProjectExclusion(int projectId, qint64 taxonInatId)
     return q.exec();
 }
 
+bool TaxonomyStore::keepProjectTaxa(int projectId, const QList<qint64> &taxonInatIds)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    const QHash<qint64, qint64> local = taxonLocalIds(taxonInatIds);
+    if (!db.transaction())
+        return false;
+    for (qint64 id : local) {
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("INSERT INTO project_taxon_kept (project_id, taxon_id) VALUES (?, ?) "
+                                 "ON CONFLICT (project_id, taxon_id) DO NOTHING"));
+        q.addBindValue(projectId);
+        q.addBindValue(qlonglong(id));
+        if (!q.exec()) {
+            db.rollback();
+            return false;
+        }
+    }
+    return db.commit();
+}
+
+QSet<qint64> TaxonomyStore::projectKeptTaxonIds(int projectId) const
+{
+    QSet<qint64> out;
+    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+    q.prepare(QStringLiteral("SELECT t.inat_id FROM project_taxon_kept k JOIN taxon t ON t.id = k.taxon_id "
+                             "WHERE k.project_id = ?"));
+    q.addBindValue(projectId);
+    if (q.exec()) {
+        while (q.next())
+            out.insert(q.value(0).toLongLong());
+    }
+    return out;
+}
+
+QList<TaxonomyStore::ChangeCandidate> TaxonomyStore::projectChangeCandidates(
+    int projectId, const QSet<qint64> &listedInatIds) const
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    qint64 rootInatId = 0;
+    {
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("SELECT root_taxon_inat_id FROM project WHERE id = ?"));
+        q.addBindValue(projectId);
+        if (q.exec() && q.next())
+            rootInatId = q.value(0).toLongLong();
+    }
+    const QSet<qint64> kept = projectKeptTaxonIds(projectId);
+
+    struct Member
+    {
+        ChangeCandidate c;
+        qint64 parent = 0;
+        qint64 localId = 0;
+        QString ancestry;
+    };
+    QList<Member> members;
+    QSet<qint64> hasChild;
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        q.prepare(QStringLiteral(
+            "SELECT t.id, t.inat_id, t.parent_inat_id, t.name, t.rank, t.common_name, pt.in_region, "
+            "pt.from_checklist, t.ancestry FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+            "WHERE pt.project_id = ?"));
+        q.addBindValue(projectId);
+        if (!q.exec())
+            return {};
+        while (q.next()) {
+            Member m;
+            m.localId = q.value(0).toLongLong();
+            m.c.inatId = q.value(1).toLongLong();
+            m.parent = q.value(2).toLongLong();
+            m.c.name = q.value(3).toString();
+            m.c.rank = q.value(4).toString();
+            m.c.commonName = q.value(5).toString();
+            m.c.inRegion = q.value(6).toBool();
+            m.c.fromChecklist = q.value(7).toBool();
+            m.c.kept = kept.contains(m.c.inatId);
+            m.ancestry = q.value(8).toString();
+            members.append(m);
+        }
+    }
+    // A group has members beneath it when it's the nearest member above
+    // one -- through ranks the tree leaves out (a section, a subgenus) too.
+    {
+        QSet<qint64> memberIds;
+        for (const Member &m : std::as_const(members))
+            memberIds.insert(m.c.inatId);
+        for (const Member &m : std::as_const(members)) {
+            QList<qint64> up = net::inat::ancestryIds(m.ancestry);
+            if (up.isEmpty() && m.parent > 0)
+                up << m.parent;
+            for (auto it = up.crbegin(); it != up.crend(); ++it) {
+                if (memberIds.contains(*it)) {
+                    hasChild.insert(*it);
+                    break;
+                }
+            }
+        }
+    }
+
+    // The ancestors of the root (kingdom .. order) are the spine, not groups
+    // the user collects in.
+    QSet<qint64> spine;
+    {
+        QHash<qint64, qint64> parentOf;
+        for (const Member &m : std::as_const(members))
+            parentOf.insert(m.c.inatId, m.parent);
+        for (qint64 id = parentOf.value(rootInatId, 0); id > 0 && !spine.contains(id); id = parentOf.value(id, 0))
+            spine.insert(id);
+    }
+
+    QList<Member> picked;
+    for (Member &m : members) {
+        if (m.c.inatId == rootInatId || spine.contains(m.c.inatId))
+            continue;
+        if (isLeafRank(m.c.rank)) {
+            if (!listedInatIds.contains(m.c.inatId))
+                picked.append(m);
+        } else if (!hasChild.contains(m.c.inatId) && !listedInatIds.contains(m.c.inatId)) {
+            // (One the list itself gave -- observations named only that far --
+            // isn't empty.)
+            m.c.emptyGroup = true;
+            picked.append(m);
+        }
+    }
+    if (picked.isEmpty())
+        return {};
+
+    // Each one's photos, in one query.
+    QStringList ids;
+    for (const Member &m : std::as_const(picked))
+        ids << QString::number(m.localId);
+    QHash<qint64, int> photos;
+    QSqlQuery q(db);
+    q.setForwardOnly(true);
+    if (q.exec(QStringLiteral("SELECT taxon_id, COUNT(DISTINCT capture_id) FROM capture_match "
+                              "WHERE status IN ('auto', 'confirmed') AND taxon_id IN (%1) GROUP BY taxon_id")
+                   .arg(ids.join(QLatin1Char(','))))) {
+        while (q.next())
+            photos.insert(q.value(0).toLongLong(), q.value(1).toInt());
+    }
+    QList<ChangeCandidate> out;
+    for (Member &m : picked) {
+        m.c.photos = photos.value(m.localId);
+        out.append(m.c);
+    }
+    return out;
+}
+
+int TaxonomyStore::moveTaxonReferences(qint64 oldInatId, qint64 newInatId)
+{
+    const auto oldId = taxonLocalId(oldInatId);
+    const auto newId = taxonLocalId(newInatId);
+    if (!oldId || !newId)
+        return -1;
+    if (*oldId == *newId)
+        return 0;
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    QString newRank;
+    {
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("SELECT rank FROM taxon WHERE id = ?"));
+        q.addBindValue(qlonglong(*newId));
+        if (q.exec() && q.next())
+            newRank = q.value(0).toString();
+    }
+    if (!db.transaction())
+        return -1;
+    auto run = [&](const QString &sql, const QVariantList &binds) {
+        QSqlQuery q(db);
+        q.prepare(sql);
+        for (const QVariant &v : binds)
+            q.addBindValue(v);
+        return q.exec();
+    };
+    const QVariant from = qlonglong(*oldId);
+    const QVariant to = qlonglong(*newId);
+
+    int moved = 0;
+    {
+        QSqlQuery count(db);
+        count.prepare(QStringLiteral("SELECT COUNT(DISTINCT capture_id) FROM capture_match WHERE taxon_id = ?"));
+        count.addBindValue(from);
+        if (count.exec() && count.next())
+            moved = count.value(0).toInt();
+    }
+
+    const bool ok =
+        // A photo matched to both: the user's decision on the old one carries over.
+        run(QStringLiteral(
+                "UPDATE capture_match SET status = o.status, decided_by = o.decided_by, "
+                "decided_at = o.decided_at, method = o.method, confidence = o.confidence "
+                "FROM capture_match o WHERE o.capture_id = capture_match.capture_id "
+                "AND o.taxon_id = ? AND o.decided_by = 'user' AND capture_match.taxon_id = ?"),
+            {from, to})
+        && run(QStringLiteral("DELETE FROM capture_match WHERE taxon_id = ? AND capture_id IN "
+                              "(SELECT capture_id FROM capture_match WHERE taxon_id = ?)"),
+               {from, to})
+        && run(QStringLiteral("UPDATE capture_match SET taxon_id = ?, matched_rank = ? WHERE taxon_id = ?"),
+               {to, newRank, from})
+        // Learned names and keyword hints: unless the new one already has the same.
+        && run(QStringLiteral("DELETE FROM name_alias WHERE taxon_id = ? AND EXISTS (SELECT 1 FROM name_alias n "
+                              "WHERE n.taxon_id = ? AND n.raw_folded = name_alias.raw_folded "
+                              "AND n.scope = name_alias.scope)"),
+               {from, to})
+        && run(QStringLiteral("UPDATE name_alias SET taxon_id = ? WHERE taxon_id = ?"), {to, from})
+        && run(QStringLiteral("UPDATE capture_keyword_hint SET taxon_id = ? WHERE taxon_id = ?"), {to, from})
+        && run(QStringLiteral("DELETE FROM representative WHERE taxon_id = ? AND EXISTS (SELECT 1 FROM "
+                              "representative r WHERE r.taxon_id = ? AND r.project_id = representative.project_id)"),
+               {from, to})
+        && run(QStringLiteral("UPDATE representative SET taxon_id = ? WHERE taxon_id = ?"), {to, from});
+    if (!ok || !db.commit()) {
+        db.rollback();
+        return -1;
+    }
+    return moved;
+}
+
 bool TaxonomyStore::addTaxonWithAncestors(int projectId, const QList<Taxon> &ancestors,
                                           const Taxon &taxon)
 {

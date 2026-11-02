@@ -40,6 +40,7 @@
 #include "taxonomy/AlaStatusSync.h"
 #include "taxonomy/ApcOriginSync.h"
 #include "taxonomy/ProjectBuilder.h"
+#include "taxonomy/TreeChangeFinder.h"
 #include "taxonomy/CommonNameFetcher.h"
 #include "taxonomy/ReferencePhotoFetcher.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -56,6 +57,7 @@
 #include "ui/ExportDialog.h"
 #include "ui/GettingStartedPanel.h"
 #include "ui/HelpWindow.h"
+#include "ui/IdentifyPanel.h"
 #include "ui/ImageViewer.h"
 #include "geo/GeotagWriter.h"
 #include "ui/GeotagDialog.h"
@@ -76,6 +78,7 @@
 #include "ui/StaleMatchDialog.h"
 #include "ui/TaxonConfirmDialog.h"
 #include "ui/TaxonPickerDialog.h"
+#include "ui/TreeChangesDialog.h"
 #include "ui/Theme.h"
 
 #include <QTimeZone>
@@ -206,6 +209,23 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     m_model = new model::CaptureListModel(m_app.database(), m_app.thumbnails(), this);
     m_treeModel = new model::TaxonomyTreeModel(m_app.database(), this);
     m_builder = new taxonomy::ProjectBuilder(m_app.inat(), m_app.taxonomyStore(), this);
+    m_treeChanges = new taxonomy::TreeChangeFinder(m_app.inat(), m_app.taxonomyStore(), this);
+    connect(m_treeChanges, &taxonomy::TreeChangeFinder::finished, this,
+            [this](int projectId, const QList<taxonomy::TreeChange> &changes, const QString &error) {
+                if (!error.isEmpty()) {
+                    statusBar()->showMessage(
+                        tr("Reference tree refreshed, but checking it against iNaturalist failed: %1").arg(error),
+                        10000);
+                    return;
+                }
+                if (changes.isEmpty()) {
+                    statusBar()->showMessage(tr("Reference tree refreshed — nothing in it has gone from "
+                                                "iNaturalist."),
+                                             8000);
+                    return;
+                }
+                reviewTreeChanges(projectId, changes);
+            });
     m_infraFiller = new taxonomy::InfraspecificFiller(m_app.inat(), m_app.taxonomyStore(), this);
     m_refPhotoFetcher =
         new taxonomy::ReferencePhotoFetcher(m_app.inat(), m_app.taxonomyStore(), this);
@@ -442,6 +462,17 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                     return;
                 }
                 statusBar()->showMessage(tr("Reference tree ready."), 6000);
+                // A refresh that read iNaturalist's whole list can say what's gone.
+                if (!wasNewTree) {
+                    if (m_builder->listWasComplete()) {
+                        statusBar()->showMessage(tr("Checking the tree against iNaturalist…"));
+                        m_treeChanges->find(projectId, m_builder->listedTaxa());
+                    } else {
+                        statusBar()->showMessage(tr("Reference tree refreshed. (What's gone from it on "
+                                                    "iNaturalist is checked only after a complete refresh.)"),
+                                                 10000);
+                    }
+                }
                 fetchMissingPlaceDetails();
                 m_originFetcher->enqueue({projectId});
                 syncAustralianSources(false, true);   // match the new taxa
@@ -1333,6 +1364,7 @@ void MainWindow::buildReferenceTreeDock()
     layout->setContentsMargins(6, 6, 6, 6);
 
     m_projectCombo = new QComboBox(panel);
+    m_projectCombo->setObjectName(QStringLiteral("referenceTreeSelector"));   // styled in theme.qss
     m_projectCombo->setContextMenuPolicy(Qt::CustomContextMenu);
     m_projectCombo->setToolTip(tr("The reference tree shown. Right-click for Rename and more."));
     connect(m_projectCombo, &QWidget::customContextMenuRequested, this,
@@ -2096,6 +2128,10 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
         item.hasGps = idx.data(model::CaptureListModel::HasGpsRole).toBool();
         item.latitude = idx.data(model::CaptureListModel::LatitudeRole).toDouble();
         item.longitude = idx.data(model::CaptureListModel::LongitudeRole).toDouble();
+        item.canIdentify = true;
+        // From the file name or EXIF only (never a copy's file date).
+        item.taken = QDate::fromString(idx.data(model::CaptureListModel::CapturedOnRole).toString().left(10),
+                                       Qt::ISODate);
         if (item.path.isEmpty())
             continue;
         if (r == clicked.row())
@@ -2128,6 +2164,11 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
                                                  : tr("Removed from your best shots."),
                                              4000);
                 });
+        // I in the viewer: a suggestion picked becomes the photo's match.
+        m_viewer->setIdentifyPanel(new IdentifyPanel(m_app));
+        connect(m_viewer, &ImageViewer::taxonChosen, this, [this](int index, const taxonomy::Taxon &taxon) {
+            confirmIdentified(m_viewer->item(index).captureId, taxon);
+        });
     }
     // Show before loading the image: on a freshly constructed dialog that has
     // never been shown, resize() in the constructor only records the desired
@@ -2263,7 +2304,7 @@ void MainWindow::refreshReferenceTree()
 
     QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
     q.prepare(QStringLiteral(
-        "SELECT p.name, rt.name, rt.rank, pl.name "
+        "SELECT p.name, rt.name, rt.rank, pl.name, p.root_taxon_inat_id, p.place_inat_id "
         "FROM project p "
         "LEFT JOIN taxon rt ON rt.inat_id = p.root_taxon_inat_id "
         "LEFT JOIN place pl ON pl.inat_id = p.place_inat_id WHERE p.id = ?"));
@@ -2279,6 +2320,12 @@ void MainWindow::refreshReferenceTree()
     request.taxonQuery = q.value(1).toString();
     request.rank = q.value(2).toString();
     request.placeQuery = q.value(3).toString();
+    // The very taxon and place it was built from, not a new search by name.
+    const qint64 rootId = q.value(4).toLongLong();
+    if (const auto root = m_app.taxonomyStore().taxaByInatIds({rootId}); root.contains(rootId))
+        request.confirmedTaxon = root.value(rootId);
+    if (!q.value(5).isNull())
+        request.confirmedPlace = m_app.taxonomyStore().placeByInatId(q.value(5).toLongLong());
 
     m_refreshTreeAction->setEnabled(false);
     statusBar()->showMessage(tr("Refreshing reference tree…"));
@@ -3583,7 +3630,6 @@ void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
                                   const taxonomy::Observation &observation, int located,
                                   const QString &learnName, const QString &renameTo)
 {
-    const qint64 taxonId = observation.taxonInatId;
     const auto confirmAll = [this, targets, observation, located, learnName, renameTo] {
         match::MatchReviewer reviewer(m_app.database().connectionName());
         int named = 0;
@@ -3595,16 +3641,7 @@ void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
                 ++named;
         }
         const QString renameNote = renameTo.isEmpty() ? QString() : renameCapturesFromInat(targets, renameTo);
-        m_taxonModel->reload();
-        m_model->reload();
-        m_bestShotModel->reload();
-        if (m_untreedModel)
-            m_untreedModel->reload();
-        m_reviewPane->reload();
-        updateEmptyState();
-        refreshCoverage();
-        updateReviewTabText();
-        updateBestShotsTabText();
+        reloadAfterMatching();
         const QString species = !observation.taxonCommonName.isEmpty() ? observation.taxonCommonName
                                                                         : observation.taxonName;
         QString message = tr("Set %n photo(s) to %1", nullptr, named).arg(species);
@@ -3617,20 +3654,27 @@ void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
             message += QStringLiteral(" ") + renameNote;
         statusBar()->showMessage(message, 10000);
     };
+    withTaxonKnown(observation.taxonInatId, observation.taxonName, tr("Match with iNat Observation"),
+                   confirmAll);
+}
+
+void MainWindow::withTaxonKnown(qint64 taxonInatId, const QString &name, const QString &title,
+                                const std::function<void()> &then)
+{
     // Already known here: straight on.
-    if (m_app.taxonomyStore().taxonLocalId(taxonId)) {
-        confirmAll();
+    if (m_app.taxonomyStore().taxonLocalId(taxonInatId)) {
+        then();
         return;
     }
     // Otherwise fetch it, with the ancestors not yet known, so it sits in the
     // right place in the taxonomy (it isn't added to any reference tree).
-    statusBar()->showMessage(tr("Fetching %1 from iNaturalist…").arg(observation.taxonName));
-    m_app.inat().fetchTaxon(taxonId, [this, taxonId, confirmAll, observation](net::Outcome<net::TaxonDetail> out) {
+    statusBar()->showMessage(tr("Fetching %1 from iNaturalist…").arg(name));
+    m_app.inat().fetchTaxon(taxonInatId, [this, taxonInatId, name, title, then](net::Outcome<net::TaxonDetail> out) {
         if (!out.ok()) {
             statusBar()->clearMessage();
-            QMessageBox::warning(this, tr("Match with iNat Observation"),
+            QMessageBox::warning(this, title,
                                  tr("Couldn't fetch %1 from iNaturalist, so the species wasn't set:\n%2")
-                                     .arg(observation.taxonName, out.error));
+                                     .arg(name, out.error));
             return;
         }
         taxonomy::TaxonomyStore &store = m_app.taxonomyStore();
@@ -3638,14 +3682,155 @@ void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,
             if (!store.taxonLocalId(a.inatId))
                 store.upsertTaxon(a);
         }
-        if (store.upsertTaxon(out.value.taxon) <= 0 || !store.taxonLocalId(taxonId)) {
+        if (store.upsertTaxon(out.value.taxon) <= 0 || !store.taxonLocalId(taxonInatId)) {
             statusBar()->clearMessage();
-            QMessageBox::warning(this, tr("Match with iNat Observation"),
-                                 tr("Couldn't add %1 to the taxonomy, so the species wasn't set.")
-                                     .arg(observation.taxonName));
+            QMessageBox::warning(this, title,
+                                 tr("Couldn't add %1 to the taxonomy, so the species wasn't set.").arg(name));
             return;
         }
-        confirmAll();
+        then();
+    });
+}
+
+void MainWindow::reloadAfterMatching()
+{
+    m_taxonModel->reload();
+    m_model->reload();
+    m_bestShotModel->reload();
+    if (m_untreedModel)
+        m_untreedModel->reload();
+    m_reviewPane->reload();
+    updateEmptyState();
+    refreshCoverage();
+    updateReviewTabText();
+    updateBestShotsTabText();
+}
+
+void MainWindow::reviewTreeChanges(int projectId, const QList<taxonomy::TreeChange> &changes)
+{
+    taxonomy::TaxonomyStore &store = m_app.taxonomyStore();
+    QString treeName;
+    QString placeName;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        q.prepare(QStringLiteral("SELECT name, place_inat_id FROM project WHERE id = ?"));
+        q.addBindValue(projectId);
+        if (q.exec() && q.next()) {
+            treeName = q.value(0).toString();
+            if (!q.value(1).isNull()) {
+                if (const auto place = store.placeByInatId(q.value(1).toLongLong()))
+                    placeName = place->displayName.isEmpty() ? place->name : place->displayName;
+            }
+        }
+    }
+    statusBar()->clearMessage();
+    TreeChangesDialog dialog(changes, treeName, placeName, this);
+    if (dialog.exec() != QDialog::Accepted) {
+        statusBar()->showMessage(tr("The tree is as it was; the next refresh asks again."), 8000);
+        return;
+    }
+    if (!ensureCanEdit())
+        return;
+
+    struct Tally
+    {
+        int pruned = 0;
+        int kept = 0;
+        int renamed = 0;
+        int photos = 0;
+    };
+    auto tally = std::make_shared<Tally>();
+    QList<qint64> keep;
+    QList<TreeChangesDialog::Choice> moves;
+    for (const TreeChangesDialog::Choice &c : dialog.choices()) {
+        if (c.action == TreeChangesDialog::Action::Prune) {
+            if (store.pruneTaxonFromProject(projectId, c.change.taxon.inatId) >= 0)
+                ++tally->pruned;
+        } else if (c.action == TreeChangesDialog::Action::Keep) {
+            keep << c.change.taxon.inatId;
+        } else if (c.action == TreeChangesDialog::Action::Move && c.moveTo.inatId > 0) {
+            moves << c;
+        }
+    }
+    if (!keep.isEmpty() && store.keepProjectTaxa(projectId, keep))
+        tally->kept = int(keep.size());
+
+    const auto refresh = [this, projectId, tally] {
+        mutateTreePreservingState([this, projectId] { m_treeModel->setProject(projectId); });
+        reloadAfterMatching();
+        updateMissingList();
+        reloadProjectList();
+        QStringList parts;
+        if (tally->renamed > 0)
+            parts << tr("moved %n renamed taxa", nullptr, tally->renamed)
+                         + (tally->photos > 0 ? tr(" (%n photos)", nullptr, tally->photos) : QString());
+        if (tally->pruned > 0)
+            parts << tr("pruned %n", nullptr, tally->pruned);
+        if (tally->kept > 0)
+            parts << tr("kept %n", nullptr, tally->kept);
+        statusBar()->showMessage(parts.isEmpty() ? tr("The tree is as it was; the next refresh asks again.")
+                                                 : tr("Tree updated: %1.").arg(parts.join(QStringLiteral(", "))),
+                                 10000);
+    };
+    refresh();
+
+    // Each move may first need its new name fetched, so one at a time.
+    auto next = std::make_shared<std::function<void(int)>>();
+    // Holds itself only weakly: the pending fetch keeps it alive, not a cycle.
+    *next = [this, projectId, moves, tally, refresh, weak = std::weak_ptr(next)](int i) {
+        if (i >= moves.size()) {
+            if (!moves.isEmpty())
+                refresh();
+            return;
+        }
+        const TreeChangesDialog::Choice &c = moves.at(i);
+        const qint64 from = c.change.taxon.inatId;
+        const qint64 to = c.moveTo.inatId;
+        withTaxonKnown(to, c.moveTo.name, tr("Tree Changes on iNaturalist"),
+                       [this, projectId, from, to, tally, next = weak.lock(), i] {
+            taxonomy::TaxonomyStore &store = m_app.taxonomyStore();
+            // The new name into the tree, with whatever of its ancestors isn't there yet.
+            const QList<qint64> memberList = store.projectTaxonInatIds(projectId);
+            const QSet<qint64> members(memberList.cbegin(), memberList.cend());
+            if (!members.contains(to)) {
+                const QHash<qint64, taxonomy::Taxon> self = store.taxaByInatIds({to});
+                QList<taxonomy::Taxon> ancestors;   // nearest first, until one in the tree
+                for (qint64 up = self.value(to).parentInatId.value_or(0); up > 0 && !members.contains(up);) {
+                    const QHash<qint64, taxonomy::Taxon> t = store.taxaByInatIds({up});
+                    if (!t.contains(up))
+                        break;
+                    ancestors.prepend(t.value(up));
+                    up = t.value(up).parentInatId.value_or(0);
+                }
+                store.clearProjectExclusion(projectId, to);
+                store.addTaxonWithAncestors(projectId, ancestors, self.value(to));
+            }
+            const int moved = store.moveTaxonReferences(from, to);
+            if (moved >= 0) {
+                tally->photos += moved;
+                ++tally->renamed;
+                store.pruneTaxonFromProject(projectId, from);
+            }
+            (*next)(i + 1);
+        });
+    };
+    (*next)(0);
+}
+
+void MainWindow::confirmIdentified(qint64 captureId, const taxonomy::Taxon &taxon)
+{
+    if (captureId <= 0 || !ensureCanEdit())
+        return;
+    withTaxonKnown(taxon.inatId, taxon.name, tr("Identify with iNaturalist"), [this, captureId, taxon] {
+        match::MatchReviewer reviewer(m_app.database().connectionName());
+        if (!reviewer.confirm(captureId, taxon.inatId, false)) {
+            statusBar()->showMessage(tr("Couldn't set the species."), 6000);
+            return;
+        }
+        reloadAfterMatching();
+        statusBar()->showMessage(tr("Set to %1, from iNaturalist's suggestion.")
+                                     .arg(taxon.commonName.isEmpty() ? taxon.name : taxon.commonName),
+                                 8000);
     });
 }
 
@@ -3846,6 +4031,11 @@ void MainWindow::buildCentralWidget()
     m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), m_app.inat(),
                                   m_app.photoCache(), this);
     connect(m_reviewPane, &ReviewPane::inatMatchRequested, this, &MainWindow::matchReviewPhotosWithInat);
+    m_reviewPane->setIdentify([this] { return new IdentifyPanel(m_app); },
+                              [this](const taxonomy::Taxon &taxon, std::function<void()> then) {
+                                  withTaxonKnown(taxon.inatId, taxon.name, tr("Identify with iNaturalist"),
+                                                 then);
+                              });
     connect(m_reviewPane, &ReviewPane::queueChanged, this, [this] {
         m_model->reload();
         if (m_bestShotModel)
@@ -3992,7 +4182,10 @@ QWidget *MainWindow::buildBrowsePage()
 
 QWidget *MainWindow::buildMapPage()
 {
-    m_mapView = new MapView(*m_taxonModel, m_app.tileCache(), this);
+    m_mapView = new MapView(*m_taxonModel, m_app.tileCache(), m_app.satelliteTileCache(), this);
+    m_mapView->setSatellite(m_app.settings().mapSatellite());
+    connect(m_mapView, &MapView::satelliteChanged, this,
+            [this](bool on) { m_app.settings().setMapSatellite(on); });
     m_mapView->setShowLocality(m_app.settings().showMapLocality());
     connect(m_mapView, &MapView::captureActivated, this,
             [this](const QModelIndex &i) { openViewer(m_taxonModel, i); });
@@ -5488,7 +5681,8 @@ void MainWindow::showStorageUsage()
 
     const qint64 thumbBytes = app::directoryBytes(m_app.thumbnails().cacheDir());
     const qint64 photoBytes = app::directoryBytes(m_app.photoCache().cacheDir());
-    const qint64 tileBytes = app::directoryBytes(m_app.tileCache().cacheDir());
+    const qint64 tileBytes = app::directoryBytes(m_app.tileCache().cacheDir())
+                             + app::directoryBytes(m_app.satelliteTileCache().cacheDir());
     const qint64 total = dbBytes + thumbBytes + photoBytes + tileBytes;
 
     QLocale locale;
@@ -5499,7 +5693,7 @@ void MainWindow::showStorageUsage()
            "<tr><td>Catalogue database</td><td align='right'>%1</td></tr>"
            "<tr><td>Photo thumbnails</td><td align='right'>%2</td></tr>"
            "<tr><td>Reference photos (iNaturalist)</td><td align='right'>%3</td></tr>"
-           "<tr><td>Map tiles (OpenStreetMap)</td><td align='right'>%4</td></tr>"
+           "<tr><td>Map tiles (street and satellite)</td><td align='right'>%4</td></tr>"
            "<tr><td><b>Total</b></td><td align='right'><b>%5</b></td></tr>"
            "</table>")
             .arg(dbSizeText, locale.formattedDataSize(thumbBytes),

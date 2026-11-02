@@ -55,6 +55,7 @@ private slots:
     void doesNotRetryClientError();
     void retriesOnNetworkError();
     void authenticatedRequestSendsTokenAndBypassesCache();
+    void postSendsItsBodyAndIsNeverCached();
     void skipsCacheForUncacheableUrls();
     void cacheRoundTrips();
     void isCacheableRejectsPagedAndBatchedUrls();
@@ -305,6 +306,46 @@ void TestHttpClient::authenticatedRequestSendsTokenAndBypassesCache()
     QTRY_VERIFY(thirdDone);
     QVERIFY(third.fromCache);
     QCOMPARE(third.body, QByteArrayLiteral("public-payload"));   // unchanged by the authenticated call
+}
+
+// A POST carries its verb, body and content type; it's retried like a GET
+// when the server is busy, and nothing about it is cached.
+void TestHttpClient::postSendsItsBodyAndIsNeverCached()
+{
+    HttpCache cache;
+    QVERIFY(cache.open(QStringLiteral(":memory:")));
+
+    auto transport = std::make_unique<FakeTransport>();
+    FakeTransport *raw = transport.get();
+    transport->responder = [](const Transport::Request &, int call) -> Transport::Reply {
+        if (call == 0) {
+            Transport::Reply busy;
+            busy.status = 503;
+            return busy;
+        }
+        return okReply(QByteArrayLiteral("scored"), QStringLiteral("\"etag-1\""));
+    };
+
+    HttpClient client(std::move(transport), &cache);
+    client.setMinRequestIntervalMs(0);
+    client.setRetryBaseDelayMs(1);
+    const QUrl url(QStringLiteral("https://api.inaturalist.org/v1/computervision/score_image"));
+
+    for (int i = 0; i < 2; ++i) {
+        HttpResponse got;
+        bool done = false;
+        client.post(url, "BODY", "text/plain", [&](HttpResponse r) { got = r; done = true; });
+        QTRY_VERIFY(done);
+        QCOMPARE(got.body, QByteArrayLiteral("scored"));
+        QVERIFY(!got.fromCache);
+    }
+    QCOMPARE(raw->received.size(), 3);   // busy, then fine; then asked again, not cached
+    for (const Transport::Request &req : std::as_const(raw->received)) {
+        QCOMPARE(req.verb, QByteArray("POST"));
+        QCOMPARE(req.body, QByteArray("BODY"));
+        QCOMPARE(req.contentType, QByteArray("text/plain"));
+        QVERIFY(req.ifNoneMatch.isEmpty());
+    }
 }
 
 void TestHttpClient::skipsCacheForUncacheableUrls()

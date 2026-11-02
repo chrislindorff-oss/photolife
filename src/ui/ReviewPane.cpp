@@ -9,6 +9,7 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "taxonomy/TaxonomyTypes.h"
 #include "thumb/ThumbnailCache.h"
+#include "ui/IdentifyPanel.h"
 #include "ui/ImageViewer.h"
 #include "ui/Theme.h"
 
@@ -34,6 +35,8 @@
 #include <QResizeEvent>
 #include <QShortcut>
 #include <QSplitter>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QToolButton>
@@ -273,6 +276,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     shortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F), &ReviewPane::applyToFolder);
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_T), &ReviewPane::useTreeTaxon);
     shortcut(QKeySequence(Qt::CTRL | Qt::Key_Z), &ReviewPane::undo);
+    shortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_I), &ReviewPane::identifyCurrent);
 
     m_bulkLabel = new QLabel(this);
     m_bulkLabel->setEnabled(false);   // greyed secondary text, house style
@@ -303,6 +307,16 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
 
     auto *chooseHeading = new QLabel(tr("Choose the taxon"), this);
     boldize(chooseHeading);
+    m_identifyButton = new QPushButton(tr("Identify (iNaturalist)"), this);
+    m_identifyButton->setToolTip(tr("Ask iNaturalist's computer vision what this photo shows "
+                                    "(Ctrl+Shift+I). The photo is sent to be scored, not posted; "
+                                    "a suggestion picked goes to the top of the list below."));
+    m_identifyButton->hide();   // until setIdentify()
+    connect(m_identifyButton, &QPushButton::clicked, this, &ReviewPane::identifyCurrent);
+    auto *chooseRow = new QHBoxLayout;
+    chooseRow->addWidget(chooseHeading);
+    chooseRow->addStretch(1);
+    chooseRow->addWidget(m_identifyButton);
 
     auto *detail = new QWidget(this);
     auto *detailLayout = new QVBoxLayout(detail);
@@ -310,7 +324,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     detailLayout->addLayout(compare, 3);
     detailLayout->addWidget(m_info);
     detailLayout->addWidget(m_guess);
-    detailLayout->addWidget(chooseHeading);
+    detailLayout->addLayout(chooseRow);
     detailLayout->addWidget(m_candidates, 2);
     detailLayout->addWidget(m_search);
     detailLayout->addWidget(m_useTreeTaxon);
@@ -467,6 +481,7 @@ void ReviewPane::openViewerAt(const QModelIndex &groupIndex)
     const qint64 targetId = groupIndex.data(ReviewQueueModel::CaptureIdRole).toLongLong();
 
     QVector<ImageViewer::Item> items;
+    QList<qint64> ids;
     int start = 0;
     const int rows = visibleQueueCount();
     for (int r = 0; r < rows; ++r) {
@@ -481,13 +496,53 @@ void ReviewPane::openViewerAt(const QModelIndex &groupIndex)
             continue;
         if (idx.data(ReviewQueueModel::CaptureIdRole).toLongLong() == targetId)
             start = items.size();
+        item.canIdentify = bool(m_makePanel);
         items.append(item);
+        ids.append(idx.data(ReviewQueueModel::CaptureIdRole).toLongLong());
     }
     if (items.isEmpty())
         return;
+    m_viewerCaptureIds = ids;
+    // Where and when each was taken, for identifying: one query for them all.
+    if (m_makePanel) {
+        QStringList idList;
+        for (qint64 id : std::as_const(ids))
+            idList << QString::number(id);
+        QHash<qint64, int> at;
+        for (int i = 0; i < ids.size(); ++i)
+            at.insert(ids.at(i), i);
+        QSqlQuery q(QSqlDatabase::database(m_db.connectionName(), false));
+        q.setForwardOnly(true);
+        if (q.exec(QStringLiteral("SELECT id, latitude, longitude, captured_on FROM capture WHERE id IN (%1)")
+                       .arg(idList.join(QLatin1Char(','))))) {
+            while (q.next()) {
+                ImageViewer::Item &item = items[at.value(q.value(0).toLongLong())];
+                if (!q.value(1).isNull() && !q.value(2).isNull()) {
+                    item.hasGps = true;
+                    item.latitude = q.value(1).toDouble();
+                    item.longitude = q.value(2).toDouble();
+                }
+                item.taken = QDate::fromString(q.value(3).toString().left(10), Qt::ISODate);
+            }
+        }
+    }
 
-    if (!m_viewer)
+    if (!m_viewer) {
         m_viewer = new ImageViewer(this);
+        if (m_makePanel) {
+            // I in the viewer: a suggestion picked is the decision for that photo.
+            m_viewer->setIdentifyPanel(m_makePanel());
+            connect(m_viewer, &ImageViewer::taxonChosen, this, [this](int index, const taxonomy::Taxon &taxon) {
+                const qint64 cid = m_viewerCaptureIds.value(index);
+                if (cid <= 0 || !editAllowed())
+                    return;
+                m_ensureKnown(taxon, [this, cid, taxon] {
+                    if (m_reviewer.confirm(cid, taxon.inatId))
+                        afterDecision(cid);
+                });
+            });
+        }
+    }
     m_viewer->setItems(items, start);
     m_viewer->show();
     m_viewer->raise();
@@ -525,6 +580,10 @@ qint64 ReviewPane::chosenTaxonInatId() const
 void ReviewPane::showCurrent()
 {
     updateBucketButtons();
+    if (m_identify) {
+        m_identify->clear();
+        m_identify->hide();
+    }
 
     const QModelIndex idx = m_queueView->currentIndex();
     const bool have = idx.isValid() && !m_queueGroup->isGroup(idx);
@@ -840,6 +899,78 @@ void ReviewPane::updateBucketButtons()
     m_bucketAllButton->setText(tr("All (%1)").arg(total));
     m_bucketNoCandidateButton->setText(tr("No candidate found (%1)").arg(noCandidate));
     m_bucketNeedsReviewButton->setText(tr("Needs review (%1)").arg(total - noCandidate));
+}
+
+void ReviewPane::setIdentify(std::function<IdentifyPanel *()> makePanel, EnsureKnown ensureKnown)
+{
+    m_makePanel = std::move(makePanel);
+    m_ensureKnown = std::move(ensureKnown);
+    m_identify = m_makePanel();
+    m_identify->setParent(this);
+    m_identify->hide();
+    auto *box = static_cast<QBoxLayout *>(m_candidates->parentWidget()->layout());
+    box->insertWidget(box->indexOf(m_candidates), m_identify, 2);
+    connect(m_identify, &IdentifyPanel::chosen, this, [this](const taxonomy::Taxon &taxon) {
+        useIdentified(currentCaptureId(), taxon);
+    });
+    m_identifyButton->show();
+}
+
+pl::inat::IdentifyRequest ReviewPane::identifyRequest(qint64 captureId, const QString &path) const
+{
+    pl::inat::IdentifyRequest request;
+    request.key = path;
+    request.path = path;
+    QSqlQuery q(QSqlDatabase::database(m_db.connectionName(), false));
+    q.prepare(QStringLiteral("SELECT latitude, longitude, captured_on FROM capture WHERE id = ?"));
+    q.addBindValue(captureId);
+    if (q.exec() && q.next()) {
+        if (!q.value(0).isNull() && !q.value(1).isNull())
+            request.lonLat = QPointF(q.value(1).toDouble(), q.value(0).toDouble());
+        if (const QDate d = QDate::fromString(q.value(2).toString().left(10), Qt::ISODate); d.isValid())
+            request.date = d;
+    }
+    return request;
+}
+
+void ReviewPane::identifyCurrent()
+{
+    const QModelIndex idx = m_queueView->currentIndex();
+    const qint64 cid = currentCaptureId();
+    if (!m_identify || cid <= 0 || !idx.isValid())
+        return;
+    const QString path = idx.data(ReviewQueueModel::PreviewPathRole).toString();
+    if (path.isEmpty())
+        return;
+    m_identify->show();
+    m_identify->identify(identifyRequest(cid, path));
+}
+
+void ReviewPane::useIdentified(qint64 captureId, const taxonomy::Taxon &taxon)
+{
+    if (captureId <= 0 || !editAllowed())
+        return;
+    m_ensureKnown(taxon, [this, captureId, taxon] {
+        if (captureId != currentCaptureId())
+            return;   // moved on meanwhile
+        QListWidgetItem *item = nullptr;
+        for (int i = 0; i < m_candidates->count(); ++i) {
+            if (m_candidates->item(i)->data(Qt::UserRole).toLongLong() == taxon.inatId)
+                item = m_candidates->item(i);
+        }
+        if (!item) {
+            QString label = taxon.name;
+            if (!taxon.commonName.isEmpty() && taxon.commonName != taxon.name)
+                label += QStringLiteral("  ·  %1").arg(taxon.commonName);
+            label += QStringLiteral("   [%1, %2]").arg(taxon.rank, tr("iNaturalist suggestion"));
+            item = new QListWidgetItem(label);
+            item->setData(Qt::UserRole, taxon.inatId);
+            m_candidates->insertItem(0, item);
+        }
+        m_candidates->setCurrentItem(item);
+        m_confirmButton->setEnabled(true);
+        m_confirmButton->setFocus();
+    });
 }
 
 void ReviewPane::confirm()

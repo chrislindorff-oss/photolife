@@ -50,14 +50,16 @@ QIcon squareThumb(const QModelIndex &idx)
 
 } // namespace
 
-MapView::MapView(model::CaptureListModel &model, net::TileCache &tiles, QWidget *parent)
-    : QWidget(parent), m_model(model), m_tiles(tiles)
+MapView::MapView(model::CaptureListModel &model, net::TileCache &streetTiles,
+                 net::TileCache &satelliteTiles, QWidget *parent)
+    : QWidget(parent), m_model(model), m_streetTiles(streetTiles), m_satelliteTiles(satelliteTiles)
 {
     setMouseTracking(false);
     setMinimumSize(200, 200);
 
     connect(&m_model, &QAbstractItemModel::modelReset, this, &MapView::rebuildPins);
-    connect(&m_tiles, &net::TileCache::ready, this, [this](int, int, int) { update(); });
+    for (net::TileCache *t : {&m_streetTiles, &m_satelliteTiles})
+        connect(t, &net::TileCache::ready, this, [this](int, int, int) { update(); });
 
     m_fitButton = new QPushButton(tr("Fit to Photos"), this);
     connect(m_fitButton, &QPushButton::clicked, this, [this] {
@@ -75,8 +77,7 @@ MapView::MapView(model::CaptureListModel &model, net::TileCache &tiles, QWidget 
 
     m_attribution = new QLabel(this);
     m_attribution->setTextFormat(Qt::RichText);
-    m_attribution->setText(tr("<a href=\"https://www.openstreetmap.org/copyright\">"
-                              "© OpenStreetMap contributors</a>"));
+    m_attribution->setText(mapAttribution(false));
     m_attribution->setOpenExternalLinks(true);
     {
         const QColor panel = pl::themeColors(pl::currentThemeVariant()).panel;
@@ -85,6 +86,12 @@ MapView::MapView(model::CaptureListModel &model, net::TileCache &tiles, QWidget 
                 .arg(panel.red()).arg(panel.green()).arg(panel.blue()));
     }
     m_attribution->adjustSize();
+
+    m_layers = new MapLayerSwitch(this);
+    connect(m_layers, &MapLayerSwitch::satelliteChanged, this, [this](bool on) {
+        setSatellite(on);
+        emit satelliteChanged(on);
+    });
 
     m_emptyOverlay = new QLabel(tr("No geotagged photos in this selection."), this);
     m_emptyOverlay->setAlignment(Qt::AlignCenter);
@@ -205,6 +212,15 @@ void MapView::setShowLocality(bool show)
     update();
 }
 
+void MapView::setSatellite(bool satellite)
+{
+    m_satellite = satellite;
+    m_layers->setSatellite(satellite);
+    m_attribution->setText(mapAttribution(satellite));
+    layoutOverlays();
+    update();
+}
+
 void MapView::setActiveLocality(std::optional<geo::GeoBox> box,
                                 std::optional<geo::GeoShape> shape)
 {
@@ -264,6 +280,7 @@ void MapView::layoutOverlays()
     m_attribution->adjustSize();
     m_attribution->move(width() - m_attribution->width() - 8,
                         height() - m_attribution->height() - 8);
+    m_layers->move(width() - m_layers->width() - 8, 8);
     m_emptyOverlay->setGeometry(rect());
     // The empty-state label covers the whole widget and would otherwise sit
     // above these buttons in sibling stacking order -- if toggling the
@@ -271,6 +288,8 @@ void MapView::layoutOverlays()
     // able to reach the button to turn it back off.
     m_fitButton->raise();
     m_localityButton->raise();
+    m_layers->raise();
+    m_attribution->raise();
     if (m_panel->isVisible()) {
         placePanel();
         m_panel->raise();
@@ -301,7 +320,7 @@ void MapView::paintEvent(QPaintEvent *)
     painter.fillRect(rect(), QColor(0xdd, 0xdd, 0xd5));
 
     const QPointF origin = centerWorldPixel() - QPointF(width() / 2.0, height() / 2.0);
-    drawMapTiles(painter, m_tiles, origin, m_zoom, size());
+    drawMapTiles(painter, tiles(), origin, m_zoom, size());
 
     painter.setRenderHint(QPainter::Antialiasing);
     paintLocality(painter, origin);

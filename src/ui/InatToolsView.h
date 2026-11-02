@@ -6,6 +6,7 @@
 
 #include <utility>
 
+class QLabel;
 class QLineEdit;
 class QTabWidget;
 
@@ -38,9 +39,12 @@ signals:
     void usernameCommitted(const QString &username);
 
 private:
+    void showTokenStatus();
+
     Application &m_app;
     QLineEdit *m_username = nullptr;
     QLineEdit *m_token = nullptr;
+    QLabel *m_tokenStatus = nullptr;
 };
 
 // The central "iNaturalist" view mode: the account bar above one tab per

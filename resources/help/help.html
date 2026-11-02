@@ -92,7 +92,7 @@ coverage summary) stays visible no matter which mode you're in, so you can still
 search or select a taxon while reviewing or browsing the whole library.</p>
 
 <h2 id="organise">Organise new photos</h2>
-<p>After a day out, copy the day's photos into a folder (say <i>Anakie 2025-10-18</i>),
+<p>After a day out, copy the day's photos into a folder (say <i>Lakeside 2025-10-18</i>),
 then choose <b>Organise &rarr; Open Download Folder&hellip;</b> (or <b>View &rarr;
 Organise New Photos</b>). The photos appear as a filmstrip in the order they were
 taken &mdash; RAW and JPEG of a shot together &mdash; with the selected photo large
@@ -122,6 +122,14 @@ known from your library's photos appear at once, even offline).</p>
       when you organise, it's rated 5 stars &mdash; in the JPEG, or in an <i>.xmp</i>
       sidecar beside a RAW, which is never written to &mdash; so when you add it to the
       library it arrives as a Best Shot of its species.</li>
+  <li>Not sure what it is? Press <b>I</b> (or right-click &rarr; <b>Identify with
+      iNaturalist&hellip;</b>, or <b>Identify</b> in the Name box) and iNaturalist's
+      computer vision suggests what the photo shows; click one to name the photo with it.
+      <b>Identify Runs&hellip;</b> does a whole folder: it guesses where each new taxon
+      starts (more than 30 seconds between shots, or what you set), asks about the first
+      photo of each, and lists them with the best suggestion chosen for you to check,
+      change or leave out. Photos you've already named are left alone. See
+      <a href="#identify">Identify with iNaturalist</a>.</li>
   <li>Photos without a <b>GEO</b> mark can be given a location: select them and press
       <b>G</b> (or right-click &rarr; <b>Set Location on Map&hellip;</b>), then put a pin
       where they were taken &mdash; click the map, search for a place, or paste
@@ -154,14 +162,14 @@ known from your library's photos appear at once, even offline).</p>
       restarting PhotoLife, reopens the last download folder at the last photo you
       named. (<b>View &rarr; Organise New Photos</b> also switches back.)</li>
   <li><b>Organise into Folders&hellip;</b> shows what will happen, then moves each run
-      into a folder of its name inside the download folder (<i>Anakie 2025-10-18/Flame
+      into a folder of its name inside the download folder (<i>Lakeside 2025-10-18/Flame
       Robin/DSC_1234.NEF</i>), and rejects into <i>Rejects</i>. File names are kept;
       RAW, JPEG and sidecar files (.xmp &hellip;) move together; two runs given the same
       name share a folder; nothing is overwritten (a name already taken gets
       &ldquo;(2)&rdquo;) or deleted. Photos before the first name stay where they
       are.<br>
       Tick <b>Also rename the photos</b> to name each one for its folder, where it was
-      taken and the date &mdash; <i>Scarlet Robin - Anakie, Victoria, 2025-10-18.NEF</i>
+      taken and the date &mdash; <i>Scarlet Robin - Lakeside, Victoria, 2025-10-18.NEF</i>
       (just the date when it has no GPS). Later photos with the same name get
       &ldquo;(2)&rdquo;, &ldquo;(3)&rdquo;&hellip; in the order they were taken; a
       photo's RAW, JPEG and sidecars share its name. Places not already known are
@@ -214,7 +222,37 @@ very large tree pauses every few thousand species to ask whether to keep going.<
 of the <b>Reference Trees</b> panel on the left. From the <b>Reference Tree</b>
 menu:</p>
 <ul>
-  <li><b>Refresh Reference Tree</b> re-pulls the current one from iNaturalist.</li>
+  <li><b>Refresh Reference Tree</b> re-pulls the current one from iNaturalist: species
+      newly recorded in the place are added, and taxa you've pruned stay out. It then
+      checks what has <i>gone</i>, and lists it in <b>Tree Changes on iNaturalist</b>:
+      <ul>
+        <li><b>Renamed</b> &mdash; iNaturalist now uses another name (a swap or merge).
+            <b>Move photos to</b> the new name re-points the photos matched to the old
+            one &mdash; your confirmed ones stay confirmed &mdash; and the names PhotoLife
+            learned for it, adds the new name to the tree and prunes the old.</li>
+        <li><b>Split</b> &mdash; now several taxa: pick which one its photos go to, or
+            leave it for now.</li>
+        <li><b>Retired</b> &mdash; no longer used on iNaturalist.</li>
+        <li><b>No longer recorded in</b> the tree's place &mdash; a species with no
+            verifiable observations there now (often a vagrant, or one whose records were
+            re-identified). Species from an imported checklist are only listed if
+            renamed.</li>
+        <li><b>Subspecies with no records in</b> the tree's place &mdash; none of its
+            observations there are named to that subspecies. <i>Fetch
+            Subspecies/Varieties</i> adds every subspecies of each species, from anywhere,
+            so a regional tree can hold many from elsewhere. But most observations are named
+            only to species, so a subspecies can live there with no records of its own (a
+            local bird tree may list every one): check before pruning. <b>Prune Subspecies
+            Without Photos</b> sets all of those you haven't photographed to Prune at once;
+            ones with your photos stay as they are unless you choose.</li>
+        <li><b>Empty groups</b> &mdash; a genus or family with nothing beneath it in the
+            tree.</li>
+      </ul>
+      For each choose <b>Ask again later</b> (nothing changes), <b>Keep</b> (it isn't asked
+      about again, unless it's later renamed), <b>Prune</b>, or <b>Move photos to</b>; then
+      <b>Apply</b>. Photos of a pruned taxon stay in your library (under <i>Photos not in
+      any tree</i>). The check needs the whole list, so it's skipped when a refresh was
+      stopped early or picked up where an interrupted one left off.</li>
   <li><b>Add Taxon to Reference Tree&hellip;</b> adds a single taxon (with its
       ancestors) that the region's list didn't include.</li>
   <li><b>Fetch Subspecies/Varieties&hellip;</b> checks the tree&rsquo;s species for
@@ -391,7 +429,10 @@ PhotoLife was unsure about, grouped by matching name; <b>Collapse all</b>/<b>Exp
 all</b> and the <b>Filter photos</b> box (by name, folder or guess) help you work one
 genus at a time. For the selected photo you see it side-by-side with an iNaturalist
 reference photo of the highlighted candidate, the engine&rsquo;s guess, a ranked list
-of alternatives, and a taxon search box. Then:</p>
+of alternatives, and a taxon search box. <b>Identify (iNaturalist)</b> (Ctrl+Shift+I)
+asks iNaturalist's computer vision about the photo; a suggestion you click goes to the
+top of the list, ready to confirm (see <a href="#identify">Identify with
+iNaturalist</a>). Then:</p>
 <ul>
   <li><b>Confirm</b> &mdash; accept the highlighted taxon. PhotoLife learns the
       name, so the same oddity is never queued again.</li>
@@ -508,7 +549,10 @@ Lightroom, darktable or another program (in the photo or its <i>.xmp</i> sidecar
 
 <h2 id="map">The map &amp; photo localities</h2>
 <p>The <b>Map</b> tab plots every geotagged photo in the current tree selection as a
-pin on an OpenStreetMap view, scoped exactly like <b>Photos of Tree Selection</b>.
+pin on the map, scoped exactly like <b>Photos of Tree Selection</b>. <b>Map</b> and
+<b>Satellite</b> in its corner switch between OpenStreetMap's street map and Esri's
+aerial photos (World Imagery); <b>Set Location on Map</b> has the same switch, and
+PhotoLife remembers your choice for both.
 Drag to pan, scroll to zoom, and use <b>Fit to Photos</b> to frame everything in view
 &mdash; it does this automatically whenever you change the tree selection.
 The active tree's region is outlined and lightly shaded, using the boundary
@@ -583,6 +627,11 @@ inaturalist.org/users/api_token (it expires after about 24 hours). Without a tok
 geoprivacy-obscured species come back with fuzzed coordinates, even for your own
 observations. <b>iNaturalist Tools &rarr; iNaturalist Account</b> jumps straight to
 it.</p>
+<p><b>Get Token&hellip;</b> saves pasting the token: it opens iNaturalist's token page
+in your browser (sign in there if asked), and as soon as you press <b>Ctrl+A</b> then
+<b>Ctrl+C</b> on that page, PhotoLife takes the token from what you copied, saves it and
+clears it from the clipboard. Beside it you see until when it's good &mdash;
+&ldquo;Signed in until 3:40 pm tomorrow&rdquo;.</p>
 <p><b>Download My Observations</b> finds photos from your own observations that
 aren't in your library yet.</p>
 <ul>
@@ -628,12 +677,43 @@ iNaturalist that are missing from a tree.</p>
       species) can't be placed and are reported separately.</li>
 </ul>
 
+<h2 id="identify">Identify with iNaturalist</h2>
+<p>iNaturalist's computer vision &mdash; the suggestions its own app makes &mdash; can
+say what a photo shows. PhotoLife sends the photo (a copy 1280 pixels across; a RAW's
+embedded preview), with where and when it was taken if it knows, to be <i>scored</i>:
+nothing is posted to iNaturalist and nothing is decided for you. The suggestions come
+back best first, each with iNaturalist's score, and marked <b>seen nearby</b> (recorded
+near where it was taken) and <b>in your trees</b>; ones outside your trees are greyed,
+and <b>Only taxa in my trees</b> hides them. Where a suggestion names your photos (in
+Organise), <b>Name with common names</b> chooses between its common name (<i>Flame
+Robin</i>) and its scientific name (<i>Petroica phoenicea</i>); a taxon without a common
+name gets its scientific name either way. When the suggestions disagree, the first row
+gives the group they share, such as <i>Probably within Petroica (genus)</i>.</p>
+<ul>
+  <li><b>Organise</b>: <b>I</b> names the focused photo from a suggestion;
+      <b>Identify Runs&hellip;</b> does every unnamed run at once, for you to check.</li>
+  <li><b>The image viewer</b>: <b>I</b> (or <b>Identify</b>) shows suggestions beside the
+      photo. For a small bird, <b>Shift+drag</b> a box round it first: just that part is
+      sent, from the full-size photo, which often helps a lot. In Organise a suggestion
+      picked names the photo; in the library and Review Unmatched it becomes the photo's
+      match.</li>
+  <li><b>Review Unmatched</b>: <b>Identify (iNaturalist)</b> puts a picked suggestion at
+      the top of the candidates, ready to confirm.</li>
+</ul>
+<p>It needs your iNaturalist token, which lasts a day: when there isn't one (or it has
+run out) PhotoLife says so and offers <b>Get Token&hellip;</b>, then carries on by itself
+once you've copied the new one. If iNaturalist refuses or is busy, try again a little
+later. Answers are kept until PhotoLife closes, so asking again about the same photo is
+instant.</p>
+
 <h2 id="viewer">The image viewer</h2>
 <p>Double-click any thumbnail to open the full-size viewer. <b>Previous</b>/<b>Next</b>
 (or the Left/Right and Page Up/Down keys) move through the current set, Home/End jump
 to the ends, and Esc closes it. The star button adds or removes the photo as a best
 shot. If the photo has GPS data, <b>View on Map</b> opens its location in your
-browser.</p>
+browser. <b>I</b> (or <b>Identify</b>) asks iNaturalist what the photo shows &mdash; or,
+after a <b>Shift+drag</b> round part of it, just that part (see
+<a href="#identify">Identify with iNaturalist</a>).</p>
 <p><b>Zooming.</b> Press <b>A</b> (or double-click) to switch between fitting the window
 and actual pixels (1:1, one photo pixel per screen pixel), centred on the spot under the
 pointer. The mouse wheel zooms in and out around the pointer, <b>+</b>/<b>&minus;</b>
@@ -704,6 +784,9 @@ your photos. PhotoLife writes files only when you ask it to:</p>
 <h2 id="sharing">Local and server catalogues</h2>
 <p>PhotoLife keeps completely separate catalogues, each with its own reference trees,
 photos, folders and review queue:</p>
+<p><i>Version 0.1.20 adds to the catalogue (it remembers the taxa you keep after a
+refresh), so every computer sharing a server catalogue needs 0.1.20 or later before
+they can sync with one that has it.</i></p>
 <ul>
   <li><b>Your Local catalogue</b> &mdash; your own photo library on your drives. Not
       shared and never synced.</li>
@@ -909,6 +992,7 @@ It only re-reads location data; nothing else about your catalogue changes.</p>
   <tr><td><b>Ctrl+Shift+F</b></td><td>Apply to folder</td></tr>
   <tr><td><b>Ctrl+T</b></td><td>Use Selected Taxon on Tree</td></tr>
   <tr><td><b>Ctrl+Z</b></td><td>Undo the last decision</td></tr>
+  <tr><td><b>Ctrl+Shift+I</b></td><td>Identify with iNaturalist</td></tr>
   <tr><td colspan="2"><i>In the image viewer:</i></td></tr>
   <tr><td><b>&larr; / &rarr;</b></td><td>Previous / next photo</td></tr>
   <tr><td><b>Home / End</b></td><td>First / last photo</td></tr>
@@ -917,7 +1001,9 @@ It only re-reads location data; nothing else about your catalogue changes.</p>
   <tr><td><b>0</b> or <b>F</b></td><td>Fit to the window</td></tr>
   <tr><td>Drag</td><td>Pan a zoomed photo</td></tr>
   <tr><td><b>R</b></td><td>Reject / keep the photo (Organise)</td></tr>
-  <tr><td><b>Esc</b></td><td>Close the viewer</td></tr>
+  <tr><td><b>I</b></td><td>Identify with iNaturalist</td></tr>
+  <tr><td><b>Shift</b>+drag</td><td>Select part of the photo to identify</td></tr>
+  <tr><td><b>Esc</b></td><td>Clear the selection, then close the viewer</td></tr>
 </table>
 
 <h2 id="cli">Command line</h2>

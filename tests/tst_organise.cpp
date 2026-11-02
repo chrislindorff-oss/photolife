@@ -77,6 +77,7 @@ private slots:
     void localityLookupUsesTheSameRounding();
     void runsRejectsAndMergedNames();
     void namingCanEndAndResume();
+    void runStartsAreProposedAtGaps();
     void progressIsKeptAndRecognisesTheShots();
     void organiseAndUndo();
     void renamedBaseNames();
@@ -294,6 +295,32 @@ void TestOrganise::namingCanEndAndResume()
 
     s.setNamingEndAt(2, false);
     QCOMPARE(s.runName(3), QStringLiteral("Flame Robin"));
+}
+
+// Identify Runs: a run probably starts at the first of each unnamed stretch,
+// and wherever the shots pause for longer than the gap; rejects don't count,
+// and named runs are never split.
+void TestOrganise::runStartsAreProposedAtGaps()
+{
+    OrganiseSession s;
+    const QDateTime t0(QDate(2025, 10, 18), QTime(9, 0));
+    QList<Item> items;
+    for (int seconds : {0, 10, 20, 100, 110, 300, 310, 320, 330, 400}) {
+        Item item;
+        item.baseName = QStringLiteral("P%1").arg(items.size());
+        item.taken = t0.addSecs(seconds);
+        item.takenFromExif = true;
+        items << item;
+    }
+    s.setItems(QStringLiteral("/tmp/day"), items);
+    s.setRejected(5, true);
+    s.setName(7, QStringLiteral("Flame Robin"));
+    s.setNamingEndAt(8, true);
+
+    QCOMPARE(s.proposedRunStarts(30), (QList<int>{0, 3, 6, 9}));
+    QCOMPARE(s.proposedRunStarts(300), (QList<int>{0, 9}));
+    s.setName(0, QStringLiteral("Scarlet Robin"));   // now all but P9 are named
+    QCOMPARE(s.proposedRunStarts(30), (QList<int>{9}));
 }
 
 void TestOrganise::progressIsKeptAndRecognisesTheShots()

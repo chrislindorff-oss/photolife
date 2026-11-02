@@ -61,6 +61,8 @@ struct ScanSummary;
 }
 namespace taxonomy {
 class ProjectBuilder;
+class TreeChangeFinder;
+struct TreeChange;
 class OriginFetcher;
 class AlaStatusSync;
 class ApcOriginSync;
@@ -68,6 +70,7 @@ class InfraspecificFiller;
 class ReferencePhotoFetcher;
 class CommonNameFetcher;
 struct Observation;
+struct Taxon;
 }
 namespace match {
 class MatchEngine;
@@ -366,6 +369,18 @@ private:
     void setLocationOnMap(QListView *grid);
     void applyInatSpecies(const QList<InatMatchTarget> &targets, const taxonomy::Observation &observation,
                           int located, const QString &learnName, const QString &renameTo);
+    // Runs `then` once the taxon is in the taxonomy: straight away when it
+    // is, else after fetching it (and its missing ancestors) from
+    // iNaturalist. `title` heads any warning.
+    void withTaxonKnown(qint64 taxonInatId, const QString &name, const QString &title,
+                        const std::function<void()> &then);
+    // The views that show matches, after some changed.
+    void reloadAfterMatching();
+    // A suggestion from Identify with iNaturalist, picked for a library photo:
+    // its match, as the user's own decision.
+    void confirmIdentified(qint64 captureId, const taxonomy::Taxon &taxon);
+    // A refresh's TreeChangeFinder results: shown, and what the user chose done.
+    void reviewTreeChanges(int projectId, const QList<taxonomy::TreeChange> &changes);
     // Renames the photos' files for `name`; says what was done, for the status bar.
     QString renameCapturesFromInat(const QList<InatMatchTarget> &targets, const QString &name);
     void removeMissingCaptures();
@@ -531,6 +546,8 @@ private:
     QStringList m_rankFilterOrder;                  // ranks currently backing the menu
     QSet<QString> m_hiddenRanks;
     taxonomy::ProjectBuilder *m_builder = nullptr;
+    // After a complete refresh: what's gone from the tree on iNaturalist.
+    taxonomy::TreeChangeFinder *m_treeChanges = nullptr;
     bool m_builderIsNewTree = false;   // distinguishes New from Refresh in m_builder::finished
     taxonomy::InfraspecificFiller *m_infraFiller = nullptr;
     taxonomy::OriginFetcher *m_originFetcher = nullptr;

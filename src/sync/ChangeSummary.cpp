@@ -89,6 +89,14 @@ const Spec kSpecs[] = {
      "SELECT COALESCE(p.name, 'a deleted tree') || ': restored ' || COALESCE(t.name, 'a taxon') "
      "FROM base.project_excluded_taxon b LEFT JOIN base.project p ON p.id = b.project_id "
      "LEFT JOIN base.taxon t ON t.id = b.taxon_id WHERE (b.project_id, b.taxon_id) IN ({REMOVED})"},
+    {"project_taxon_kept", "kept", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Taxa kept after a refresh"), false,
+     "SELECT p.name || ': kept ' || t.name FROM main.project_taxon_kept m "
+     "JOIN main.project p ON p.id = m.project_id JOIN main.taxon t ON t.id = m.taxon_id "
+     "WHERE (m.project_id, m.taxon_id) IN ({ADDED})",
+     nullptr,
+     "SELECT COALESCE(p.name, 'a deleted tree') || ': no longer kept ' || COALESCE(t.name, 'a taxon') "
+     "FROM base.project_taxon_kept b LEFT JOIN base.project p ON p.id = b.project_id "
+     "LEFT JOIN base.taxon t ON t.id = b.taxon_id WHERE (b.project_id, b.taxon_id) IN ({REMOVED})"},
     {"taxon_status", "statuses", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Conservation statuses"), false,
      "SELECT t.name || ': ' || m.status || COALESCE(' (' || m.source || ')', '') "
      "FROM main.taxon_status m JOIN main.taxon t ON t.id = m.taxon_id WHERE m.id IN ({ADDED})",

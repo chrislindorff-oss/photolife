@@ -6,6 +6,7 @@
 #include "db/Database.h"
 #include "pl/Version.h"
 #include "inat/InatPhotoDownloader.h"
+#include "inat/PhotoIdentifier.h"
 #include "lightroom/LightroomImporter.h"
 #include "net/GeocodeClient.h"
 #include "net/HttpCache.h"
@@ -25,6 +26,7 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "thumb/ThumbnailCache.h"
 #include "ui/MainWindow.h"
+#include "ui/MapTiles.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -138,6 +140,9 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
 
     m_tileCache = std::make_unique<net::TileCache>(
         QDir(dataDir).filePath(QStringLiteral("tiles")), userAgent);
+    m_satelliteTileCache = std::make_unique<net::TileCache>(
+        QDir(dataDir).filePath(QStringLiteral("tiles-satellite")), userAgent);
+    m_satelliteTileCache->setUrlTemplate(QString::fromLatin1(kSatelliteTileUrl));
 
     m_inatPhotoDownloader = std::make_unique<inat::InatPhotoDownloader>(userAgent);
 
@@ -225,9 +230,30 @@ net::PhotoCache &Application::photoCache()
     return *m_photoCache;
 }
 
+inat::PhotoIdentifier &Application::photoIdentifier()
+{
+    if (!m_photoIdentifier)
+        m_photoIdentifier = std::make_unique<inat::PhotoIdentifier>(*m_inat, m_database->connectionName());
+    return *m_photoIdentifier;
+}
+
+void Application::setInatApiToken(const QString &token)
+{
+    if (token == m_settings->inatApiToken() && token == m_inat->accessToken())
+        return;
+    m_settings->setInatApiToken(token);
+    m_inat->setAccessToken(token);
+    emit inatApiTokenChanged(token);
+}
+
 net::TileCache &Application::tileCache()
 {
     return *m_tileCache;
+}
+
+net::TileCache &Application::satelliteTileCache()
+{
+    return *m_satelliteTileCache;
 }
 
 net::UpdateChecker &Application::updateChecker()

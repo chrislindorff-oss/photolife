@@ -236,6 +236,35 @@ public:
     // of permanently treating it as still-pruned.
     bool clearProjectExclusion(int projectId, qint64 taxonInatId);
 
+    // Taxa the user chose to keep after a refresh found iNaturalist no longer
+    // lists them (TreeChangeFinder), so the next refresh doesn't ask again.
+    bool keepProjectTaxa(int projectId, const QList<qint64> &taxonInatIds);
+    QSet<qint64> projectKeptTaxonIds(int projectId) const;
+
+    // A tree member a complete refresh's species list didn't include -- a
+    // species (or below) -- or a group with no members beneath it.
+    struct ChangeCandidate
+    {
+        qint64 inatId = 0;
+        QString name;
+        QString rank;
+        QString commonName;
+        bool emptyGroup = false;     // else a leaf rank the list didn't include
+        bool inRegion = false;
+        bool fromChecklist = false;
+        bool kept = false;           // keepProjectTaxa()
+        int photos = 0;              // captures matched to it (auto or confirmed)
+    };
+    QList<ChangeCandidate> projectChangeCandidates(int projectId, const QSet<qint64> &listedInatIds) const;
+
+    // A taxon renamed on iNaturalist: everything that points at `oldInatId`
+    // -- photos' matches (the user's own decisions too, which stay theirs),
+    // learned names, keyword hints, cover choices -- points at `newInatId`
+    // instead. A photo already matched to both keeps its match to the new
+    // one, taking the old one's decision if that was the user's. Both must be
+    // cached. Returns how many photos moved, or -1 on error.
+    int moveTaxonReferences(qint64 oldInatId, qint64 newInatId);
+
     // Upserts each ancestor (root-first) and `taxon` itself into the shared
     // cache, links them all into `projectId` (ancestors non-in-region;
     // `taxon` in-region iff isLeafRank(taxon.rank)), and clears any prior

@@ -252,6 +252,19 @@ QComboBox::drop-down {
     width: 20px;
 }
 
+/* The Reference Trees panel's tree chooser: which tree you're looking at
+   decides everything below it, so it stands out from ordinary inputs. */
+QComboBox#referenceTreeSelector {
+    background: @selectedRow@;
+    border: 2px solid @primaryAccent@;
+    font-weight: 600;
+    padding: 5px 8px;
+}
+
+QComboBox#referenceTreeSelector:hover {
+    border-color: @secondaryAccent@;
+}
+
 QComboBox QAbstractItemView {
     background: @panel@;
     border: 1px solid @border@;

@@ -21,14 +21,16 @@ constexpr double kDotHitRadius = 9.0;
 constexpr double kPinHitRadius = 14.0;
 } // namespace
 
-LocationPickerMap::LocationPickerMap(net::TileCache &tiles, QWidget *parent)
-    : QWidget(parent), m_tiles(tiles)
+LocationPickerMap::LocationPickerMap(net::TileCache &streetTiles, net::TileCache &satelliteTiles,
+                                     QWidget *parent)
+    : QWidget(parent), m_streetTiles(streetTiles), m_satelliteTiles(satelliteTiles)
 {
     setMinimumSize(360, 300);
     setMouseTracking(true);
     setCursor(Qt::CrossCursor);
     setFocusPolicy(Qt::StrongFocus);
-    connect(&m_tiles, &net::TileCache::ready, this, [this](int, int, int) { update(); });
+    for (net::TileCache *t : {&m_streetTiles, &m_satelliteTiles})
+        connect(t, &net::TileCache::ready, this, [this](int, int, int) { update(); });
 
     m_zoomIn = new QToolButton(this);
     m_zoomIn->setText(QStringLiteral("+"));
@@ -43,16 +45,31 @@ LocationPickerMap::LocationPickerMap(net::TileCache &tiles, QWidget *parent)
     connect(m_zoomOut, &QToolButton::clicked, this,
             [this] { zoomAround(m_zoom - 1, QPointF(width() / 2.0, height() / 2.0)); });
 
-    // OpenStreetMap's tile policy asks for this on every map.
+    // Both tile sources ask for their credit on every map.
     m_attribution = new QLabel(this);
     m_attribution->setTextFormat(Qt::RichText);
-    m_attribution->setText(tr("<a href=\"https://www.openstreetmap.org/copyright\">"
-                              "© OpenStreetMap contributors</a>"));
+    m_attribution->setText(mapAttribution(false));
     m_attribution->setOpenExternalLinks(true);
     const QColor panel = themeColors(currentThemeVariant()).panel;
     m_attribution->setStyleSheet(QStringLiteral("background-color: rgba(%1,%2,%3,190); padding: 2px 5px;")
                                      .arg(panel.red()).arg(panel.green()).arg(panel.blue()));
     m_attribution->adjustSize();
+
+    m_layers = new MapLayerSwitch(this);
+    connect(m_layers, &MapLayerSwitch::satelliteChanged, this, [this](bool on) {
+        setSatellite(on);
+        emit satelliteChanged(on);
+    });
+}
+
+void LocationPickerMap::setSatellite(bool satellite)
+{
+    m_satellite = satellite;
+    m_layers->setSatellite(satellite);
+    m_attribution->setText(mapAttribution(satellite));
+    m_attribution->adjustSize();
+    placeOverlays();
+    update();
 }
 
 void LocationPickerMap::setDots(const QList<Dot> &dots)
@@ -119,7 +136,7 @@ void LocationPickerMap::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
     p.fillRect(rect(), QColor(0xdd, 0xdd, 0xd5));
-    drawMapTiles(p, m_tiles, origin(), m_zoom, size());
+    drawMapTiles(p, tiles(), origin(), m_zoom, size());
     p.setRenderHint(QPainter::Antialiasing);
 
     // Clues first, then the photos being set on top.
@@ -161,6 +178,7 @@ void LocationPickerMap::placeOverlays()
     m_zoomIn->move(width() - 36, 8);
     m_zoomOut->move(width() - 36, 40);
     m_attribution->move(width() - m_attribution->width(), height() - m_attribution->height());
+    m_layers->move(8, 8);
 }
 
 bool LocationPickerMap::event(QEvent *event)

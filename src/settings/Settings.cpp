@@ -650,6 +650,36 @@ void Settings::setGeotagWriteIntoRaw(bool on)
     m_settings.setValue(QStringLiteral("geotag/writeIntoRaw"), on);
 }
 
+bool Settings::mapSatellite() const
+{
+    return m_settings.value(QStringLiteral("map/satellite"), false).toBool();
+}
+
+void Settings::setMapSatellite(bool on)
+{
+    m_settings.setValue(QStringLiteral("map/satellite"), on);
+}
+
+bool Settings::inatIdentifyTreesOnly() const
+{
+    return m_settings.value(QStringLiteral("inat/identifyTreesOnly"), false).toBool();
+}
+
+void Settings::setInatIdentifyTreesOnly(bool on)
+{
+    m_settings.setValue(QStringLiteral("inat/identifyTreesOnly"), on);
+}
+
+bool Settings::inatIdentifyCommonName() const
+{
+    return m_settings.value(QStringLiteral("inat/identifyCommonName"), true).toBool();
+}
+
+void Settings::setInatIdentifyCommonName(bool on)
+{
+    m_settings.setValue(QStringLiteral("inat/identifyCommonName"), on);
+}
+
 bool Settings::inatRenameWithCommonName() const
 {
     return m_settings.value(QStringLiteral("inat/renameWithCommonName"), true).toBool();

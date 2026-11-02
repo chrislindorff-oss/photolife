@@ -8,7 +8,8 @@
 
 namespace pl::net {
 
-// The one operation HttpClient needs from the outside world: an async GET.
+// The one operation HttpClient needs from the outside world: an async request
+// (a GET, or a POST with a body).
 // The production implementation wraps QNetworkAccessManager; tests substitute a
 // fake so the rate-limiting, retry and caching logic can be exercised offline.
 class Transport
@@ -23,6 +24,9 @@ public:
         QString ifNoneMatch;      // -> If-None-Match
         QString ifModifiedSince;  // -> If-Modified-Since
         QString bearerToken;      // -> Authorization: Bearer <token>, when set
+        QByteArray verb = "GET";
+        QByteArray body;          // sent with any verb but GET
+        QByteArray contentType;   // -> Content-Type, with the body
     };
 
     struct Reply

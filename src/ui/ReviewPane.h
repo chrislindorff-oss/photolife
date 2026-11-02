@@ -1,13 +1,17 @@
 #pragma once
 
+#include "inat/PhotoIdentifier.h"
 #include "match/CandidateFinder.h"
 #include "match/MatchReviewer.h"
+#include "taxonomy/TaxonomyTypes.h"
 
 #include <QModelIndex>
 #include <QPixmap>
 #include <QSet>
 #include <QString>
 #include <QWidget>
+
+#include <functional>
 
 class QButtonGroup;
 class QCheckBox;
@@ -40,6 +44,7 @@ class ReviewQueueFilterProxy;
 
 namespace pl {
 
+class IdentifyPanel;
 class ImageViewer;
 
 // The reconciliation screen: the pending-match queue on the left, and on the
@@ -66,6 +71,14 @@ public:
     // are refused and editRequested() emitted instead, so the window can
     // offer to start editing.
     void setReadOnly(bool readOnly);
+
+    // Identify with iNaturalist: `makePanel` makes a suggestions panel (one
+    // for this pane, one for its full-size viewer); `ensureKnown` runs its
+    // continuation once a picked taxon is in the taxonomy (fetching it first
+    // if need be), so a decision records a real taxon. Until this is called
+    // the Identify button stays hidden.
+    using EnsureKnown = std::function<void(const pl::taxonomy::Taxon &, std::function<void()>)>;
+    void setIdentify(std::function<IdentifyPanel *()> makePanel, EnsureKnown ensureKnown);
 
 signals:
     void queueChanged();   // a decision was applied; refresh coverage / other views
@@ -101,6 +114,10 @@ private:
     int currentFolderId() const;
     qint64 chosenTaxonInatId() const;
     void afterDecision(qint64 captureId);
+    void identifyCurrent();
+    pl::inat::IdentifyRequest identifyRequest(qint64 captureId, const QString &path) const;
+    // A suggestion picked for the photo on show: on top of the candidates, selected.
+    void useIdentified(qint64 captureId, const pl::taxonomy::Taxon &taxon);
 
     void confirm();
     void reject();
@@ -129,6 +146,11 @@ private:
     bool m_readOnly = false;
     bool editAllowed();
     pl::match::CandidateFinder m_finder;
+    std::function<IdentifyPanel *()> m_makePanel;
+    EnsureKnown m_ensureKnown;
+    IdentifyPanel *m_identify = nullptr;
+    QPushButton *m_identifyButton = nullptr;
+    QList<qint64> m_viewerCaptureIds;   // the full-size viewer's photos, in its order
 
     QLineEdit *m_photoFilter;
     QButtonGroup *m_bucketGroup;

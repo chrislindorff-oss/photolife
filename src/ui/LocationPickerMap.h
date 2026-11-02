@@ -16,10 +16,12 @@ class TileCache;
 
 namespace pl {
 
-// The map in Set Location on Map: OpenStreetMap tiles to drag and zoom, with
-// a pin the user places by clicking (or drags to move), and dots for photos
-// that already have a location -- those being set, and others nearby in time
-// as clues. Double-clicking a dot puts the pin there.
+class MapLayerSwitch;
+
+// The map in Set Location on Map: a street map or aerial photos to drag and
+// zoom, with a pin the user places by clicking (or drags to move), and dots
+// for photos that already have a location -- those being set, and others
+// nearby in time as clues. Double-clicking a dot puts the pin there.
 class LocationPickerMap : public QWidget
 {
     Q_OBJECT
@@ -33,7 +35,8 @@ public:
         bool selected = false;  // one of the photos being set (else a clue)
     };
 
-    explicit LocationPickerMap(net::TileCache &tiles, QWidget *parent = nullptr);
+    LocationPickerMap(net::TileCache &streetTiles, net::TileCache &satelliteTiles,
+                      QWidget *parent = nullptr);
 
     void setDots(const QList<Dot> &dots);
     void setPin(double latitude, double longitude);
@@ -44,6 +47,8 @@ public:
     double centreLatitude() const { return m_centerLat; }
     double centreLongitude() const { return m_centerLon; }
     int zoom() const { return m_zoom; }
+    bool satellite() const { return m_satellite; }
+    void setSatellite(bool satellite);   // doesn't emit satelliteChanged()
 
     static constexpr int kMinZoom = 2;
     static constexpr int kMaxZoom = 19;
@@ -51,6 +56,8 @@ public:
 signals:
     // The user placed or moved the pin.
     void pinMoved(double latitude, double longitude);
+    // The user switched between the street map and aerial photos.
+    void satelliteChanged(bool satellite);
 
 protected:
     bool event(QEvent *event) override;
@@ -70,7 +77,11 @@ private:
     void zoomAround(int zoom, QPointF screen);
     void placeOverlays();
 
-    net::TileCache &m_tiles;
+    net::TileCache &tiles() const { return m_satellite ? m_satelliteTiles : m_streetTiles; }
+
+    net::TileCache &m_streetTiles;
+    net::TileCache &m_satelliteTiles;
+    bool m_satellite = false;
     QList<Dot> m_dots;
     std::optional<QPointF> m_pin;   // x = longitude, y = latitude
     double m_centerLon = 134.0;     // Australia, until told otherwise
@@ -86,6 +97,7 @@ private:
     QToolButton *m_zoomIn = nullptr;
     QToolButton *m_zoomOut = nullptr;
     QLabel *m_attribution = nullptr;
+    MapLayerSwitch *m_layers = nullptr;
 };
 
 } // namespace pl

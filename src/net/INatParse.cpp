@@ -51,6 +51,10 @@ pl::taxonomy::Taxon parseTaxon(const QJsonObject &obj)
     t.commonName = obj.value(QStringLiteral("preferred_common_name")).toString();
     t.ancestry = obj.value(QStringLiteral("ancestry")).toString();
     t.isActive = obj.value(QStringLiteral("is_active")).toBool(true);
+    for (const QJsonValue &v : obj.value(QStringLiteral("current_synonymous_taxon_ids")).toArray()) {
+        if (const auto id = optId(v))
+            t.currentSynonymIds.append(*id);
+    }
 
     if (const auto pid = optId(obj.value(QStringLiteral("parent_id"))))
         t.parentInatId = pid;

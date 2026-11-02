@@ -1,6 +1,7 @@
 #include "ui/ImageViewer.h"
 
 #include "raw/RawPreview.h"
+#include "ui/IdentifyPanel.h"
 
 #include <QDesktopServices>
 #include <QGuiApplication>
@@ -12,15 +13,18 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QRubberBand>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QWheelEvent>
 
-#include <algorithm>
-#include <cmath>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+
+#include <algorithm>
+#include <cmath>
 
 namespace pl {
 
@@ -174,19 +178,31 @@ ImageViewer::ImageViewer(QWidget *parent)
     m_reject->hide();
     connect(m_reject, &QPushButton::clicked, this, &ImageViewer::toggleReject);
 
+    m_identifyButton = new QPushButton(tr("Identify (I)"), this);
+    m_identifyButton->setToolTip(tr("Ask iNaturalist's computer vision what this photo shows. "
+                                    "Shift+drag round something small first to ask about just that "
+                                    "part. The photo is sent to be scored, not posted."));
+    m_identifyButton->hide();
+    connect(m_identifyButton, &QPushButton::clicked, this, &ImageViewer::identify);
+
     auto *nav = new QHBoxLayout;
     nav->addWidget(prev);
     nav->addStretch(1);
     nav->addWidget(m_bestShot);
     nav->addWidget(m_viewOnMap);
     nav->addWidget(m_reject);
+    nav->addWidget(m_identifyButton);
     nav->addStretch(1);
     nav->addWidget(m_counter);
     nav->addStretch(1);
     nav->addWidget(next);
 
+    m_band = new QRubberBand(QRubberBand::Rectangle, m_scroll->viewport());
+
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(m_scroll, 1);
+    auto *picture = new QHBoxLayout;
+    picture->addWidget(m_scroll, 1);
+    layout->addLayout(picture, 1);
     layout->addWidget(m_caption);
     layout->addLayout(nav);
 
@@ -205,6 +221,62 @@ void ImageViewer::setItems(const QVector<Item> &items, int startIndex)
     showCurrent();
 }
 
+void ImageViewer::setIdentifyPanel(IdentifyPanel *panel)
+{
+    m_identify = panel;
+    panel->setParent(this);
+    panel->setFixedWidth(360);
+    panel->hide();
+    auto *picture = static_cast<QHBoxLayout *>(static_cast<QVBoxLayout *>(layout())->itemAt(0)->layout());
+    picture->addWidget(panel);
+    connect(panel, &IdentifyPanel::chosen, this, [this](const taxonomy::Taxon &taxon) {
+        if (!m_items.isEmpty())
+            emit taxonChosen(m_index, taxon);
+    });
+    updateIdentifyButton();
+}
+
+void ImageViewer::identify()
+{
+    if (!m_identify || m_items.isEmpty() || !m_items.at(m_index).canIdentify || m_current.isNull())
+        return;
+    const Item &item = m_items.at(m_index);
+    inat::IdentifyRequest request;
+    request.key = item.path;
+    request.path = item.path;
+    request.crop = m_selection;
+    if (item.hasGps)
+        request.lonLat = QPointF(item.longitude, item.latitude);
+    if (item.taken.isValid())
+        request.date = item.taken;
+    const bool opening = !m_identify->isVisible();
+    m_identify->show();
+    m_identify->identify(request);
+    if (opening)   // the picture has less room now
+        QTimer::singleShot(0, this, [this] { rescale(); });
+}
+
+void ImageViewer::clearSelection()
+{
+    m_selecting = false;
+    m_selection.reset();
+    m_band->hide();
+}
+
+QRectF ImageViewer::toPicture(const QRect &viewportRect) const
+{
+    const QSize logical = m_image->logicalImageSize();
+    if (logical.isEmpty())
+        return {};
+    const QPoint offset = m_image->imageOffset();
+    const QPointF scroll(m_scroll->horizontalScrollBar()->value(), m_scroll->verticalScrollBar()->value());
+    const QRectF r((viewportRect.left() + scroll.x() - offset.x()) / logical.width(),
+                   (viewportRect.top() + scroll.y() - offset.y()) / logical.height(),
+                   double(viewportRect.width()) / logical.width(),
+                   double(viewportRect.height()) / logical.height());
+    return r.intersected(QRectF(0, 0, 1, 1));
+}
+
 void ImageViewer::step(int delta)
 {
     if (m_items.isEmpty())
@@ -218,6 +290,9 @@ void ImageViewer::step(int delta)
 
 void ImageViewer::showCurrent()
 {
+    clearSelection();
+    if (m_identify && m_identify->isVisible())
+        m_identify->clear();
     if (m_items.isEmpty()) {
         m_image->setMessage(tr("No image."));
         m_caption->clear();
@@ -225,6 +300,7 @@ void ImageViewer::showCurrent()
         m_bestShot->hide();
         m_viewOnMap->hide();
         m_reject->hide();
+        m_identifyButton->hide();
         return;
     }
 
@@ -254,6 +330,12 @@ void ImageViewer::showCurrent()
     updateBestShotButton();
     updateMapButton();
     updateRejectButton();
+    updateIdentifyButton();
+}
+
+void ImageViewer::updateIdentifyButton()
+{
+    m_identifyButton->setVisible(m_identify && !m_items.isEmpty() && m_items.at(m_index).canIdentify);
 }
 
 void ImageViewer::updateRejectButton()
@@ -298,6 +380,7 @@ void ImageViewer::updateItem(int index, const Item &item)
     updateBestShotButton();
     updateMapButton();
     updateRejectButton();
+    updateIdentifyButton();
 }
 
 void ImageViewer::updateMapButton()
@@ -388,6 +471,7 @@ void ImageViewer::zoomTo(double scale, QPoint anchor)
 {
     if (m_current.isNull())
         return;
+    clearSelection();   // it would no longer be round the same part
     // The image point under the anchor, as a fraction of the image.
     const QSize logical = m_image->logicalImageSize();
     if (!logical.isEmpty()) {
@@ -426,6 +510,7 @@ void ImageViewer::zoomBy(double factor, QPoint anchor)
 void ImageViewer::resizeEvent(QResizeEvent *event)
 {
     QDialog::resizeEvent(event);
+    clearSelection();
     rescale();
 }
 
@@ -448,7 +533,18 @@ bool ImageViewer::eventFilter(QObject *watched, QEvent *event)
     }
     case QEvent::MouseButtonPress: {
         auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() == Qt::LeftButton && (mouse->modifiers() & Qt::ShiftModifier)
+            && !m_items.isEmpty() && m_items.at(m_index).canIdentify && !m_current.isNull()) {
+            // Shift+drag: a part to identify on its own.
+            m_selecting = true;
+            m_selection.reset();
+            m_selectFrom = mouse->position().toPoint();
+            m_band->setGeometry(QRect(m_selectFrom, QSize()));
+            m_band->show();
+            return true;
+        }
         if (mouse->button() == Qt::LeftButton) {
+            clearSelection();
             m_panning = true;
             m_panFrom = mouse->position().toPoint();
             if (m_scroll->viewport()->cursor().shape() == Qt::OpenHandCursor)
@@ -458,6 +554,11 @@ bool ImageViewer::eventFilter(QObject *watched, QEvent *event)
         break;
     }
     case QEvent::MouseMove: {
+        if (m_selecting) {
+            auto *mouse = static_cast<QMouseEvent *>(event);
+            m_band->setGeometry(QRect(m_selectFrom, mouse->position().toPoint()).normalized());
+            return true;
+        }
         if (!m_panning)
             break;
         auto *mouse = static_cast<QMouseEvent *>(event);
@@ -468,6 +569,16 @@ bool ImageViewer::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
     case QEvent::MouseButtonRelease: {
+        if (m_selecting) {
+            m_selecting = false;
+            const QRect band = m_band->geometry();
+            const QRectF part = toPicture(band);
+            if (band.width() < 8 || band.height() < 8 || part.isEmpty())
+                clearSelection();   // a click, not a box
+            else
+                m_selection = part;
+            return true;
+        }
         if (!m_panning)
             break;
         m_panning = false;
@@ -536,6 +647,15 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
     case Qt::Key_R:
         if (!m_items.isEmpty() && m_items.at(m_index).canReject)
             toggleReject();
+        else
+            QDialog::keyPressEvent(event);
+        break;
+    case Qt::Key_I:
+        identify();
+        break;
+    case Qt::Key_Escape:
+        if (m_selection || m_selecting)
+            clearSelection();   // first Esc: the box; the next closes
         else
             QDialog::keyPressEvent(event);
         break;

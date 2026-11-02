@@ -62,7 +62,11 @@ private:
     void lookUpNextPlace();
     void updateCellSize();
     void updateCounts();
-    void nameAt(int row);
+    // Names the photo at `row` (and its run); `identify` starts with
+    // iNaturalist's suggestions.
+    void nameAt(int row, bool identify = false);
+    // Identify Runs: names the unnamed runs from iNaturalist's suggestions.
+    void identifyRuns();
     void toggleRejected(int row = -1);
     void toggleNamingEnd(int row);
     void toggleBest();   // the selected photos
@@ -98,6 +102,7 @@ private:
     QTimer *m_placeScan = nullptr;        // debounces lookups after scrolling
     bool m_placeInFlight = false;
     QPushButton *m_commitButton = nullptr;
+    QPushButton *m_identifyRunsButton = nullptr;
     QPushButton *m_undoButton = nullptr;
     ImageViewer *m_viewer = nullptr;
     QLabel *m_preview = nullptr;          // the selected photo, large (filmstrip mode)

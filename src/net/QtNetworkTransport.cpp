@@ -27,7 +27,14 @@ void QtNetworkTransport::send(const Request &request, Callback callback)
     if (!request.bearerToken.isEmpty())
         req.setRawHeader("Authorization", "Bearer " + request.bearerToken.toUtf8());
 
-    QNetworkReply *reply = m_nam->get(req);
+    QNetworkReply *reply = nullptr;
+    if (request.verb == "GET") {
+        reply = m_nam->get(req);
+    } else {
+        if (!request.contentType.isEmpty())
+            req.setHeader(QNetworkRequest::ContentTypeHeader, request.contentType);
+        reply = m_nam->sendCustomRequest(req, request.verb, request.body);
+    }
 
     QObject::connect(reply, &QNetworkReply::finished, reply, [reply, callback] {
         Reply out;

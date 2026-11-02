@@ -6,9 +6,11 @@
 #include <QDate>
 #include <QList>
 #include <QObject>
+#include <QPointF>
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 class QUrl;
 
@@ -20,6 +22,7 @@ struct Outcome
 {
     T value{};
     QString error;
+    int status = 0;   // the HTTP status, where a call needs to tell 401 from 403
     bool ok() const { return error.isEmpty(); }
 };
 
@@ -63,6 +66,21 @@ struct ObservationPage
     QList<pl::taxonomy::Observation> results;
 };
 
+// One taxon iNaturalist's computer vision suggests for a photo.
+struct VisionSuggestion
+{
+    pl::taxonomy::Taxon taxon;
+    double score = 0;         // combined_score, 0-100: the vision, weighted by what's seen nearby
+    double visionScore = 0;   // vision_score, 0-100: the photo alone
+    bool seenNearby = false;  // frequency_score > 0: recorded near the photo's location
+};
+
+struct VisionResult
+{
+    QList<VisionSuggestion> suggestions;     // best first
+    std::optional<VisionSuggestion> commonAncestor;   // a coarser taxon they share, if any
+};
+
 // Typed, read-only wrapper over the anonymous iNaturalist v1 API. All calls go
 // through the shared HttpClient, so they inherit its rate limiting, retries and
 // ETag caching. Results come back on the HttpClient's thread.
@@ -87,6 +105,15 @@ public:
     // a second client over the same HttpClient that quiet housekeeping uses,
     // so it never holds up what the user is waiting for.
     void setPriority(HttpClient::Priority priority) { m_priority = priority; }
+
+    // POST /v1/computervision/score_image: what iNaturalist's computer vision
+    // takes `jpeg` to be. A location (x = longitude, y = latitude) and date
+    // weight it towards what's recorded there and then; they go as form
+    // fields -- iNaturalist ignores them in the query. Needs the access token
+    // (a 401 means it has expired); a 403 is iNaturalist refusing. The photo
+    // is only scored, never posted.
+    void scoreImage(const QByteArray &jpeg, std::optional<QPointF> lonLat, std::optional<QDate> observedOn,
+                    std::function<void(Outcome<VisionResult>)> done);
 
     // GET /v1/places/autocomplete?q=
     void resolvePlaces(const QString &query,

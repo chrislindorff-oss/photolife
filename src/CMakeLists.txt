@@ -28,8 +28,10 @@ qt_add_library(photolife_core STATIC
     inat/InatImportService.h inat/InatImportService.cpp
     inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
     inat/LibraryPresence.h inat/LibraryPresence.cpp
+    inat/PhotoIdentifier.h  inat/PhotoIdentifier.cpp
     inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
     inat/InatSpeciesListFetcher.h inat/InatSpeciesListFetcher.cpp
+    inat/InatToken.h        inat/InatToken.cpp
     inat/SpeciesComparison.h inat/SpeciesComparison.cpp
     libsync/BlockingHttp.h  libsync/BlockingHttp.cpp
     libsync/DriveConfig.h
@@ -95,6 +97,7 @@ qt_add_library(photolife_core STATIC
     taxonomy/AlaStatusSync.h taxonomy/AlaStatusSync.cpp
     taxonomy/ApcOriginSync.h taxonomy/ApcOriginSync.cpp
     taxonomy/ProjectBuilder.h taxonomy/ProjectBuilder.cpp
+    taxonomy/TreeChangeFinder.h taxonomy/TreeChangeFinder.cpp
     taxonomy/CommonNameFetcher.h taxonomy/CommonNameFetcher.cpp
     taxonomy/ReferencePhotoFetcher.h taxonomy/ReferencePhotoFetcher.cpp
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
@@ -117,6 +120,10 @@ qt_add_library(photolife_core STATIC
     ui/InatDownloadPage.h   ui/InatDownloadPage.cpp
     ui/InatScopeWidgets.h   ui/InatScopeWidgets.cpp
     ui/InatToolsView.h      ui/InatToolsView.cpp
+    ui/InatTokenGetter.h    ui/InatTokenGetter.cpp
+    ui/IdentifyPanel.h      ui/IdentifyPanel.cpp
+    ui/IdentifyRunsDialog.h ui/IdentifyRunsDialog.cpp
+    ui/TreeChangesDialog.h  ui/TreeChangesDialog.cpp
     ui/LibraryFoldersDialog.h ui/LibraryFoldersDialog.cpp
     ui/MainWindow.h         ui/MainWindow.cpp
     ui/OrganiseView.h       ui/OrganiseView.cpp
@@ -226,6 +233,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/019_place_geometry.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/020_catalogue_sync.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/021_sync_pushed_by.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/022_project_taxon_kept.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -247,6 +255,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/019_place_geometry.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/020_catalogue_sync.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/021_sync_pushed_by.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/022_project_taxon_kept.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

@@ -11,17 +11,18 @@
 using namespace pl::net;
 
 // A tile server that's busy the first time it's asked for /1/0/0, never
-// answers the first request for /1/0/1, and doesn't have /1/1/0.
+// answers the first request for /1/0/1, and doesn't have /1/1/0. Its tiles
+// are PNGs, or JPEGs as aerial imagery is.
 class FlakyTileServer : public QObject
 {
 public:
-    FlakyTileServer()
+    explicit FlakyTileServer(const char *format = "PNG")
     {
         QImage image(256, 256, QImage::Format_RGB32);
         image.fill(Qt::darkGreen);
         QBuffer buffer(&m_png);
         buffer.open(QIODevice::WriteOnly);
-        image.save(&buffer, "PNG");
+        image.save(&buffer, format);
         m_server.listen(QHostAddress::LocalHost);
         connect(&m_server, &QTcpServer::newConnection, this, [this] {
             while (QTcpSocket *socket = m_server.nextPendingConnection())
@@ -32,6 +33,7 @@ public:
     {
         return QStringLiteral("http://127.0.0.1:%1/{z}/{x}/{y}.png").arg(m_server.serverPort());
     }
+    QString baseUrl() const { return QStringLiteral("http://127.0.0.1:%1").arg(m_server.serverPort()); }
     QHash<QString, int> asked;
 
 private:
@@ -89,6 +91,24 @@ private slots:
         QCOMPARE(server.asked.value(QStringLiteral("/1/1/0.png")), 1);   // not there: not asked again
         // ...and the ones that came are on disk now.
         QVERIFY(QFileInfo::exists(dir.filePath(QStringLiteral("1/0/0.png"))));
+    }
+
+    // Esri's World Imagery puts the row before the column and serves JPEGs.
+    void rowFirstJpegTiles()
+    {
+        FlakyTileServer server("JPG");
+        QTemporaryDir dir;
+        TileCache cache(dir.path(), "PhotoLife-test");
+        cache.setUrlTemplate(server.baseUrl() + QStringLiteral("/tile/{z}/{y}/{x}"));
+        QTRY_VERIFY_WITH_TIMEOUT(!cache.tile(3, 5, 2).isNull(), 5000);
+        QCOMPARE(server.asked.value(QStringLiteral("/tile/3/2/5")), 1);
+        QCOMPARE(cache.tile(3, 5, 2).size(), QSize(256, 256));
+
+        // ...and comes back from disk in a new session.
+        TileCache again(dir.path(), "PhotoLife-test");
+        again.setUrlTemplate(server.baseUrl() + QStringLiteral("/tile/{z}/{y}/{x}"));
+        QVERIFY(!again.tile(3, 5, 2).isNull());
+        QCOMPARE(server.asked.value(QStringLiteral("/tile/3/2/5")), 1);
     }
 };
 

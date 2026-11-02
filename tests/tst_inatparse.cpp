@@ -3,6 +3,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include "inat/InatToken.h"
 #include "net/INatParse.h"
 
 using namespace pl::net::inat;
@@ -19,6 +20,7 @@ class TestINatParse : public QObject
     Q_OBJECT
 
 private slots:
+    void apiTokenFromCopiedText();
     void ancestrySplits();
     void taxonCoreFields();
     void taxonParentFromAncestryWhenNoParentId();
@@ -223,6 +225,24 @@ void TestINatParse::observationTimeIsTheLocalClock()
 
     const auto dateOnly = parseObservation(obj(R"({"id": 1, "observed_on": "2020-06-14", "time_observed_at": null})"));
     QVERIFY(!dateOnly.timeObserved.isValid());
+}
+
+// What Get Token takes from the clipboard: the token page's JSON or the bare
+// token, and when it expires.
+void TestINatParse::apiTokenFromCopiedText()
+{
+    const QString jwt = QStringLiteral(
+        "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VyX2lkIjoxMjM0LCJleHAiOjE3OTM2MDY0MDB9.c2lnbmF0dXJl");
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("{\"api_token\":\"%1\"}\n").arg(jwt)), jwt);
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("  %1 ").arg(jwt)), jwt);
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("Scarlet Robin")), QString());
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("{\"api_token\":\"nope\"}")), QString());
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("eyJ.eyJ.x and more")), QString());
+
+    const auto expiry = pl::inat::apiTokenExpiry(jwt);
+    QVERIFY(expiry);
+    QCOMPARE(expiry->toSecsSinceEpoch(), qint64(1793606400));
+    QVERIFY(!pl::inat::apiTokenExpiry(QStringLiteral("not-a-jwt")));
 }
 
 QTEST_APPLESS_MAIN(TestINatParse)

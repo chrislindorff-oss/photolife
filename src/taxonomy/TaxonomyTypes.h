@@ -37,6 +37,9 @@ struct Taxon
     QString commonName;        // preferred vernacular, if any
     QString ancestry;          // "48460/47126/..."
     bool isActive = true;
+    // An inactive taxon's current name(s) on iNaturalist: one after a swap or
+    // merge, several after a split, none when it's simply retired. Not stored.
+    QList<qint64> currentSynonymIds;
 
     QString photoUrl;          // iNaturalist default_photo, medium size (empty if none)
     QString photoAttribution;  // licence / credit line for photoUrl

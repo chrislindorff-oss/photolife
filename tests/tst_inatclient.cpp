@@ -26,6 +26,8 @@ private slots:
     void fetchAllObservationsSendsTaxonOnlyWhenGiven();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
+    void scoreImagePostsThePhotoWithWhereAndWhen();
+    void scoreImageReportsAnExpiredToken();
 
 private:
     FakeTransport *m_transport = nullptr;
@@ -321,6 +323,66 @@ void TestINatClient::invalidJsonBecomesOutcomeError()
     QTRY_VERIFY(done);
 
     QVERIFY(!got.ok());
+}
+
+// The photo goes as a multipart "image" part; the location and date as form
+// fields (in the query string iNaturalist ignores them); the token as Bearer.
+void TestINatClient::scoreImagePostsThePhotoWithWhereAndWhen()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(R"({"total_results": 2, "results": [
+            {"combined_score": 93.5, "vision_score": 88.1, "frequency_score": 1,
+             "taxon": {"id": 12936, "rank": "species", "name": "Petroica phoenicea",
+                       "preferred_common_name": "Flame Robin"}},
+            {"combined_score": 4.2, "vision_score": 9.0, "frequency_score": 0,
+             "taxon": {"id": 12937, "rank": "species", "name": "Petroica boodang",
+                       "preferred_common_name": "Scarlet Robin"}}],
+            "common_ancestor": {"score": 97.7,
+             "taxon": {"id": 12933, "rank": "genus", "name": "Petroica"}}})");
+    });
+    m_inat->setAccessToken(QStringLiteral("eyJ.token"));
+
+    Outcome<VisionResult> got;
+    bool done = false;
+    m_inat->scoreImage("JPEGDATA", QPointF(144.9796, -37.8304), QDate(2025, 10, 18),
+                       [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+
+    QVERIFY2(got.ok(), qPrintable(got.error));
+    QCOMPARE(got.value.suggestions.size(), 2);
+    QCOMPARE(got.value.suggestions.at(0).taxon.name, QStringLiteral("Petroica phoenicea"));
+    QCOMPARE(got.value.suggestions.at(0).taxon.commonName, QStringLiteral("Flame Robin"));
+    QCOMPARE(got.value.suggestions.at(0).score, 93.5);
+    QVERIFY(got.value.suggestions.at(0).seenNearby);
+    QVERIFY(!got.value.suggestions.at(1).seenNearby);
+    QVERIFY(got.value.commonAncestor);
+    QCOMPARE(got.value.commonAncestor->taxon.rank, QStringLiteral("genus"));
+    QCOMPARE(got.value.commonAncestor->score, 97.7);
+
+    const Transport::Request &req = m_transport->received.at(0);
+    QCOMPARE(req.verb, QByteArray("POST"));
+    QCOMPARE(req.url.toString(), QStringLiteral("https://api.test/v1/computervision/score_image"));
+    QVERIFY(req.url.query().isEmpty());
+    QCOMPARE(req.bearerToken, QStringLiteral("eyJ.token"));
+    QVERIFY(req.contentType.startsWith("multipart/form-data; boundary="));
+    const QByteArray boundary = req.contentType.mid(req.contentType.indexOf('=') + 1);
+    QVERIFY(req.body.contains("--" + boundary + "\r\nContent-Disposition: form-data; name=\"lat\"\r\n\r\n-37.830400\r\n"));
+    QVERIFY(req.body.contains("name=\"lng\"\r\n\r\n144.979600\r\n"));
+    QVERIFY(req.body.contains("name=\"observed_on\"\r\n\r\n2025-10-18\r\n"));
+    QVERIFY(req.body.contains("name=\"image\"; filename=\"photo.jpg\"\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA\r\n"));
+    QVERIFY(req.body.endsWith("--" + boundary + "--\r\n"));
+}
+
+void TestINatClient::scoreImageReportsAnExpiredToken()
+{
+    wire([](const Transport::Request &, int) { return FakeTransport::httpStatus(401); });
+    Outcome<VisionResult> got;
+    bool done = false;
+    m_inat->scoreImage("JPEG", std::nullopt, std::nullopt, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY(!got.ok());
+    QCOMPARE(got.status, 401);
+    QVERIFY(!m_transport->received.at(0).body.contains("name=\"lat\""));
 }
 
 QTEST_GUILESS_MAIN(TestINatClient)

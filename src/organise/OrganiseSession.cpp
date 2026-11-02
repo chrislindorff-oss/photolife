@@ -254,6 +254,26 @@ int OrganiseSession::runStart(int i) const
     return -1;
 }
 
+QList<int> OrganiseSession::proposedRunStarts(int gapSeconds) const
+{
+    QList<int> starts;
+    int previous = -1;   // the last photo looked at that isn't a reject
+    for (int i = 0; i < count(); ++i) {
+        if (isRejected(i))
+            continue;
+        if (runName(i).isEmpty()) {
+            const bool newStretch = previous < 0 || !runName(previous).isEmpty();
+            const QDateTime &before = previous >= 0 ? m_items.at(previous).taken : QDateTime();
+            const QDateTime &taken = m_items.at(i).taken;
+            if (newStretch || !before.isValid() || !taken.isValid()
+                || before.secsTo(taken) > gapSeconds)
+                starts << i;
+        }
+        previous = i;
+    }
+    return starts;
+}
+
 QString OrganiseSession::runName(int i) const
 {
     const int start = runStart(i);

@@ -24,8 +24,8 @@ struct HttpResponse
     bool ok() const { return error.isEmpty() && status >= 200 && status < 300; }
 };
 
-// Serialised, rate-limited HTTP GET with retry/backoff and ETag conditional
-// requests. One request in flight at a time; the next is dispatched no sooner
+// Serialised, rate-limited HTTP GET (and POST) with retry/backoff and ETag
+// conditional requests. One request in flight at a time; the next is dispatched no sooner
 // than minRequestInterval after the last. Only URLs HttpCache::isCacheable
 // accepts are cached. Lives on and is used from one thread
 // (the network stack it drives is asynchronous, so this need not be a worker).
@@ -59,6 +59,10 @@ public:
     // as true vs. geoprivacy-obscured coordinates, depending on auth).
     void get(const QUrl &url, Handler handler, const QString &bearerToken = QString(),
              Priority priority = Priority::Normal);
+    // A POST of `body` through the same queue, rate limit and retries as a
+    // GET; never cached.
+    void post(const QUrl &url, const QByteArray &body, const QByteArray &contentType, Handler handler,
+              const QString &bearerToken = QString(), Priority priority = Priority::Normal);
 
     int queuedCount() const { return int(m_queue.size() + m_backgroundQueue.size()); }
     bool isBusy() const { return m_inFlight || queuedCount() > 0; }
@@ -74,6 +78,9 @@ private:
         int attempt = 0;
         QString bearerToken;
         Priority priority = Priority::Normal;
+        QByteArray verb = "GET";
+        QByteArray body;
+        QByteArray contentType;
     };
 
     void pump();

@@ -101,6 +101,11 @@ public:
     QString runName(int i) const;
     // Which run (0, 1, 2...) photo `i` is in, -1 if none: for alternating colours.
     int runNumber(int i) const;
+    // Identify Runs: where new runs probably start among the photos no name
+    // covers yet -- the first of each such stretch, and wherever more than
+    // `gapSeconds` passed since the photo before (rejects aside). Named runs
+    // are never split.
+    QList<int> proposedRunStarts(int gapSeconds) const;
 
     bool isRejected(int i) const { return m_rejected.contains(i); }
     void setRejected(int i, bool rejected);   // a reject isn't a best shot

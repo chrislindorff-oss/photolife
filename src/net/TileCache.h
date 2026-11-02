@@ -40,8 +40,9 @@ public:
     // outright (a 404) isn't.
     QPixmap tile(int z, int x, int y);
 
-    // For tests: where tiles come from ("{z}/{x}/{y}" filled in) and how long
-    // a download may take before it's given up and tried again.
+    // Where tiles come from ("{z}", "{x}" and "{y}" filled in, in any order;
+    // OpenStreetMap's by default), and -- for tests -- how long a download
+    // may take before it's given up and tried again.
     void setUrlTemplate(const QString &urlTemplate) { m_urlTemplate = urlTemplate; }
     void setTimeoutMs(int ms) { m_timeoutMs = ms; }
     void setRetryBaseMs(int ms) { m_retryBaseMs = ms; }

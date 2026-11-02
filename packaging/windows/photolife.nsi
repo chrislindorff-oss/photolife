@@ -32,8 +32,28 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
+; Windows locks a running program's files, so updating while PhotoLife is open
+; fails part-way with "Error opening file for writing". Opening the installed
+; PhotoLife.exe for writing tells whether it's running; ask until it isn't.
+Function EnsureNotRunning
+  IfFileExists "$INSTDIR\PhotoLife.exe" 0 done
+  retry:
+    ClearErrors
+    FileOpen $0 "$INSTDIR\PhotoLife.exe" a
+    IfErrors locked
+    FileClose $0
+    Goto done
+  locked:
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+      "PhotoLife is still running.$\r$\n$\r$\nClose it, then click Retry. If its window is already closed, end PhotoLife.exe in Task Manager first." \
+      IDRETRY retry
+    Abort
+  done:
+FunctionEnd
+
 Section "PhotoLife" SecMain
   SectionIn RO
+  Call EnsureNotRunning
   SetOutPath "$INSTDIR"
   File /r "${STAGE_DIR}\*.*"
 

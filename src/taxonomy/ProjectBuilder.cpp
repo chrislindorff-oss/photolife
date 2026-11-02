@@ -54,6 +54,8 @@ void ProjectBuilder::start(const Request &request)
     m_pendingPage = 0;
     m_awaitingConfirm = false;
     m_stored.clear();
+    m_listed.clear();
+    m_listComplete = false;
     m_neededAncestors.clear();
     m_ancestorBatches.clear();
     m_ancestorBatchIndex = 0;
@@ -291,6 +293,7 @@ void ProjectBuilder::fetchSpeciesPage(int page)
             // so a group prune must keep excluding whatever it finds under
             // that group on every future refresh, not just what existed when
             // it was pruned.
+            m_listed.insert(sc.taxon.inatId);
             const bool excluded = m_excludedTaxonIds.contains(sc.taxon.inatId)
                 || std::any_of(sc.ancestorIds.begin(), sc.ancestorIds.end(),
                                [this](qint64 a) { return m_excludedTaxonIds.contains(a); });
@@ -351,6 +354,8 @@ void ProjectBuilder::fetchSpeciesPage(int page)
 
         const bool more = !out.value.results.isEmpty() && m_speciesSeen < m_speciesTotal;
         if (!more) {
+            // Every page, from the first: what iNaturalist lists now, in full.
+            m_listComplete = m_startPage == 1 && m_speciesSeen >= m_speciesTotal;
             fillAncestors();
             return;
         }

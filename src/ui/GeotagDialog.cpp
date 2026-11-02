@@ -97,8 +97,11 @@ GeotagDialog::GeotagDialog(Application &app, const QList<Photo> &photos, const Q
     find->addWidget(m_search, 3);
     find->addWidget(m_coordinates, 2);
 
-    m_map = new LocationPickerMap(m_app.tileCache(), this);
+    m_map = new LocationPickerMap(m_app.tileCache(), m_app.satelliteTileCache(), this);
+    m_map->setSatellite(m_app.settings().mapSatellite());
     connect(m_map, &LocationPickerMap::pinMoved, this, &GeotagDialog::pinMoved);
+    connect(m_map, &LocationPickerMap::satelliteChanged, this,
+            [this](bool on) { m_app.settings().setMapSatellite(on); });
 
     m_place = new QLabel(tr("Click the map where the photos were taken; drag to move around, "
                             "and the wheel zooms."),

@@ -44,6 +44,7 @@ class TaxonomyStore;
 }
 namespace inat {
 class InatPhotoDownloader;
+class PhotoIdentifier;
 }
 namespace sync {
 class SyncService;
@@ -89,12 +90,19 @@ public:
     // The same API at background priority, for quiet housekeeping (origins,
     // place details) that must never hold up a user's tree build or import.
     net::INatClient &inatBackground();
+    // The iNaturalist API token (Settings::inatApiToken()): saved, given to
+    // inat() (not the background client: authenticated calls skip the HTTP
+    // cache), and announced.
+    void setInatApiToken(const QString &token);
+    // iNaturalist's computer vision, over inat(), with the session's answers.
+    inat::PhotoIdentifier &photoIdentifier();
     // The rate-limited, caching HTTP client iNatClient uses -- for other
     // JSON APIs (e.g. the Atlas of Living Australia).
     net::HttpClient &http();
     net::GeocodeClient &geocoder();
     net::PhotoCache &photoCache();
-    net::TileCache &tileCache();
+    net::TileCache &tileCache();            // the street map (OpenStreetMap)
+    net::TileCache &satelliteTileCache();   // aerial photos (Esri World Imagery)
     net::UpdateChecker &updateChecker();
     inat::InatPhotoDownloader &inatPhotoDownloader();
 
@@ -109,6 +117,9 @@ public:
     // Photo sync for a Server catalogue whose photos PhotoLife keeps online
     // (Settings::CatalogueProfile::syncsPhotos()).
     libsync::PhotoSyncService &photoSync();
+
+signals:
+    void inatApiTokenChanged(const QString &token);
 
 private:
     std::unique_ptr<Settings> m_settings;
@@ -128,6 +139,8 @@ private:
     std::unique_ptr<net::GeocodeClient> m_geocoder;
     std::unique_ptr<net::PhotoCache> m_photoCache;
     std::unique_ptr<net::TileCache> m_tileCache;
+    std::unique_ptr<net::TileCache> m_satelliteTileCache;
+    std::unique_ptr<inat::PhotoIdentifier> m_photoIdentifier;
     std::unique_ptr<net::UpdateChecker> m_updateChecker;
     std::unique_ptr<inat::InatPhotoDownloader> m_inatPhotoDownloader;
     std::unique_ptr<sync::SyncService> m_syncService;

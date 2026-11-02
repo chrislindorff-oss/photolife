@@ -166,6 +166,11 @@ void TestProjectBuilder::buildsConnectedTree()
 
     QVERIFY(m_store->placeByInatId(6744).has_value());
 
+    // The whole species list was read: it can say what's gone from a tree.
+    QVERIFY(m_builder->listWasComplete());
+    QVERIFY(m_builder->listedTaxa().contains(900));   // Diuris pardina
+    QVERIFY(!m_builder->listedTaxa().contains(800));   // its genus came as an ancestor
+
     QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
     q.exec(QStringLiteral("SELECT refreshed_at FROM project WHERE id = ") + QString::number(projectId));
     QVERIFY(q.next());
@@ -297,6 +302,7 @@ void TestProjectBuilder::largeSpeciesListChecksInWithTheUser()
     const int projectId = finishSpy.at(0).at(2).toInt();
     QVERIFY(projectId > 0);
     QVERIFY(m_store->projectTaxonInatIds(projectId).size() >= 15000);
+    QVERIFY(!m_builder->listWasComplete());   // stopped early: not the whole list
 }
 
 void TestProjectBuilder::refreshSkipsPrunedTaxaAndTheirNewChildren()
@@ -471,6 +477,7 @@ void TestProjectBuilder::resumeAfterInterruptionCompletesWithoutDroppingAPage()
     QCOMPARE(finalIds.size(), kTotal + 4);
 
     QVERIFY(!m_store->buildCheckpoint(projectId).has_value());
+    QVERIFY(!m_builder->listWasComplete());   // resumed: the first pages weren't read this time
 }
 
 void TestProjectBuilder::mismatchedCheckpointParamsAreDiscarded()

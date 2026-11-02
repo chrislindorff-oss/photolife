@@ -1,5 +1,13 @@
 # iNaturalist computer-vision suggestions in Review Unmatched
 
+> **Built (November 2026), wider than planned here.** Prompted by a friend's app (BirdSort),
+> which showed `score_image` working with a user's own token. Identify with iNaturalist is in
+> Organise (I, the Name box, Identify Runs…), the full-size viewer (I, Shift+drag a part) and
+> Review Unmatched (Ctrl+Shift+I) — `inat/PhotoIdentifier`, `ui/IdentifyPanel`,
+> `ui/IdentifyRunsDialog`, `net::INatClient::scoreImage`. Instead of OAuth, **Get Token…**
+> (`ui/InatTokenGetter`) opens the token page and takes the token from the clipboard. The
+> notes below are the original plan.
+
 ## Context
 
 Reviewing unmatched photos means finding the taxon by hand. iNaturalist's computer-vision model

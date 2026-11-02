@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QUuid>
 
 namespace pl::net {
 namespace {
@@ -43,6 +44,56 @@ INatClient::INatClient(HttpClient &http, QObject *parent)
 void INatClient::request(const QUrl &url, HttpClient::Handler handler, const QString &bearerToken)
 {
     m_http.get(url, std::move(handler), bearerToken, m_priority);
+}
+
+void INatClient::scoreImage(const QByteArray &jpeg, std::optional<QPointF> lonLat,
+                            std::optional<QDate> observedOn,
+                            std::function<void(Outcome<VisionResult>)> done)
+{
+    const QByteArray boundary = "photolife-" + QUuid::createUuid().toByteArray(QUuid::Id128);
+    QByteArray body;
+    auto field = [&](const QByteArray &name, const QByteArray &value) {
+        body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
+                + value + "\r\n";
+    };
+    if (lonLat) {
+        field("lat", QByteArray::number(lonLat->y(), 'f', 6));
+        field("lng", QByteArray::number(lonLat->x(), 'f', 6));
+    }
+    if (observedOn && observedOn->isValid())
+        field("observed_on", observedOn->toString(Qt::ISODate).toLatin1());
+    body += "--" + boundary
+            + "\r\nContent-Disposition: form-data; name=\"image\"; filename=\"photo.jpg\"\r\n"
+              "Content-Type: image/jpeg\r\n\r\n"
+            + jpeg + "\r\n--" + boundary + "--\r\n";
+
+    auto suggestion = [](const QJsonObject &obj) {
+        VisionSuggestion s;
+        s.taxon = inat::parseTaxon(obj.value(QStringLiteral("taxon")).toObject());
+        s.score = obj.value(QStringLiteral("combined_score")).toDouble(obj.value(QStringLiteral("score")).toDouble());
+        s.visionScore = obj.value(QStringLiteral("vision_score")).toDouble();
+        s.seenNearby = obj.value(QStringLiteral("frequency_score")).toDouble() > 0;
+        return s;
+    };
+    m_http.post(QUrl(m_baseUrl + QStringLiteral("/computervision/score_image")), body,
+                "multipart/form-data; boundary=" + boundary,
+                [done = std::move(done), suggestion](HttpResponse resp) {
+                    Outcome<VisionResult> out;
+                    out.status = resp.status;
+                    const QJsonArray results = resultsArray(resp, &out.error);
+                    if (!out.ok()) {
+                        done(out);
+                        return;
+                    }
+                    for (const QJsonValue &v : results)
+                        out.value.suggestions.append(suggestion(v.toObject()));
+                    const QJsonObject ancestor =
+                        QJsonDocument::fromJson(resp.body).object().value(QStringLiteral("common_ancestor")).toObject();
+                    if (!ancestor.value(QStringLiteral("taxon")).toObject().isEmpty())
+                        out.value.commonAncestor = suggestion(ancestor);
+                    done(out);
+                },
+                m_accessToken, m_priority);
 }
 
 void INatClient::resolvePlaces(const QString &query,

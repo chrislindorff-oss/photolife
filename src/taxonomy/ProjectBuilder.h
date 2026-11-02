@@ -55,6 +55,13 @@ public:
     void continueFetching();
     void stopFetching();
 
+    // After a run: the taxa iNaturalist's species list gave (not their
+    // ancestors), and whether that was the whole list -- read from the first
+    // page to the last, not resumed, stopped early or cancelled. Only a
+    // whole list says what's gone from a tree (TreeChangeFinder).
+    QSet<qint64> listedTaxa() const { return m_listed; }
+    bool listWasComplete() const { return m_listComplete && !m_cancelled; }
+
 signals:
     void progress(const QString &phase, int done, int total);
 
@@ -95,6 +102,8 @@ private:
     bool m_awaitingConfirm = false;
 
     QSet<qint64> m_stored;                 // taxa written this run (inat ids)
+    QSet<qint64> m_listed;                 // taxa the species list gave this run
+    bool m_listComplete = false;
     QSet<qint64> m_excludedTaxonIds;        // deliberately pruned; never re-add (see useRootTaxon)
     QSet<qint64> m_neededAncestors;
     QList<QList<qint64>> m_ancestorBatches;

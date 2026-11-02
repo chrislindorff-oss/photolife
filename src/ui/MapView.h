@@ -29,7 +29,9 @@ class TileCache;
 
 namespace pl {
 
-// A slippy map (drag-to-pan, wheel-to-zoom) over OpenStreetMap tiles, showing
+class MapLayerSwitch;
+
+// A slippy map (drag-to-pan, wheel-to-zoom) over a street map or aerial photos, showing
 // one clustered pin per geotagged-photo location currently in `model`. This
 // is purely another view of the rows CaptureListModel already exposes — no
 // separate query, no separate scope — so it rebuilds its pins whenever the
@@ -40,7 +42,8 @@ class MapView : public QWidget
     Q_OBJECT
 
 public:
-    MapView(model::CaptureListModel &model, net::TileCache &tiles, QWidget *parent = nullptr);
+    MapView(model::CaptureListModel &model, net::TileCache &streetTiles, net::TileCache &satelliteTiles,
+            QWidget *parent = nullptr);
 
     // The active reference tree's locality: its extent and, once fetched,
     // its outline -- nullopt for either the tree's Place doesn't have. The
@@ -53,9 +56,15 @@ public:
     // Whether the locality's outline is drawn (View > Show Tree Locality on Map).
     void setShowLocality(bool show);
 
+    // Aerial photos rather than the street map.
+    bool satellite() const { return m_satellite; }
+    void setSatellite(bool satellite);   // doesn't emit satelliteChanged()
+
 signals:
     // The user picked one specific photo, identified by its row in `model`.
     void captureActivated(const QModelIndex &index);
+    // The user switched between the street map and aerial photos.
+    void satelliteChanged(bool satellite);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -89,8 +98,12 @@ private:
     bool inLocality(double lon, double lat) const;
     void paintLocality(QPainter &painter, QPointF origin);
 
+    net::TileCache &tiles() const { return m_satellite ? m_satelliteTiles : m_streetTiles; }
+
     model::CaptureListModel &m_model;
-    net::TileCache &m_tiles;
+    net::TileCache &m_streetTiles;
+    net::TileCache &m_satelliteTiles;
+    bool m_satellite = false;
 
     QList<geo::Pin> m_pins;
     QList<geo::Cluster> m_clusters;
@@ -110,6 +123,7 @@ private:
     QPushButton *m_fitButton;
     QPushButton *m_localityButton;
     QLabel *m_attribution;
+    MapLayerSwitch *m_layers;
     QLabel *m_emptyOverlay;
 
     QFrame *m_panel;

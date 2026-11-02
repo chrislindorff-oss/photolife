@@ -228,8 +228,18 @@ public:
     void setGeotagLastView(double latitude, double longitude, int zoom);
     bool geotagWriteIntoRaw() const;
     void setGeotagWriteIntoRaw(bool on);
+    // Every map's base layer: aerial photos (Esri) rather than the street map.
+    bool mapSatellite() const;
+    void setMapSatellite(bool on);
     // Renaming photos from an iNaturalist observation: with its common name
     // (else its scientific name).
+    // Identify with iNaturalist: list only suggestions in a reference tree;
+    // and, where a suggestion names photos (Organise), with its common name
+    // (else its scientific name).
+    bool inatIdentifyTreesOnly() const;
+    void setInatIdentifyTreesOnly(bool on);
+    bool inatIdentifyCommonName() const;
+    void setInatIdentifyCommonName(bool on);
     bool inatRenameWithCommonName() const;
     void setInatRenameWithCommonName(bool on);
     // Whether Organise into Folders also renames the photos.

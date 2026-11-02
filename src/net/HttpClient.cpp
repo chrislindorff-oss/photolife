@@ -23,6 +23,17 @@ void HttpClient::get(const QUrl &url, Handler handler, const QString &bearerToke
     pump();
 }
 
+void HttpClient::post(const QUrl &url, const QByteArray &body, const QByteArray &contentType,
+                      Handler handler, const QString &bearerToken, Priority priority)
+{
+    Job job{url, std::move(handler), 0, bearerToken, priority};
+    job.verb = "POST";
+    job.body = body;
+    job.contentType = contentType;
+    queueFor(priority).enqueue(std::move(job));
+    pump();
+}
+
 QQueue<HttpClient::Job> &HttpClient::queueFor(Priority priority)
 {
     return priority == Priority::Background ? m_backgroundQueue : m_queue;
@@ -71,12 +82,16 @@ void HttpClient::dispatch(Job job)
 
     const QString urlKey = job.url.toString(QUrl::FullyEncoded);
     const bool authenticated = !job.bearerToken.isEmpty();
-    const bool useCache = m_cache && !authenticated && HttpCache::isCacheable(job.url);
+    const bool useCache = m_cache && !authenticated && job.verb == "GET"
+                          && HttpCache::isCacheable(job.url);
 
     Transport::Request req;
     req.url = job.url;
     req.userAgent = m_userAgent;
     req.bearerToken = job.bearerToken;
+    req.verb = job.verb;
+    req.body = job.body;
+    req.contentType = job.contentType;
 
     std::optional<HttpCache::Entry> cached;
     if (useCache) {

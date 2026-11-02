@@ -11,6 +11,8 @@
 #include "ui/ImageViewer.h"
 #include "scan/FileScanner.h"
 #include "ui/GeotagDialog.h"
+#include "ui/IdentifyPanel.h"
+#include "ui/IdentifyRunsDialog.h"
 #include "ui/Theme.h"
 
 #include <QAbstractListModel>
@@ -422,10 +424,12 @@ private:
 class NamePopup : public QDialog
 {
 public:
-    NamePopup(const QString &connection, const QString &photo, const QString &current,
+    NamePopup(Application &app, const organise::Item &photoItem, const QString &current,
               const QStringList &recent, QWidget *parent)
-        : QDialog(parent), m_finder(connection), m_recent(recent)
+        : QDialog(parent), m_app(app), m_item(photoItem),
+          m_finder(app.database().connectionName()), m_recent(recent)
     {
+        const QString photo = photoItem.baseName;
         setWindowTitle(tr("Name %1").arg(photo));
         auto *label = new QLabel(tr("What is <b>%1</b> — and the photos after it, up to the next "
                                     "named one?").arg(photo.toHtmlEscaped()),
@@ -436,6 +440,18 @@ public:
         m_edit->setClearButtonEnabled(true);
         m_list = new QListWidget(this);
         m_list->setMinimumHeight(180);
+        // iNaturalist's suggestions take the list's place until something is typed.
+        auto *identify = new QPushButton(tr("&Identify"), this);
+        identify->setToolTip(tr("Ask iNaturalist's computer vision what this photo shows (I in "
+                                "Organise, Alt+I here). The photo is sent to be scored, not posted."));
+        connect(identify, &QPushButton::clicked, this, [this] { startIdentify(); });
+        m_identify = new IdentifyPanel(app, this);
+        m_identify->setNamesPhotos(true);
+        m_identify->hide();
+        connect(m_identify, &IdentifyPanel::chosen, this, [this](const taxonomy::Taxon &taxon) {
+            m_chosen = IdentifyPanel::photoName(m_app, taxon);
+            accept();
+        });
         auto *hint = new QLabel(tr("↓ to choose a suggestion · Enter uses what's typed"), this);
         QPalette pal = hint->palette();
         pal.setColor(QPalette::WindowText, themeColors(currentThemeVariant()).mutedText);
@@ -455,13 +471,21 @@ public:
 
         auto *layout = new QVBoxLayout(this);
         layout->addWidget(label);
-        layout->addWidget(m_edit);
+        auto *editRow = new QHBoxLayout;
+        editRow->addWidget(m_edit, 1);
+        editRow->addWidget(identify);
+        layout->addLayout(editRow);
         layout->addWidget(m_list, 1);
+        layout->addWidget(m_identify, 1);
         layout->addWidget(hint);
         layout->addWidget(buttons);
-        resize(460, 360);
+        resize(520, 380);
 
-        connect(m_edit, &QLineEdit::textEdited, this, [this] { refresh(); });
+        connect(m_edit, &QLineEdit::textEdited, this, [this] {
+            m_identify->hide();
+            m_list->show();
+            refresh();
+        });
         connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
             m_chosen = item->data(Qt::UserRole).toString();
             accept();
@@ -478,11 +502,31 @@ public:
     QString chosen() const { return m_chosen; }
     bool cleared() const { return m_cleared; }
 
+    void startIdentify()
+    {
+        inat::IdentifyRequest request;
+        request.key = m_item.previewPath;
+        request.path = m_item.previewPath;
+        if (m_item.hasGps())
+            request.lonLat = QPointF(*m_item.longitude, *m_item.latitude);
+        if (m_item.takenFromExif && m_item.taken.isValid())   // not a copy's file date
+            request.date = m_item.taken.date();
+        m_list->hide();
+        m_identify->show();
+        m_identify->identify(request);
+        m_identify->focusList();
+    }
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
     {
         if (watched == m_edit && event->type() == QEvent::KeyPress) {
             const int key = static_cast<QKeyEvent *>(event)->key();
+            if ((key == Qt::Key_Down || key == Qt::Key_Up) && m_identify->isVisible()
+                && m_identify->hasSuggestions()) {
+                m_identify->focusList();
+                return true;
+            }
             if ((key == Qt::Key_Down || key == Qt::Key_Up) && m_list->count() > 0) {
                 m_list->setFocus();
                 m_list->setCurrentRow(key == Qt::Key_Down ? 0 : m_list->count() - 1);
@@ -545,10 +589,13 @@ private:
         }
     }
 
+    Application &m_app;
+    organise::Item m_item;
     match::CandidateFinder m_finder;
     QStringList m_recent;
     QLineEdit *m_edit = nullptr;
     QListWidget *m_list = nullptr;
+    IdentifyPanel *m_identify = nullptr;
     QString m_chosen;
     bool m_cleared = false;
 };
@@ -600,6 +647,11 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     connect(m_commitButton, &QPushButton::clicked, this, &OrganiseView::commit);
     m_undoButton = new QPushButton(tr("Undo Organise…"), this);
     connect(m_undoButton, &QPushButton::clicked, this, &OrganiseView::undoLast);
+    m_identifyRunsButton = new QPushButton(tr("Identify Runs…"), this);
+    m_identifyRunsButton->setToolTip(tr("Find where new runs start (a gap between shots) among the "
+                                        "unnamed photos loaded so far, and name them from iNaturalist's "
+                                        "computer vision suggestions — checked by you first."));
+    connect(m_identifyRunsButton, &QPushButton::clicked, this, &OrganiseView::identifyRuns);
 
     auto *bar = new QHBoxLayout;
     bar->addWidget(open);
@@ -610,11 +662,12 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addWidget(m_gridButton);
     bar->addWidget(m_placesButton);
     bar->addSpacing(12);
+    bar->addWidget(m_identifyRunsButton);
     bar->addWidget(m_undoButton);
     bar->addWidget(m_commitButton);
 
     m_hint = new QLabel(tr("Click a photo to focus and preview it. N names it · R marks it as a "
-                           "reject · B marks it as a best shot · G sets its location on a map · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
+                           "reject · B marks it as a best shot · I identifies it with iNaturalist · G sets its location on a map · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
                            "right-click for actions. The photos after a named one go with it, "
                            "up to the next name or end. The wheel scrolls · F11 full screen."),
                         this);
@@ -730,6 +783,7 @@ void OrganiseView::openFolder(const QString &folder)
     m_scanProgress->show();
     m_commitButton->setEnabled(false);
     m_undoButton->setEnabled(false);
+    m_identifyRunsButton->setEnabled(false);
     // The shots are listed (quick), then the first page of them read.
     struct FirstPage
     {
@@ -1039,6 +1093,7 @@ void OrganiseView::updateCounts()
     if (!open || m_session.count() == 0) {
         m_counts->setText(open ? tr("No photos in this folder") : QString());
         m_commitButton->setEnabled(false);
+        m_identifyRunsButton->setEnabled(false);
         return;
     }
     const organise::OrganisePlan plan = m_session.plan();
@@ -1055,6 +1110,24 @@ void OrganiseView::updateCounts()
                              ? QString()
                              : QStringLiteral(" · ") + tr("%Ln best", nullptr, int(m_session.bestShots().size()))));
     m_commitButton->setEnabled(!plan.folders.isEmpty() || !plan.rejects.isEmpty());
+    m_identifyRunsButton->setEnabled(!m_session.proposedRunStarts(3600).isEmpty());
+}
+
+void OrganiseView::identifyRuns()
+{
+    if (m_session.count() == 0)
+        return;
+    IdentifyRunsDialog dialog(m_app, m_session, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const QList<QPair<int, QString>> names = dialog.names();
+    for (const auto &[row, name] : names) {
+        // Proposed only where no name covered it; one named just now may.
+        if (row < m_session.count() && m_session.nameAt(row).isEmpty())
+            m_session.setName(row, name);
+    }
+    for (const auto &[row, name] : names)
+        changed(row);
 }
 
 void OrganiseView::changed(int row)
@@ -1065,13 +1138,14 @@ void OrganiseView::changed(int row)
     updatePreview();
 }
 
-void OrganiseView::nameAt(int row)
+void OrganiseView::nameAt(int row, bool identify)
 {
     if (row < 0 || row >= m_session.count())
         return;
     const organise::Item &item = m_session.items().at(row);
-    NamePopup popup(m_app.database().connectionName(), item.baseName, m_session.nameAt(row),
-                    m_session.recentNames(), this);
+    NamePopup popup(m_app, item, m_session.nameAt(row), m_session.recentNames(), this);
+    if (identify)
+        popup.startIdentify();
     // Beside the photo it names.
     const QRect r = m_list->visualRect(m_model->index(row));
     QPoint at = m_list->viewport()->mapToGlobal(QPoint(r.right() + 4, r.top()));
@@ -1163,6 +1237,14 @@ ImageViewer::Item OrganiseView::viewerItem(int row) const
                 + (m_session.isBest(row) ? tr(" · ★ best shot") : QString());
     v.canReject = true;
     v.rejected = m_session.isRejected(row);
+    v.canIdentify = true;
+    v.hasGps = it.hasGps();
+    if (it.hasGps()) {
+        v.latitude = *it.latitude;
+        v.longitude = *it.longitude;
+    }
+    if (it.takenFromExif)
+        v.taken = it.taken.date();
     return v;
 }
 
@@ -1250,6 +1332,20 @@ void OrganiseView::showFullSize(int row)
             m_list->setCurrentIndex(at);
             m_list->scrollTo(at);
         });
+        // I in the viewer: a suggestion picked names the photo, as the Name popup does.
+        auto *panel = new IdentifyPanel(m_app);
+        panel->setNamesPhotos(true);
+        m_viewer->setIdentifyPanel(panel);
+        connect(m_viewer, &ImageViewer::taxonChosen, this, [this](int i, const taxonomy::Taxon &taxon) {
+            if (i < 0 || i >= m_session.count())
+                return;
+            m_session.setName(i, IdentifyPanel::photoName(m_app, taxon));
+            changed(i);
+            m_viewer->updateItem(i, viewerItem(i));
+            const QModelIndex at = m_model->index(i);
+            m_list->setCurrentIndex(at);
+            m_list->scrollTo(at);
+        });
     }
     m_viewer->show();
     m_viewer->raise();
@@ -1270,6 +1366,9 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
     QMenu menu(this);
     menu.addAction(m_session.nameAt(row).isEmpty() ? tr("Name This Photo…") : tr("Rename…"), this,
                    [this, row] { nameAt(row); });
+    QAction *identify = menu.addAction(tr("Identify with iNaturalist…"), this, [this, row] { nameAt(row, true); });
+    identify->setShortcut(Qt::Key_I);
+    identify->setToolTip(tr("Name it from iNaturalist's computer vision suggestions."));
     // The names given so far this session, most recent first: one click (or
     // its number) names this photo.
     const QStringList recent = m_session.recentNames().mid(0, 15);
@@ -1359,6 +1458,9 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
             return true;
         case Qt::Key_G:
             setLocationOnMap();
+            return true;
+        case Qt::Key_I:
+            nameAt(row, true);
             return true;
         case Qt::Key_Delete:
             toggleRejected();

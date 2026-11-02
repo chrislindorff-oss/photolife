@@ -5,10 +5,13 @@
 #include "settings/Settings.h"
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
+#include "ui/InatTokenGetter.h"
+#include "ui/Theme.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -29,7 +32,23 @@ InatAccountBar::InatAccountBar(Application &app, QWidget *parent)
         tr("Optional. Without one, geoprivacy-obscured species (common for rare orchids) come "
            "back with fuzzed coordinates even for your own observations. Get a token from "
            "inaturalist.org/users/api_token while logged in — it expires after about 24 hours, "
-           "so you may need to paste a fresh one each session."));
+           "so you may need a fresh one each session. Get Token fetches it for you."));
+
+    auto *getToken = new QPushButton(tr("Get Token…"), this);
+    getToken->setToolTip(tr("Opens iNaturalist's token page in your browser. Sign in there if asked, "
+                            "then press Ctrl+A and Ctrl+C — PhotoLife takes the token from what you "
+                            "copied."));
+    connect(getToken, &QPushButton::clicked, this, [this] { InatTokenGetter::start(m_app); });
+    m_tokenStatus = new QLabel(this);
+    QPalette pal = m_tokenStatus->palette();
+    pal.setColor(QPalette::WindowText, themeColors(currentThemeVariant()).mutedText);
+    m_tokenStatus->setPalette(pal);
+    connect(&m_app, &Application::inatApiTokenChanged, this, [this](const QString &token) {
+        m_token->setText(token);
+        showTokenStatus();
+    });
+    connect(m_token, &QLineEdit::textChanged, this, [this] { showTokenStatus(); });
+    showTokenStatus();
 
     // Saved as soon as either field is edited, not only when a tool runs:
     // the photo grids' "Attempt to fetch coordinates from iNat" reads them
@@ -42,6 +61,13 @@ InatAccountBar::InatAccountBar(Application &app, QWidget *parent)
     layout->addWidget(new QLabel(tr("iNaturalist account:"), this));
     layout->addWidget(m_username, 1);
     layout->addWidget(m_token, 1);
+    layout->addWidget(getToken);
+    layout->addWidget(m_tokenStatus);
+}
+
+void InatAccountBar::showTokenStatus()
+{
+    m_tokenStatus->setText(InatTokenGetter::status(m_token->text().trimmed()));
 }
 
 QString InatAccountBar::username() const
@@ -53,8 +79,7 @@ void InatAccountBar::commit()
 {
     const QString token = m_token->text().trimmed();
     m_app.settings().setInatUsername(username());
-    m_app.settings().setInatApiToken(token);
-    m_app.inat().setAccessToken(token);
+    m_app.setInatApiToken(token);
     emit usernameCommitted(username());
 }
 
