@@ -653,6 +653,9 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
     case Qt::Key_I:
         identify();
         break;
+    case Qt::Key_F11:
+        isFullScreen() ? showNormal() : showFullScreen();
+        break;
     case Qt::Key_Escape:
         if (m_selection || m_selecting)
             clearSelection();   // first Esc: the box; the next closes

@@ -235,6 +235,10 @@ void TestINatParse::apiTokenFromCopiedText()
         "eyJhbGciOiJIUzUxMiJ9.eyJ1c2VyX2lkIjoxMjM0LCJleHAiOjE3OTM2MDY0MDB9.c2lnbmF0dXJl");
     QCOMPARE(pl::inat::extractApiToken(QStringLiteral("{\"api_token\":\"%1\"}\n").arg(jwt)), jwt);
     QCOMPARE(pl::inat::extractApiToken(QStringLiteral("  %1 ").arg(jwt)), jwt);
+    // Firefox's JSON viewer, Ctrl+A then Ctrl+C: the key, a tab, the token in quotes.
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("api_token\t\"%1\"").arg(jwt)), jwt);
+    // ...and its Raw Data view, pretty-printed.
+    QCOMPARE(pl::inat::extractApiToken(QStringLiteral("{\n  \"api_token\": \"%1\"\n}").arg(jwt)), jwt);
     QCOMPARE(pl::inat::extractApiToken(QStringLiteral("Scarlet Robin")), QString());
     QCOMPARE(pl::inat::extractApiToken(QStringLiteral("{\"api_token\":\"nope\"}")), QString());
     QCOMPARE(pl::inat::extractApiToken(QStringLiteral("eyJ.eyJ.x and more")), QString());

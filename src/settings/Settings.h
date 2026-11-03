@@ -242,6 +242,20 @@ public:
     void setInatIdentifyCommonName(bool on);
     bool inatRenameWithCommonName() const;
     void setInatRenameWithCommonName(bool on);
+    // Upload Observations: the most time between two photos of a species that
+    // go up as one observation, and the geoprivacy uploads are given.
+    int inatUploadGapMinutes() const;
+    void setInatUploadGapMinutes(int minutes);
+    // ...and, when on, only this close together (photos with a location).
+    bool inatUploadSplitByDistance() const;
+    void setInatUploadSplitByDistance(bool on);
+    int inatUploadDistanceMetres() const;
+    void setInatUploadDistanceMetres(int metres);
+    // The size of the photos in the upload table.
+    int inatUploadThumbPx() const;
+    void setInatUploadThumbPx(int px);
+    QString inatUploadGeoprivacy() const;   // "open" (the default) | "obscured" | "private"
+    void setInatUploadGeoprivacy(const QString &geoprivacy);
     // Whether Organise into Folders also renames the photos.
     bool organiseRenameOnOrganise() const;
     void setOrganiseRenameOnOrganise(bool on);

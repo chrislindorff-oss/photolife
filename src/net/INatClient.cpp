@@ -34,6 +34,53 @@ QJsonArray resultsArray(const HttpResponse &resp, QString *error)
     return doc.object().value(QStringLiteral("results")).toArray();
 }
 
+// The JSON object a POST answers with, or sets `error` -- with what
+// iNaturalist said was wrong, when it said (a 422 names the field).
+QJsonObject postedObject(const HttpResponse &resp, QString *error)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(resp.body);
+    if (!resp.error.isEmpty()) {
+        *error = resp.error;
+        return {};
+    }
+    if (!resp.ok()) {
+        const QJsonValue said = doc.object().value(QStringLiteral("error"));
+        QString why = said.isObject() ? said.toObject().value(QStringLiteral("original")).toObject()
+                                            .value(QStringLiteral("error")).toString()
+                                      : said.toString();
+        if (why.isEmpty() && said.isObject())
+            why = QString::fromUtf8(QJsonDocument(said.toObject()).toJson(QJsonDocument::Compact));
+        *error = why.isEmpty() ? QStringLiteral("HTTP %1").arg(resp.status)
+                               : QStringLiteral("HTTP %1: %2").arg(resp.status).arg(why.left(300));
+        return {};
+    }
+    // An object, or the object in an array or a "results" list.
+    QJsonObject obj = doc.isArray() ? doc.array().first().toObject() : doc.object();
+    if (obj.contains(QStringLiteral("results")))
+        obj = obj.value(QStringLiteral("results")).toArray().first().toObject();
+    if (obj.isEmpty())
+        *error = QStringLiteral("an unexpected answer from iNaturalist");
+    return obj;
+}
+
+// multipart/form-data: the `fields` in order, then the JPEG as `fileField`.
+// Sets `contentType` to go with it.
+QByteArray multipartBody(const QList<std::pair<QByteArray, QByteArray>> &fields, const QByteArray &fileField,
+                         const QString &fileName, const QByteArray &jpeg, QByteArray *contentType)
+{
+    const QByteArray boundary = "photolife-" + QUuid::createUuid().toByteArray(QUuid::Id128);
+    QByteArray body;
+    for (const auto &[name, value] : fields)
+        body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
+                + value + "\r\n";
+    QByteArray safeName = fileName.toUtf8();
+    safeName.replace('"', '_');
+    body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + fileField + "\"; filename=\""
+            + safeName + "\"\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg + "\r\n--" + boundary + "--\r\n";
+    *contentType = "multipart/form-data; boundary=" + boundary;
+    return body;
+}
+
 } // namespace
 
 INatClient::INatClient(HttpClient &http, QObject *parent)
@@ -50,22 +97,15 @@ void INatClient::scoreImage(const QByteArray &jpeg, std::optional<QPointF> lonLa
                             std::optional<QDate> observedOn,
                             std::function<void(Outcome<VisionResult>)> done)
 {
-    const QByteArray boundary = "photolife-" + QUuid::createUuid().toByteArray(QUuid::Id128);
-    QByteArray body;
-    auto field = [&](const QByteArray &name, const QByteArray &value) {
-        body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"\r\n\r\n"
-                + value + "\r\n";
-    };
+    QList<std::pair<QByteArray, QByteArray>> fields;
     if (lonLat) {
-        field("lat", QByteArray::number(lonLat->y(), 'f', 6));
-        field("lng", QByteArray::number(lonLat->x(), 'f', 6));
+        fields.append({"lat", QByteArray::number(lonLat->y(), 'f', 6)});
+        fields.append({"lng", QByteArray::number(lonLat->x(), 'f', 6)});
     }
     if (observedOn && observedOn->isValid())
-        field("observed_on", observedOn->toString(Qt::ISODate).toLatin1());
-    body += "--" + boundary
-            + "\r\nContent-Disposition: form-data; name=\"image\"; filename=\"photo.jpg\"\r\n"
-              "Content-Type: image/jpeg\r\n\r\n"
-            + jpeg + "\r\n--" + boundary + "--\r\n";
+        fields.append({"observed_on", observedOn->toString(Qt::ISODate).toLatin1()});
+    QByteArray contentType;
+    const QByteArray body = multipartBody(fields, "image", QStringLiteral("photo.jpg"), jpeg, &contentType);
 
     auto suggestion = [](const QJsonObject &obj) {
         VisionSuggestion s;
@@ -75,8 +115,7 @@ void INatClient::scoreImage(const QByteArray &jpeg, std::optional<QPointF> lonLa
         s.seenNearby = obj.value(QStringLiteral("frequency_score")).toDouble() > 0;
         return s;
     };
-    m_http.post(QUrl(m_baseUrl + QStringLiteral("/computervision/score_image")), body,
-                "multipart/form-data; boundary=" + boundary,
+    m_http.post(QUrl(m_baseUrl + QStringLiteral("/computervision/score_image")), body, contentType,
                 [done = std::move(done), suggestion](HttpResponse resp) {
                     Outcome<VisionResult> out;
                     out.status = resp.status;
@@ -94,6 +133,101 @@ void INatClient::scoreImage(const QByteArray &jpeg, std::optional<QPointF> lonLa
                     done(out);
                 },
                 m_accessToken, m_priority);
+}
+
+void INatClient::fetchMe(std::function<void(Outcome<QString>)> done)
+{
+    request(QUrl(m_baseUrl + QStringLiteral("/users/me")),
+            [done = std::move(done)](HttpResponse resp) {
+                Outcome<QString> out;
+                out.status = resp.status;
+                const QJsonArray results = resultsArray(resp, &out.error);
+                if (out.ok()) {
+                    out.value = results.first().toObject().value(QStringLiteral("login")).toString();
+                    if (out.value.isEmpty())
+                        out.error = QStringLiteral("iNaturalist didn't say who this token belongs to");
+                }
+                done(out);
+            },
+            m_accessToken);
+}
+
+void INatClient::createObservation(const NewObservation &observation, std::function<void(Outcome<qint64>)> done)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("uuid"), observation.uuid);
+    if (observation.taxonId > 0)
+        o.insert(QStringLiteral("taxon_id"), observation.taxonId);
+    if (!observation.speciesGuess.isEmpty())
+        o.insert(QStringLiteral("species_guess"), observation.speciesGuess);
+    QString when = observation.date.toString(Qt::ISODate);
+    if (observation.time)
+        when += QLatin1Char(' ') + observation.time->toString(QStringLiteral("HH:mm:ss"));
+    o.insert(QStringLiteral("observed_on_string"), when);
+    o.insert(QStringLiteral("latitude"), observation.latitude);
+    o.insert(QStringLiteral("longitude"), observation.longitude);
+    if (!observation.geoprivacy.isEmpty())
+        o.insert(QStringLiteral("geoprivacy"), observation.geoprivacy);
+    if (!observation.description.isEmpty())
+        o.insert(QStringLiteral("description"), observation.description);
+    o.insert(QStringLiteral("owners_identification_from_vision"), observation.fromVision);
+    const QByteArray body = QJsonDocument(QJsonObject{{QStringLiteral("observation"), o}}).toJson(QJsonDocument::Compact);
+
+    m_http.post(QUrl(m_baseUrl + QStringLiteral("/observations")), body, "application/json",
+                [done = std::move(done)](HttpResponse resp) {
+                    Outcome<qint64> out;
+                    out.status = resp.status;
+                    const QJsonObject obj = postedObject(resp, &out.error);
+                    if (out.ok()) {
+                        out.value = obj.value(QStringLiteral("id")).toInteger();
+                        if (out.value <= 0)
+                            out.error = QStringLiteral("iNaturalist didn't give the new observation's id");
+                    }
+                    done(out);
+                },
+                m_accessToken, m_priority, HttpClient::Retry::OnlyIfRefused);
+}
+
+void INatClient::findObservationByUuid(const QString &uuid,
+                                       std::function<void(Outcome<std::optional<qint64>>)> done)
+{
+    QUrl url(m_baseUrl + QStringLiteral("/observations"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("uuid"), uuid);
+    url.setQuery(q);
+    request(url,
+            [done = std::move(done)](HttpResponse resp) {
+                Outcome<std::optional<qint64>> out;
+                out.status = resp.status;
+                const QJsonArray results = resultsArray(resp, &out.error);
+                if (out.ok() && !results.isEmpty())
+                    out.value = results.first().toObject().value(QStringLiteral("id")).toInteger();
+                done(out);
+            },
+            m_accessToken);
+}
+
+void INatClient::addObservationPhoto(qint64 observationId, const QByteArray &jpeg, const QString &fileName,
+                                     std::function<void(Outcome<qint64>)> done)
+{
+    QByteArray contentType;
+    const QByteArray body = multipartBody({{"observation_photo[observation_id]", QByteArray::number(observationId)}},
+                                          "file", fileName, jpeg, &contentType);
+    m_http.post(QUrl(m_baseUrl + QStringLiteral("/observation_photos")), body, contentType,
+                [done = std::move(done)](HttpResponse resp) {
+                    Outcome<qint64> out;
+                    out.status = resp.status;
+                    const QJsonObject obj = postedObject(resp, &out.error);
+                    if (out.ok()) {
+                        out.value = obj.value(QStringLiteral("photo")).toObject().value(QStringLiteral("id")).toInteger();
+                        if (out.value <= 0)
+                            out.value = obj.value(QStringLiteral("photo_id")).toInteger();
+                        if (out.value <= 0)
+                            out.error = QStringLiteral("iNaturalist didn't give the new photo's id");
+                    }
+                    done(out);
+                },
+                m_accessToken, m_priority, HttpClient::Retry::OnlyIfRefused);
 }
 
 void INatClient::resolvePlaces(const QString &query,
@@ -338,7 +472,8 @@ void INatClient::observationCount(qint64 taxonId, qint64 placeId,
 
 void INatClient::fetchObservations(const QString &userLogin, const QList<qint64> &taxonIds,
                                    qint64 placeId, const QDate &dateFrom, const QDate &dateTo,
-                                   int page, std::function<void(Outcome<ObservationPage>)> done)
+                                   int page, std::function<void(Outcome<ObservationPage>)> done,
+                                   bool photosOnly)
 {
     QStringList ids;
     ids.reserve(taxonIds.size());
@@ -356,7 +491,8 @@ void INatClient::fetchObservations(const QString &userLogin, const QList<qint64>
         q.addQueryItem(QStringLiteral("d1"), dateFrom.toString(Qt::ISODate));
     if (dateTo.isValid())
         q.addQueryItem(QStringLiteral("d2"), dateTo.toString(Qt::ISODate));
-    q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
+    if (photosOnly)
+        q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
     q.addQueryItem(QStringLiteral("page"), QString::number(page));
     q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("200"));
     url.setQuery(q);

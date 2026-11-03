@@ -6,12 +6,14 @@
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
 #include "ui/InatTokenGetter.h"
+#include "ui/InatUploadPage.h"
 #include "ui/Theme.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
@@ -25,7 +27,7 @@ InatAccountBar::InatAccountBar(Application &app, QWidget *parent)
     m_username->setText(m_app.settings().inatUsername());
 
     m_token = new QLineEdit(this);
-    m_token->setPlaceholderText(tr("Personal API token (optional)"));
+    m_token->setPlaceholderText(tr("Personal API token (required for uploading)"));
     m_token->setText(m_app.settings().inatApiToken());
     m_token->setEchoMode(QLineEdit::Password);
     m_token->setToolTip(
@@ -95,15 +97,30 @@ InatToolsView::InatToolsView(Application &app, QWidget *parent)
     m_account = new InatAccountBar(app, this);
     m_downloadPage = new InatDownloadPage(app, *m_account, this);
     m_comparePage = new InatComparePage(app, *m_account, this);
+    m_uploadPage = new InatUploadPage(app, *m_account, this);
 
     m_tabs = new QTabWidget(this);
     m_tabs->setObjectName(QStringLiteral("inatTabs"));
     m_tabs->addTab(m_downloadPage, tr("Download My Observations"));
     m_tabs->addTab(m_comparePage, tr("Compare Species"));
+    m_tabs->addTab(m_uploadPage, tr("Upload Observations"));
+
+    // In a scroll area, so the view never asks for more width than the main
+    // window has beside its docked panels: Qt 6.4 crashes laying out the
+    // docks when the central widget's minimum doesn't fit. Too narrow, and
+    // it scrolls instead.
+    auto *content = new QWidget(this);
+    auto *contentLayout = new QVBoxLayout(content);
+    contentLayout->addWidget(m_account);
+    contentLayout->addWidget(m_tabs, 1);
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidget(content);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
 
     auto *layout = new QVBoxLayout(this);
-    layout->addWidget(m_account);
-    layout->addWidget(m_tabs, 1);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(scroll);
 }
 
 void InatToolsView::showDownloadPage()
@@ -114,6 +131,11 @@ void InatToolsView::showDownloadPage()
 void InatToolsView::showComparePage()
 {
     m_tabs->setCurrentWidget(m_comparePage);
+}
+
+void InatToolsView::showUploadPage()
+{
+    m_tabs->setCurrentWidget(m_uploadPage);
 }
 
 void InatToolsView::setTrees(const QList<std::pair<int, QString>> &trees, int activeProjectId)

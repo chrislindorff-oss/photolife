@@ -151,6 +151,12 @@ private:
     void showCatalogueSettings();
 
     void addWatchedFolder();
+    // Adds `dir` to the library (a new library folder, unless it's in one
+    // already) and scans it; `afterScan` runs once that scan is done.
+    void addFolderToLibrary(const QString &dir, std::function<void()> afterScan);
+    // ...then matches its photos that have never been matched (a new
+    // folder's, for Upload Observations), and runs `done`.
+    void addFolderAndMatch(const QString &dir, std::function<void()> done);
     void manageLibraryFolders();
     void startScan();
     // Like startScan(), but never dropped: if a scan is already running (e.g.
@@ -364,9 +370,18 @@ private:
     // Gives the photos a location: into their files where they're here (a
     // JPEG's EXIF, a RAW's .xmp sidecar, and with `intoRaw` the RAW itself --
     // geo::GeotagWriter) and the catalogue. `title` heads any warning.
+    // The catalogue's photos for these captures, for applyCoordinates().
+    QList<InatMatchTarget> geotagTargets(const QList<int> &captureIds) const;
+    // Copy Location / Paste Location: "latitude, longitude" on the
+    // clipboard, so a location copied from a map pastes too. Pasting leaves
+    // photos that have a location alone unless the user says otherwise.
+    void copyLocation(int captureId);
+    bool pasteLocation(const QList<int> &captureIds);
     int applyCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon, bool replace,
                          bool intoRaw, const QString &title);
     void setLocationOnMap(QListView *grid);
+    // Set Location on Map for these captures: true when it set one.
+    bool setLocationOnMap(const QList<int> &captureIds);
     void applyInatSpecies(const QList<InatMatchTarget> &targets, const taxonomy::Observation &observation,
                           int located, const QString &learnName, const QString &renameTo);
     // Runs `then` once the taxon is in the taxonomy: straight away when it

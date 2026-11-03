@@ -60,11 +60,13 @@
 #include "ui/IdentifyPanel.h"
 #include "ui/ImageViewer.h"
 #include "geo/GeotagWriter.h"
+#include "geo/LatLon.h"
 #include "ui/GeotagDialog.h"
 #include "ui/InatObservationMatchDialog.h"
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
 #include "ui/InatToolsView.h"
+#include "ui/InatUploadPage.h"
 #include "ui/OrganiseView.h"
 #include "ui/LibraryFoldersDialog.h"
 #include "ui/ManageCataloguesDialog.h"
@@ -86,6 +88,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QCheckBox>
 #include <QComboBox>
@@ -1116,6 +1119,18 @@ void MainWindow::buildViewMenu()
     m_viewModeGroup->addAction(m_viewOrganiseAction);
 
     m_viewMenu->addSeparator();
+    auto *fullScreen = m_viewMenu->addAction(tr("&Full Screen"));
+    fullScreen->setCheckable(true);
+    fullScreen->setShortcut(QKeySequence(Qt::Key_F11));
+    fullScreen->setToolTip(tr("Fill the screen with PhotoLife (F11 again to go back)"));
+    connect(fullScreen, &QAction::triggered, this, [this, fullScreen] {
+        const bool on = !isFullScreen();
+        on ? showFullScreen() : showNormal();
+        fullScreen->setChecked(on);
+    });
+    // In step however it changed (the window manager's own control too).
+    connect(m_viewMenu, &QMenu::aboutToShow, fullScreen, [this, fullScreen] { fullScreen->setChecked(isFullScreen()); });
+
     auto *displayMenu = m_viewMenu->addMenu(tr("&Display…"));
     displayMenu->menuAction()->setToolTip(
         tr("Choose what to show under each photo, in the Photos of Tree Selection "
@@ -1238,6 +1253,11 @@ void MainWindow::buildInatMenu(QMenu *inatMenu)
     inatMenu->addAction(tr("&Compare Species with Trees"), this, [this] {
         m_viewInatAction->setChecked(true);
         m_inatView->showComparePage();
+    });
+
+    inatMenu->addAction(tr("&Upload Observations"), this, [this] {
+        m_viewInatAction->setChecked(true);
+        m_inatView->showUploadPage();
     });
 
     inatMenu->addSeparator();
@@ -3192,10 +3212,43 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
                                             "photo, and take its species and/or coordinates.")
                                        : tr("Needs photos with a date taken, to find the observation by."));
         connect(matchInat, &QAction::triggered, this, [this, grid] { matchWithInatObservation(grid); });
+        QAction *upload = menu.addAction(tr("Upload to iNaturalist…"));
+        upload->setToolTip(tr("Send these photos to your iNaturalist account as new observations, from "
+                              "the Upload Observations tab."));
+        connect(upload, &QAction::triggered, this, [this, grid] {
+            QList<int> ids;
+            for (const QModelIndex &s : grid->selectionModel()->selectedIndexes())
+                ids << s.data(model::CaptureListModel::IdRole).toInt();
+            m_viewInatAction->setChecked(true);
+            m_inatView->showUploadPage();
+            m_inatView->uploadPage()->addCaptures(ids);
+        });
         QAction *locate = menu.addAction(tr("Set Location on Map…"));
         locate->setToolTip(tr("Put a pin on a map where these photos were taken, or move it: written "
                               "into a JPEG, an .xmp sidecar beside a RAW, and the catalogue."));
         connect(locate, &QAction::triggered, this, [this, grid] { setLocationOnMap(grid); });
+        QList<int> chosen;
+        int withGps = 0, located = 0;
+        for (const QModelIndex &s : sel) {
+            chosen << s.data(model::CaptureListModel::IdRole).toInt();
+            if (s.data(model::CaptureListModel::HasGpsRole).toBool()) {
+                ++withGps;
+                located = chosen.constLast();
+            }
+        }
+        QAction *copyLoc = menu.addAction(tr("Copy Location"));
+        copyLoc->setEnabled(sel.size() == 1 && withGps == 1);
+        copyLoc->setToolTip(tr("Copy where this photo was taken, to paste on others (or anywhere else, as "
+                               "\"latitude, longitude\")."));
+        connect(copyLoc, &QAction::triggered, this, [this, located] { copyLocation(located); });
+        const std::optional<QPointF> clip = geo::parseLatLon(QApplication::clipboard()->text());
+        QAction *pasteLoc = menu.addAction(clip ? tr("Paste Location (%1)").arg(geo::formatLatLon(clip->y(), clip->x()))
+                                                : tr("Paste Location"));
+        pasteLoc->setEnabled(clip.has_value());
+        pasteLoc->setToolTip(clip ? tr("Give these photos the copied location, as Set Location on Map does.")
+                                  : tr("Copy a location first: from a photo, or as \"latitude, longitude\" "
+                                       "from a map."));
+        connect(pasteLoc, &QAction::triggered, this, [this, chosen] { pasteLocation(chosen); });
 
         menu.addSeparator();
         QAction *remove = menu.addAction(
@@ -3542,44 +3595,57 @@ int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double l
 
 void MainWindow::setLocationOnMap(QListView *grid)
 {
-    if (!ensureCanEdit())
-        return;
+    QList<int> ids;
+    for (const QModelIndex &idx : grid->selectionModel()->selectedIndexes())
+        ids << idx.data(model::CaptureListModel::IdRole).toInt();
+    setLocationOnMap(ids);
+}
+
+bool MainWindow::setLocationOnMap(const QList<int> &captureIds)
+{
+    if (captureIds.isEmpty() || !ensureCanEdit())
+        return false;
     QSqlDatabase db = QSqlDatabase::database(m_app.database().connectionName(), false);
     QList<InatMatchTarget> targets;
     QList<GeotagDialog::Photo> photos;
     QSet<int> ids;
     QSet<QString> dates;
-    QSqlQuery hash(db);
-    hash.prepare(QStringLiteral("SELECT content_hash FROM rendition WHERE path = ?"));
-    for (const QModelIndex &idx : grid->selectionModel()->selectedIndexes()) {
+    QSqlQuery shot(db);
+    shot.prepare(QStringLiteral(
+        "SELECT r.path, r.kind, r.content_hash, c.captured_on, c.latitude, c.longitude "
+        "FROM capture c JOIN rendition r ON r.id = (SELECT id FROM rendition WHERE capture_id = c.id "
+        "  ORDER BY (kind = 'raw'), id LIMIT 1) "
+        "WHERE c.id = ?"));
+    for (const int captureId : captureIds) {
+        shot.addBindValue(captureId);
+        if (!shot.exec() || !shot.next())
+            continue;
         InatMatchTarget t;
-        t.captureId = idx.data(model::CaptureListModel::IdRole).toInt();
-        t.path = idx.data(model::CaptureListModel::PreviewPathRole).toString();
-        t.isRaw = idx.data(model::CaptureListModel::PreviewIsRawRole).toBool();
-        t.hasGps = idx.data(model::CaptureListModel::HasGpsRole).toBool();
+        t.captureId = captureId;
+        t.path = shot.value(0).toString();
+        t.isRaw = shot.value(1).toString() == QLatin1String("raw");
+        t.hasGps = !shot.value(4).isNull() && !shot.value(5).isNull();
         targets << t;
         ids.insert(t.captureId);
         GeotagDialog::Photo p;
         p.path = t.path;
         p.label = QFileInfo(t.path).fileName();
         p.isRaw = t.isRaw;
-        const QString on = idx.data(model::CaptureListModel::CapturedOnRole).toString();
+        p.contentHash = shot.value(2).toString();
+        const QString on = shot.value(3).toString();
         p.taken = QDateTime::fromString(on, Qt::ISODate);
         if (!p.taken.isValid())
             p.taken = QDateTime(QDate::fromString(on.left(10), Qt::ISODate), QTime(12, 0));
         if (on.size() >= 10)
             dates.insert(on.left(10));
         if (t.hasGps) {
-            p.latitude = idx.data(model::CaptureListModel::LatitudeRole).toDouble();
-            p.longitude = idx.data(model::CaptureListModel::LongitudeRole).toDouble();
+            p.latitude = shot.value(4).toDouble();
+            p.longitude = shot.value(5).toDouble();
         }
-        hash.addBindValue(t.path);
-        if (hash.exec() && hash.next())
-            p.contentHash = hash.value(0).toString();
         photos << p;
     }
     if (targets.isEmpty())
-        return;
+        return false;
     // Clues: other photos with a location taken the same day.
     QList<GeotagDialog::Clue> clues;
     QSqlQuery q(db);
@@ -3600,10 +3666,91 @@ void MainWindow::setLocationOnMap(QListView *grid)
 
     GeotagDialog dialog(m_app, photos, clues, this);
     if (dialog.exec() != QDialog::Accepted)
-        return;
+        return false;
     const int done = applyCoordinates(targets, dialog.latitude(), dialog.longitude(), dialog.replaceExisting(),
                                       dialog.writeIntoRaw(), tr("Set Location on Map"));
     statusBar()->showMessage(tr("Set the location of %n photo(s).", nullptr, done), 6000);
+    return done > 0;
+}
+
+QList<MainWindow::InatMatchTarget> MainWindow::geotagTargets(const QList<int> &captureIds) const
+{
+    QList<InatMatchTarget> targets;
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral(
+        "SELECT r.path, r.kind, c.latitude, c.longitude "
+        "FROM capture c JOIN rendition r ON r.id = (SELECT id FROM rendition WHERE capture_id = c.id "
+        "  ORDER BY (kind = 'raw'), id LIMIT 1) "
+        "WHERE c.id = ?"));
+    for (const int captureId : captureIds) {
+        q.addBindValue(captureId);
+        if (!q.exec() || !q.next())
+            continue;
+        InatMatchTarget t;
+        t.captureId = captureId;
+        t.path = q.value(0).toString();
+        t.isRaw = q.value(1).toString() == QLatin1String("raw");
+        t.hasGps = !q.value(2).isNull() && !q.value(3).isNull();
+        targets << t;
+    }
+    return targets;
+}
+
+void MainWindow::copyLocation(int captureId)
+{
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.prepare(QStringLiteral("SELECT latitude, longitude FROM capture WHERE id = ? "
+                             "AND latitude IS NOT NULL AND longitude IS NOT NULL"));
+    q.addBindValue(captureId);
+    if (!q.exec() || !q.next())
+        return;
+    const QString text = geo::formatLatLon(q.value(0).toDouble(), q.value(1).toDouble());
+    QApplication::clipboard()->setText(text);
+    statusBar()->showMessage(tr("Copied the location %1. Right-click photos → Paste Location to give it to them.")
+                                 .arg(text),
+                             8000);
+}
+
+bool MainWindow::pasteLocation(const QList<int> &captureIds)
+{
+    const QString title = tr("Paste Location");
+    const std::optional<QPointF> at = geo::parseLatLon(QApplication::clipboard()->text());
+    if (!at) {
+        QMessageBox::information(this, title,
+                                 tr("There's no location to paste. Copy one from a photo (right-click → Copy "
+                                    "Location), or copy \"latitude, longitude\" from a map."));
+        return false;
+    }
+    if (captureIds.isEmpty() || !ensureCanEdit())
+        return false;
+    const QList<InatMatchTarget> targets = geotagTargets(captureIds);
+    const int located = int(std::count_if(targets.cbegin(), targets.cend(),
+                                          [](const InatMatchTarget &t) { return t.hasGps; }));
+    bool replace = false;
+    if (located > 0) {
+        const bool all = located == targets.size();
+        QMessageBox box(QMessageBox::Question, title,
+                        all ? (located == 1 ? tr("This photo already has a location. Replace it with %1?")
+                                            : tr("These photos already have a location. Replace them with %1?"))
+                                  .arg(geo::formatLatLon(at->y(), at->x()))
+                            : (located == 1 ? tr("1 of these photos already has a location. Replace it too?")
+                                            : tr("%1 of these photos already have a location. Replace theirs "
+                                                 "too?").arg(located)),
+                        QMessageBox::Cancel, this);
+        QPushButton *yes = box.addButton(all ? tr("Replace") : tr("Replace Theirs Too"), QMessageBox::AcceptRole);
+        QPushButton *keep = all ? nullptr : box.addButton(tr("Keep Theirs"), QMessageBox::RejectRole);
+        box.setDefaultButton(keep ? keep : yes);
+        box.exec();
+        if (box.clickedButton() == yes)
+            replace = true;
+        else if (!keep || box.clickedButton() != keep)
+            return false;
+    }
+    const int done = applyCoordinates(targets, at->y(), at->x(), replace, m_app.settings().geotagWriteIntoRaw(), title);
+    statusBar()->showMessage(done == 1 ? tr("Pasted the location onto 1 photo.")
+                                       : tr("Pasted the location onto %1 photos.").arg(done),
+                             6000);
+    return done > 0;
 }
 
 QString MainWindow::renameCapturesFromInat(const QList<InatMatchTarget> &targets, const QString &name)
@@ -4047,6 +4194,13 @@ void MainWindow::buildCentralWidget()
     });
 
     m_inatView = new InatToolsView(m_app, this);
+    m_inatView->uploadPage()->setEditGuard([this] { return ensureCanEdit(); });
+    m_inatView->uploadPage()->setLocationSetter([this](const QList<int> &ids) { return setLocationOnMap(ids); });
+    m_inatView->uploadPage()->setLocationPaster([this](const QList<int> &ids) { return pasteLocation(ids); });
+    m_inatView->uploadPage()->setFolderAdder([this](const QString &folder, std::function<void()> done) {
+        addFolderAndMatch(folder, std::move(done));
+    });
+    connect(m_inatView->uploadPage(), &InatUploadPage::uploaded, this, [this] { reloadAfterMatching(); });
     connect(m_inatView->downloadPage(), &InatDownloadPage::statusMessage, this,
             [this](const QString &text, int timeoutMs) {
                 statusBar()->showMessage(text, timeoutMs);
@@ -5263,9 +5417,31 @@ void MainWindow::addWatchedFolder()
         QDir::homePath(), QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (dir.isEmpty())
         return;
+    addFolderToLibrary(dir, {});
+}
 
+void MainWindow::addFolderToLibrary(const QString &dir, std::function<void()> afterScan)
+{
+    if (!ensureCanEdit())
+        return;
     QStringList roots = m_app.settings().watchedRoots();
     const QString clean = QDir::cleanPath(dir);
+#ifdef Q_OS_WIN
+    constexpr Qt::CaseSensitivity kCase = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity kCase = Qt::CaseSensitive;
+#endif
+    const bool inLibrary = std::any_of(roots.cbegin(), roots.cend(), [&](const QString &root) {
+        const QString r = QDir::cleanPath(root);
+        return clean.compare(r, kCase) == 0 || clean.startsWith(r + QLatin1Char('/'), kCase);
+    });
+    // Already inside a library folder: a rescan picks its photos up, filed
+    // in their place in the folder tree (scanning it alone wouldn't).
+    if (inLibrary) {
+        requestScan(std::move(afterScan));
+        return;
+    }
+
     // A server catalogue's photos must be in its shared library folder, or
     // collaborators can't open them.
     if (m_app.settings().syncEnabled()) {
@@ -5282,12 +5458,9 @@ void MainWindow::addWatchedFolder()
                    != QMessageBox::Yes)
             return;
     }
-    if (!roots.contains(clean)) {
-        roots.append(clean);
-        m_app.settings().setWatchedRoots(roots);
-        m_app.libraryWatcher().setRoots(roots);
-    }
-
+    roots.append(clean);
+    m_app.settings().setWatchedRoots(roots);
+    m_app.libraryWatcher().setRoots(roots);
     updateEmptyState();
 
     // Only this folder needs scanning -- CatalogueWriter::sync() never
@@ -5296,10 +5469,55 @@ void MainWindow::addWatchedFolder()
     // roots. Scanning the whole library here (the way startScan()/"Rescan
     // Library" does) would make adding one small folder wait on a full
     // re-walk of everything else for no benefit.
-    if (m_app.scanService().isRunning())
+    if (m_app.scanService().isRunning()) {
+        // The one running may not include it: rescan once it's done.
+        requestScan(std::move(afterScan));
         return;
+    }
+    if (afterScan)
+        connect(&m_app.scanService(), &scan::ScanService::finished, this,
+                [afterScan](const scan::ScanSummary &) { afterScan(); }, Qt::SingleShotConnection);
     m_app.scanService().start({clean});
     beginScanProgress(tr("Adding \"%1\" to the Library").arg(QFileInfo(clean).fileName()));
+}
+
+void MainWindow::addFolderAndMatch(const QString &dir, std::function<void()> done)
+{
+    const QString folder = QDir::cleanPath(dir);
+    addFolderToLibrary(folder, [this, folder, done = std::move(done)] {
+        // Its photos that have never been matched: new ones, usually. Any
+        // decision already made on the others stays as it is.
+        QList<qint64> ids;
+        if (m_lastScanCompleted) {
+            const QString under = folder.endsWith(QLatin1Char('/')) ? folder : folder + QLatin1Char('/');
+            QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+            q.prepare(QStringLiteral(
+                "SELECT c.id FROM capture c JOIN folder f ON f.id = c.folder_id "
+                "WHERE (f.path = ? OR substr(f.path, 1, ?) = ?) "
+                "  AND NOT EXISTS (SELECT 1 FROM capture_match m WHERE m.capture_id = c.id)"));
+            q.addBindValue(folder);
+            q.addBindValue(int(under.size()));
+            q.addBindValue(under);
+            if (q.exec())
+                while (q.next())
+                    ids << q.value(0).toLongLong();
+        }
+        if (ids.isEmpty() || m_app.matchService().isRunning()) {
+            if (!ids.isEmpty())
+                statusBar()->showMessage(tr("Match Library is already running — run it again afterwards to "
+                                            "give the new photos their species."),
+                                         10000);
+            done();
+            return;
+        }
+        connect(&m_app.matchService(), &match::MatchService::finished, this,
+                [done](const match::MatchEngine::Stats &) { done(); }, Qt::SingleShotConnection);
+        beginMatchProgress(tr("Matching \"%1\"").arg(QFileInfo(folder).fileName()));
+        updateTaskProgress(tr("Matching the new photos…"), 0, 0);
+        m_groupMatchName.clear();
+        m_matchingDownload = false;
+        m_app.matchService().startForCaptures(ids);
+    });
 }
 
 void MainWindow::manageLibraryFolders()

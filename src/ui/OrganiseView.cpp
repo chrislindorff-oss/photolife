@@ -1469,11 +1469,6 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
         case Qt::Key_Space:
             showFullSize(row);
             return true;
-        case Qt::Key_F11: {
-            QWidget *w = window();
-            w->isFullScreen() ? w->showNormal() : w->showFullScreen();
-            return true;
-        }
         default:
             break;
         }

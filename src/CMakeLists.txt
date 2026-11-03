@@ -16,7 +16,9 @@ qt_add_library(photolife_core STATIC
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     db/Database.h           db/Database.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
+    geo/Distance.h
     geo/GeoBox.h            geo/GeoBox.cpp
+    geo/LatLon.h            geo/LatLon.cpp
     geo/GeoShape.h          geo/GeoShape.cpp
     geo/LocalityFetcher.h   geo/LocalityFetcher.cpp
     geo/LocalityStore.h     geo/LocalityStore.cpp
@@ -29,6 +31,10 @@ qt_add_library(photolife_core STATIC
     inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
     inat/LibraryPresence.h inat/LibraryPresence.cpp
     inat/PhotoIdentifier.h  inat/PhotoIdentifier.cpp
+    inat/DuplicateFinder.h  inat/DuplicateFinder.cpp
+    inat/InatDuplicateCheck.h  inat/InatDuplicateCheck.cpp
+    inat/ObservationGrouper.h  inat/ObservationGrouper.cpp
+    inat/ObservationUploader.h  inat/ObservationUploader.cpp
     inat/InatPhotoDownloader.h inat/InatPhotoDownloader.cpp
     inat/InatSpeciesListFetcher.h inat/InatSpeciesListFetcher.cpp
     inat/InatToken.h        inat/InatToken.cpp
@@ -116,6 +122,9 @@ qt_add_library(photolife_core STATIC
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/InatObservationMatchDialog.h ui/InatObservationMatchDialog.cpp
+    ui/InatUploadPage.h ui/InatUploadPage.cpp
+    ui/UploadDuplicateDialog.h ui/UploadDuplicateDialog.cpp
+    ui/UploadPhotoPicker.h ui/UploadPhotoPicker.cpp
     ui/InatComparePage.h    ui/InatComparePage.cpp
     ui/InatDownloadPage.h   ui/InatDownloadPage.cpp
     ui/InatScopeWidgets.h   ui/InatScopeWidgets.cpp

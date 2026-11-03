@@ -680,6 +680,59 @@ void Settings::setInatIdentifyCommonName(bool on)
     m_settings.setValue(QStringLiteral("inat/identifyCommonName"), on);
 }
 
+int Settings::inatUploadGapMinutes() const
+{
+    return std::clamp(m_settings.value(QStringLiteral("inat/uploadGapMinutes"), 30).toInt(), 1, 24 * 60);
+}
+
+void Settings::setInatUploadGapMinutes(int minutes)
+{
+    m_settings.setValue(QStringLiteral("inat/uploadGapMinutes"), minutes);
+}
+
+bool Settings::inatUploadSplitByDistance() const
+{
+    return m_settings.value(QStringLiteral("inat/uploadSplitByDistance"), false).toBool();
+}
+
+void Settings::setInatUploadSplitByDistance(bool on)
+{
+    m_settings.setValue(QStringLiteral("inat/uploadSplitByDistance"), on);
+}
+
+int Settings::inatUploadDistanceMetres() const
+{
+    return std::clamp(m_settings.value(QStringLiteral("inat/uploadDistanceMetres"), 500).toInt(), 50, 50000);
+}
+
+void Settings::setInatUploadDistanceMetres(int metres)
+{
+    m_settings.setValue(QStringLiteral("inat/uploadDistanceMetres"), metres);
+}
+
+int Settings::inatUploadThumbPx() const
+{
+    return std::clamp(m_settings.value(QStringLiteral("inat/uploadThumbPx"), 128).toInt(), 64, 256);
+}
+
+void Settings::setInatUploadThumbPx(int px)
+{
+    m_settings.setValue(QStringLiteral("inat/uploadThumbPx"), px);
+}
+
+QString Settings::inatUploadGeoprivacy() const
+{
+    const QString value = m_settings.value(QStringLiteral("inat/uploadGeoprivacy")).toString();
+    if (value == QLatin1String("obscured") || value == QLatin1String("private"))
+        return value;
+    return QStringLiteral("open");
+}
+
+void Settings::setInatUploadGeoprivacy(const QString &geoprivacy)
+{
+    m_settings.setValue(QStringLiteral("inat/uploadGeoprivacy"), geoprivacy);
+}
+
 bool Settings::inatRenameWithCommonName() const
 {
     return m_settings.value(QStringLiteral("inat/renameWithCommonName"), true).toBool();

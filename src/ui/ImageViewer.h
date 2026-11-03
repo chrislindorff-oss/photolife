@@ -25,7 +25,7 @@ class ImageCanvas;
 // Zoom: A (or a double-click) toggles fit / actual pixels (1:1, one image
 // pixel per screen pixel) at the spot under the pointer; the wheel zooms
 // around the pointer, + / - step, 0 or F fits. Zoomed in, drag with the hand
-// to pan. Stepping to another photo keeps the zoom and spot, for comparing a
+// to pan. F11 toggles full screen. Stepping to another photo keeps the zoom and spot, for comparing a
 // burst's sharpness. Where the owner allows it (Organise), R rejects the
 // photo -- or takes it back -- and a rejected one moves on to the next.
 // Given an IdentifyPanel (setIdentifyPanel()), I asks iNaturalist what the

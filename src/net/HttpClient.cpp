@@ -24,10 +24,11 @@ void HttpClient::get(const QUrl &url, Handler handler, const QString &bearerToke
 }
 
 void HttpClient::post(const QUrl &url, const QByteArray &body, const QByteArray &contentType,
-                      Handler handler, const QString &bearerToken, Priority priority)
+                      Handler handler, const QString &bearerToken, Priority priority, Retry retry)
 {
     Job job{url, std::move(handler), 0, bearerToken, priority};
     job.verb = "POST";
+    job.retry = retry;
     job.body = body;
     job.contentType = contentType;
     queueFor(priority).enqueue(std::move(job));
@@ -39,8 +40,10 @@ QQueue<HttpClient::Job> &HttpClient::queueFor(Priority priority)
     return priority == Priority::Background ? m_backgroundQueue : m_queue;
 }
 
-bool HttpClient::isRetriable(const Transport::Reply &reply)
+bool HttpClient::isRetriable(const Transport::Reply &reply, Retry retry)
 {
+    if (retry == Retry::OnlyIfRefused)
+        return reply.status == 429;
     if (!reply.error.isEmpty() && reply.status == 0)
         return true;   // network failure
     switch (reply.status) {
@@ -116,7 +119,7 @@ void HttpClient::dispatch(Job job)
         }
 
         // Retry transient failures with capped exponential backoff.
-        if (isRetriable(reply) && job.attempt < m_maxRetries) {
+        if (isRetriable(reply, job.retry) && job.attempt < m_maxRetries) {
             const int nextAttempt = job.attempt + 1;
             int delayMs = m_retryBaseMs * (1 << job.attempt);
             if (reply.retryAfterSeconds > 0)

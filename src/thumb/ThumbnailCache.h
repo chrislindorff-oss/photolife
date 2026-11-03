@@ -5,6 +5,7 @@
 #include <QPixmap>
 #include <QSet>
 #include <QString>
+#include <QThreadPool>
 
 #include <functional>
 
@@ -70,6 +71,9 @@ private:
     mutable QHash<QString, QPixmap> m_memory;   // "px:hash" -> pixmap
     QSet<QString> m_pending;                    // "px:hash" in flight
     SourceLoader m_rawLoader;
+    // Its own, so the destructor can wait for what's being made: a render
+    // finishing after this is gone would call into a deleted object.
+    QThreadPool m_pool;
 };
 
 } // namespace pl::thumb

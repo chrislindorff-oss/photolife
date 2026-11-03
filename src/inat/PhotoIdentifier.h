@@ -53,8 +53,10 @@ public:
     void identify(const IdentifyRequest &request);
     std::optional<Identification> known(const QString &key, const std::optional<QRectF> &crop) const;
 
-    // The picture sent for `request` -- exposed for tests.
-    static QByteArray renderJpeg(const IdentifyRequest &request);
+    // The picture sent for `request`, at most `longestEdge` px across --
+    // exposed for tests, and for uploads, which send a bigger one. No
+    // metadata is carried over.
+    static QByteArray renderJpeg(const IdentifyRequest &request, int longestEdge = kLongestEdge, int quality = 88);
 
     static constexpr int kLongestEdge = 1280;
 

@@ -124,6 +124,7 @@ struct Observation
     QString taxonName;
     QString taxonCommonName;
     QString taxonRank;
+    QList<qint64> taxonAncestorIds;   // root first, without the taxon itself
     QString observedOn;               // "YYYY-MM-DD", may be empty
     // When, as the clock read where it was seen (the offset dropped, so it
     // compares with a photo's EXIF time); invalid when only a date was given.

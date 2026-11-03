@@ -30,6 +30,7 @@ photo file are when you explicitly ask it to (see
   <li><a href="#map">The map &amp; photo localities</a></li>
   <li><a href="#export">Exporting a photo collection</a></li>
   <li><a href="#inat">iNaturalist tools</a></li>
+  <li><a href="#inat-upload">Uploading observations to iNaturalist</a></li>
   <li><a href="#viewer">The image viewer</a></li>
   <li><a href="#names">Learned names</a></li>
   <li><a href="#writes">What PhotoLife writes to your photos</a></li>
@@ -97,7 +98,7 @@ then choose <b>Organise &rarr; Open Download Folder&hellip;</b> (or <b>View &rar
 Organise New Photos</b>). The photos appear as a filmstrip in the order they were
 taken &mdash; RAW and JPEG of a shot together &mdash; with the selected photo large
 below it. The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
-(<b>F11</b> for full screen).</p>
+(<b>F11</b>, or <b>View &rarr; Full Screen</b>, for full screen, anywhere in PhotoLife).</p>
 <p>A big folder opens a page of 250 photos at a time, so you can start straight away:
 the next 250 are read as you scroll towards the end of those shown (the counts say
 how many are loaded so far). When you carry on with a folder, enough is read to reach
@@ -630,8 +631,11 @@ it.</p>
 <p><b>Get Token&hellip;</b> saves pasting the token: it opens iNaturalist's token page
 in your browser (sign in there if asked), and as soon as you press <b>Ctrl+A</b> then
 <b>Ctrl+C</b> on that page, PhotoLife takes the token from what you copied, saves it and
-clears it from the clipboard. Beside it you see until when it's good &mdash;
-&ldquo;Signed in until 3:40 pm tomorrow&rdquo;.</p>
+clears it from the clipboard. A small window stays above your browser meanwhile, saying
+what's happening: that it's watching the clipboard (for five minutes), that something
+you copied isn't a token, that it has your token and is checking it with iNaturalist,
+and then whose account it is. You can paste the token into it instead. Beside the token
+you see until when it's good &mdash; &ldquo;Signed in until 3:40 pm tomorrow&rdquo;.</p>
 <p><b>Download My Observations</b> finds photos from your own observations that
 aren't in your library yet.</p>
 <ul>
@@ -676,6 +680,96 @@ iNaturalist that are missing from a tree.</p>
   <li>Taxa observed only above the chosen rank (e.g. a genus-only record when comparing
       species) can't be placed and are reported separately.</li>
 </ul>
+
+<h2 id="inat-upload">Uploading observations to iNaturalist</h2>
+<p><b>Upload Observations</b>, the third tab of the iNaturalist view (also
+<b>iNaturalist Tools &rarr; Upload Observations</b>), sends photos from your library to
+your iNaturalist account as new observations, each with a species, a date and a
+location. One observation can have several photos.</p>
+<ul>
+  <li><b>Adding photos.</b> <b>Add Photos&hellip;</b> searches the library by when the
+      photos were taken, their folder and part of a species' scientific or common name.
+      For the folder, type part of its name, or press <b>Browse&hellip;</b> to choose one
+      on your drive (with or without its subfolders). Select the photos you want and
+      press <b>Add</b>. Or select photos anywhere in the library, right-click and choose
+      <b>Upload to iNaturalist&hellip;</b>.</li>
+  <li><b>New photos.</b> Only photos in the library can be uploaded, so PhotoLife can
+      remember which ones were. If the folder you choose has photos the library
+      doesn't, Add Photos says so and offers <b>Add Folder to Library</b>, as
+      <b>Library &rarr; Add Folder to Library</b> does. Its new photos are then matched
+      to species by their names, as <b>Match Library</b> does; photos named only by
+      the camera (DSC_0001.JPG) get no species, so use <b>Identify&hellip;</b> for those.
+      Your files aren't moved or changed. Once that's done, the new photos are selected,
+      ready to add.</li>
+  <li><b>"Only photos not yet on iNaturalist"</b> leaves out photos the catalogue knows
+      are on iNaturalist: those you uploaded from here, those that came from
+      <b>Download My Observations</b>, and those you've said are the same sighting as an
+      observation there (below). It can't know about photos you posted from the
+      iNaturalist app or website; the check before uploading looks for those.</li>
+  <li><b>Observations.</b> Photos of the same species taken no more than the gap apart
+      (30 minutes to start with) become one observation; <b>Regroup</b> applies a new gap.
+      Photos without a species yet only group with photos taken within 2 minutes of them
+      (a burst), since unsorted photos half an hour apart are often of different things.
+      Once you've given them a species, <b>Regroup</b> joins those of the same species.
+      Tick <b>and within</b> to split by distance too: a photo taken further than that
+      (500 m to start with) from the last one with a location starts a new observation;
+      photos without a location go by time alone.
+      Each observation lists its photos beneath it; <b>Photo size</b> makes them bigger
+      or smaller, and double-clicking a photo shows it full screen (Esc closes it, F11
+      makes it a window). It takes the species each photo is
+      matched to (a confirmed match first), the date of its earliest photo, and the
+      location of the first photo that has one.</li>
+  <li><b>Photo order.</b> The photos go in the order listed, and the first, marked
+      <b>Cover</b>, is the one iNaturalist shows. Drag a photo to move it, or use the
+      arrow buttons (Alt+Up, Alt+Down). Dragging a photo onto another observation moves
+      it there, with that observation's species. Photos already sent stay first, in
+      their order.</li>
+  <li><b>Putting it right.</b> <b>Merge</b> joins the selected observations (asking which
+      species, if they differ); <b>Split Here</b> starts a new observation at the
+      selected photo; <b>Remove</b> takes observations or photos out. <b>Choose
+      Species&hellip;</b> picks a species from the catalogue, and <b>Identify&hellip;</b>
+      asks iNaturalist's computer vision (iNaturalist is told the species came from its
+      suggestions). <b>Set Location&hellip;</b> is <b>Set Location on Map</b>: the location
+      is saved to the photos too. <b>Set Date&hellip;</b> is for an observation none of
+      whose photos has a date. Double-click the <b>Note</b> column (or right-click &rarr;
+      <b>Note&hellip;</b>) to write a description, on as many lines as you like.</li>
+  <li><b>Copy and paste a location.</b> Right-click a photo with a location &rarr;
+      <b>Copy Location</b>, then select photos without one, right-click &rarr; <b>Paste
+      Location</b>. It's saved to the photos as <b>Set Location on Map</b> does (below).
+      The same works in the library's photo grids.</li>
+  <li><b>Geoprivacy</b> applies to everything sent: <b>Open</b> (the location is public),
+      <b>Obscured</b> (the public sees an area of about 20 km, you see the point) or
+      <b>Private</b>.</li>
+  <li><b>Already on iNaturalist?</b> Before anything is sent, PhotoLife looks for each
+      observation among your own on iNaturalist, and in your library. A match is the
+      same or a related species (a genus or subspecies observation counts, as does one
+      not yet identified), the same day (or within 12 hours when both have a time), and
+      within 1 km (or one of them has no location). <b>Check iNaturalist</b> looks
+      without uploading. A photo that's an exact copy of one already on iNaturalist (the
+      same file in another folder) shows as on iNaturalist, and isn't sent.</li>
+  <li><b>Reviewing a match.</b> An observation that matches one already there is held:
+      unticked, with <b>Maybe already on iNaturalist</b> in its Status. Double-click the
+      Status, or use <b>Review Match&hellip;</b>, to see your photos beside that
+      observation's, then choose:
+      <b>Same Sighting &mdash; Don't Upload</b> (nothing is sent, and the photos are
+      recorded as of that observation, so they aren't offered again);
+      <b>Add These Photos to It</b> (they're sent to that observation instead of a new one);
+      or <b>Upload as New</b>. Ticking a held observation also uploads it as new.</li>
+  <li><b>Upload</b> sends the ticked observations that have a species, a date and a
+      location, one at a time; <b>Status</b> says what any other one needs. They're
+      public on iNaturalist as soon as they arrive. Each photo goes as a copy 2048 pixels
+      across, without the file's metadata (a RAW sends its embedded preview); your files
+      aren't changed. Observations that went up whole are then taken off the list (the
+      message underneath links to the last one, to see it on iNaturalist); any that
+      couldn't be sent stay, with the reason in Status, for <b>Upload</b> to try again.</li>
+</ul>
+<p>Uploading needs your iNaturalist token (see <b>Get Token&hellip;</b> above). It lasts
+a day: if it runs out partway, the upload stops and says so &mdash; get a new token and
+press <b>Upload</b> again. Every observation and photo iNaturalist accepts is recorded in
+the catalogue straight away, so nothing is ever sent twice: after a failure, a stop or
+an expired token, <b>Upload</b> sends only what's missing, adding any photos left over
+to the observation already made. Photos on iNaturalist show as <b>On iNaturalist</b>
+when added again, and <b>Download My Observations</b> knows you have them.</p>
 
 <h2 id="identify">Identify with iNaturalist</h2>
 <p>iNaturalist's computer vision &mdash; the suggestions its own app makes &mdash; can
@@ -760,6 +854,12 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       original only once it reads back with the same date, camera and the new location
       (never CR3 or RAF). In the library the catalogue is updated as well, and photos
       kept online only have it in the catalogue alone.</li>
+  <li><b>Copy Location</b> and <b>Paste Location</b> (right-click photos in the library or
+      Upload Observations) give photos the location of another: copy it from a photo with
+      one, then paste it onto the others, which get it written as Set Location on Map
+      writes it. It goes on the clipboard as <i>latitude, longitude</i>, so a location
+      copied from Google Maps (right-click a spot, click its coordinates) pastes too.
+      Photos that already have a location keep it unless you say to replace it.</li>
 </ul>
 
 <h2 id="settings">Catalogue, appearance &amp; updates</h2>

@@ -12,6 +12,10 @@ namespace pl {
 ReferenceTreeCombo::ReferenceTreeCombo(const QString &allTreesLabel, QWidget *parent)
     : QComboBox(parent), m_allTreesLabel(allTreesLabel)
 {
+    // Not as wide as the longest tree's name, which would make every page
+    // with one as wide; the list shows the names whole.
+    setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    setMinimumContentsLength(20);
     if (!m_allTreesLabel.isEmpty())
         addItem(m_allTreesLabel, 0);
     connect(this, &QComboBox::activated, this, [this] { m_chosenByUser = true; });

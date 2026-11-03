@@ -47,7 +47,11 @@ ThumbnailCache::ThumbnailCache(QString cacheDir, QObject *parent)
     QDir().mkpath(m_cacheDir);
 }
 
-ThumbnailCache::~ThumbnailCache() = default;
+ThumbnailCache::~ThumbnailCache()
+{
+    m_pool.clear();         // what hasn't started isn't wanted now
+    m_pool.waitForDone();   // and what has can't call back once this is gone
+}
 
 void ThumbnailCache::setRawLoader(SourceLoader loader)
 {
@@ -130,7 +134,7 @@ void ThumbnailCache::schedule(const QString &key, const QString &sourcePath, int
     SourceLoader rawLoader = m_rawLoader;
     auto *watcherCtx = this;
 
-    (void)QtConcurrent::run([watcherCtx, key, mkey, sourcePath, longestEdge, rawLoader] {
+    (void)QtConcurrent::run(&m_pool, [watcherCtx, key, mkey, sourcePath, longestEdge, rawLoader] {
         const QImage image = render(sourcePath, longestEdge, rawLoader);
 
         QMetaObject::invokeMethod(

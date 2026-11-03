@@ -65,15 +65,15 @@ std::optional<Identification> PhotoIdentifier::known(const QString &key, const s
     return *it;
 }
 
-QByteArray PhotoIdentifier::renderJpeg(const IdentifyRequest &request)
+QByteArray PhotoIdentifier::renderJpeg(const IdentifyRequest &request, int longestEdge, int quality)
 {
     // A small part is rendered from a bigger picture, so what's sent still
     // has the detail a whole photo would.
-    int longest = kLongestEdge;
+    int longest = longestEdge;
     if (request.crop) {
         const double part = std::max(request.crop->width(), request.crop->height());
         if (part > 0)
-            longest = std::min(6000, int(kLongestEdge / part));
+            longest = std::min(6000, int(longestEdge / part));
     }
     QImage image = thumb::ThumbnailCache::render(request.path, longest, raw::extractPreview);
     if (image.isNull())
@@ -85,12 +85,12 @@ QByteArray PhotoIdentifier::renderJpeg(const IdentifyRequest &request)
         if (image.isNull())
             return {};
     }
-    if (std::max(image.width(), image.height()) > kLongestEdge)
-        image = image.scaled(kLongestEdge, kLongestEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    if (std::max(image.width(), image.height()) > longestEdge)
+        image = image.scaled(longestEdge, longestEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     QByteArray jpeg;
     QBuffer buffer(&jpeg);
     buffer.open(QIODevice::WriteOnly);
-    image.convertToFormat(QImage::Format_RGB32).save(&buffer, "JPG", 88);
+    image.convertToFormat(QImage::Format_RGB32).save(&buffer, "JPG", quality);
     return jpeg;
 }
 

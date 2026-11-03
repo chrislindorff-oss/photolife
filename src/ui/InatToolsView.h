@@ -15,6 +15,7 @@ namespace pl {
 class Application;
 class InatComparePage;
 class InatDownloadPage;
+class InatUploadPage;
 
 // The iNaturalist account every iNaturalist tool acts as: a username and an
 // optional personal API token (from inaturalist.org/users/api_token), kept in
@@ -61,8 +62,10 @@ public:
     InatAccountBar *accountBar() const { return m_account; }
     InatDownloadPage *downloadPage() const { return m_downloadPage; }
     InatComparePage *comparePage() const { return m_comparePage; }
+    InatUploadPage *uploadPage() const { return m_uploadPage; }
     void showDownloadPage();
     void showComparePage();
+    void showUploadPage();
 
     // Passed on to every tool that works with reference trees.
     void setTrees(const QList<std::pair<int, QString>> &trees, int activeProjectId);
@@ -74,6 +77,7 @@ private:
     QTabWidget *m_tabs = nullptr;
     InatDownloadPage *m_downloadPage = nullptr;
     InatComparePage *m_comparePage = nullptr;
+    InatUploadPage *m_uploadPage = nullptr;
 };
 
 } // namespace pl

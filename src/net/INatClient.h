@@ -5,6 +5,7 @@
 
 #include <QDate>
 #include <QList>
+#include <QTime>
 #include <QObject>
 #include <QPointF>
 #include <QString>
@@ -81,9 +82,30 @@ struct VisionResult
     std::optional<VisionSuggestion> commonAncestor;   // a coarser taxon they share, if any
 };
 
-// Typed, read-only wrapper over the anonymous iNaturalist v1 API. All calls go
+// A new observation of the user's own, for createObservation().
+struct NewObservation
+{
+    QString uuid;               // made here, so after a failure findObservationByUuid() can tell
+                                // whether it was made after all
+    qint64 taxonId = 0;
+    QString speciesGuess;       // the name the user knows it by
+    QDate date;
+    std::optional<QTime> time;  // local time where it was taken; iNaturalist takes the zone from the place
+    double latitude = 0;
+    double longitude = 0;
+    QString geoprivacy;         // "open" | "obscured" | "private"
+    QString description;
+    bool fromVision = false;    // the species was picked from computer vision's suggestions
+};
+
+// Typed wrapper over the anonymous iNaturalist v1 API. All calls go
 // through the shared HttpClient, so they inherit its rate limiting, retries and
 // ETag caching. Results come back on the HttpClient's thread.
+//
+// Almost every call only reads. The exceptions -- createObservation() and
+// addObservationPhoto() -- post to the user's own iNaturalist account, need
+// the access token, and are never sent twice after a failure the server may
+// have acted on.
 class INatClient : public QObject
 {
     Q_OBJECT
@@ -114,6 +136,23 @@ public:
     // is only scored, never posted.
     void scoreImage(const QByteArray &jpeg, std::optional<QPointF> lonLat, std::optional<QDate> observedOn,
                     std::function<void(Outcome<VisionResult>)> done);
+
+    // GET /v1/users/me: the login the access token belongs to.
+    void fetchMe(std::function<void(Outcome<QString>)> done);
+
+    // POST /v1/observations: makes the observation and answers with its id.
+    // Not retried after a network error or 5xx -- see findObservationByUuid().
+    void createObservation(const NewObservation &observation, std::function<void(Outcome<qint64>)> done);
+
+    // GET /v1/observations?uuid=: the id of the observation with this uuid,
+    // or nullopt when there's none -- whether a create that failed was made.
+    void findObservationByUuid(const QString &uuid, std::function<void(Outcome<std::optional<qint64>>)> done);
+
+    // POST /v1/observation_photos: adds `jpeg` to the observation and
+    // answers with the new photo's id (the id a downloaded photo is known by).
+    // Not retried after a network error or 5xx.
+    void addObservationPhoto(qint64 observationId, const QByteArray &jpeg, const QString &fileName,
+                             std::function<void(Outcome<qint64>)> done);
 
     // GET /v1/places/autocomplete?q=
     void resolvePlaces(const QString &query,
@@ -171,9 +210,10 @@ public:
     // configured access token, if any, so the results reflect what that user
     // can actually see (true coordinates on their own geoprivacy-obscured
     // observations, otherwise the public, possibly-obscured view).
+    // `photosOnly` false includes observations without photos.
     void fetchObservations(const QString &userLogin, const QList<qint64> &taxonIds,
                            qint64 placeId, const QDate &dateFrom, const QDate &dateTo, int page,
-                           std::function<void(Outcome<ObservationPage>)> done);
+                           std::function<void(Outcome<ObservationPage>)> done, bool photosOnly = true);
 
     // Every one of the user's observations with photos, in ascending id
     // order: pass 0 for the first page, then the last result's id to

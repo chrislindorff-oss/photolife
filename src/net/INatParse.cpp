@@ -171,6 +171,9 @@ pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
         o.taxonName = taxon.value(QStringLiteral("name")).toString();
         o.taxonCommonName = taxon.value(QStringLiteral("preferred_common_name")).toString();
         o.taxonRank = taxon.value(QStringLiteral("rank")).toString();
+        for (const QJsonValue &v : taxon.value(QStringLiteral("ancestor_ids")).toArray())
+            if (const std::optional<qint64> id = optId(v); id && *id != o.taxonInatId)
+                o.taxonAncestorIds << *id;
     }
 
     // Same [lng, lat] GeoJSON point convention already used for a place's

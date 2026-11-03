@@ -56,6 +56,7 @@ private slots:
     void retriesOnNetworkError();
     void authenticatedRequestSendsTokenAndBypassesCache();
     void postSendsItsBodyAndIsNeverCached();
+    void postThatMakesSomethingIsOnlyRetriedWhenRefused();
     void skipsCacheForUncacheableUrls();
     void cacheRoundTrips();
     void isCacheableRejectsPagedAndBatchedUrls();
@@ -346,6 +347,58 @@ void TestHttpClient::postSendsItsBodyAndIsNeverCached()
         QCOMPARE(req.contentType, QByteArray("text/plain"));
         QVERIFY(req.ifNoneMatch.isEmpty());
     }
+}
+
+// A POST that makes something isn't sent twice after a failure the server
+// may have acted on (a network error, a 5xx), only after a 429, which it
+// refused outright.
+void TestHttpClient::postThatMakesSomethingIsOnlyRetriedWhenRefused()
+{
+    const QList<int> statuses{0, 500, 503};
+    for (const int status : statuses) {
+        auto transport = std::make_unique<FakeTransport>();
+        FakeTransport *raw = transport.get();
+        transport->responder = [status](const Transport::Request &, int) {
+            Transport::Reply r;
+            r.status = status;
+            if (status == 0)
+                r.error = QStringLiteral("connection reset");
+            return r;
+        };
+        HttpClient client(std::move(transport), nullptr);
+        client.setMinRequestIntervalMs(0);
+        client.setRetryBaseDelayMs(1);
+        HttpResponse got;
+        bool done = false;
+        client.post(QUrl(QStringLiteral("https://api.inaturalist.org/v1/observations")), "{}",
+                    "application/json", [&](HttpResponse r) { got = r; done = true; }, {},
+                    HttpClient::Priority::Normal, HttpClient::Retry::OnlyIfRefused);
+        QTRY_VERIFY(done);
+        QVERIFY(!got.ok());
+        QCOMPARE(raw->received.size(), 1);
+    }
+
+    auto transport = std::make_unique<FakeTransport>();
+    FakeTransport *raw = transport.get();
+    transport->responder = [](const Transport::Request &, int call) -> Transport::Reply {
+        if (call == 0) {
+            Transport::Reply refused;
+            refused.status = 429;
+            return refused;
+        }
+        return okReply(QByteArrayLiteral("{\"id\":1}"));
+    };
+    HttpClient client(std::move(transport), nullptr);
+    client.setMinRequestIntervalMs(0);
+    client.setRetryBaseDelayMs(1);
+    HttpResponse got;
+    bool done = false;
+    client.post(QUrl(QStringLiteral("https://api.inaturalist.org/v1/observations")), "{}",
+                "application/json", [&](HttpResponse r) { got = r; done = true; }, {},
+                HttpClient::Priority::Normal, HttpClient::Retry::OnlyIfRefused);
+    QTRY_VERIFY(done);
+    QVERIFY(got.ok());
+    QCOMPARE(raw->received.size(), 2);
 }
 
 void TestHttpClient::skipsCacheForUncacheableUrls()

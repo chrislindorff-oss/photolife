@@ -59,10 +59,17 @@ public:
     // as true vs. geoprivacy-obscured coordinates, depending on auth).
     void get(const QUrl &url, Handler handler, const QString &bearerToken = QString(),
              Priority priority = Priority::Normal);
+    // Which failures a POST is sent again after. Transient (the default) is
+    // every failure a GET retries; OnlyIfRefused is just 429 -- for a POST
+    // that makes something (an observation, a photo), where a network error
+    // or a 5xx may come after the server has already acted on it.
+    enum class Retry { Transient, OnlyIfRefused };
+
     // A POST of `body` through the same queue, rate limit and retries as a
     // GET; never cached.
     void post(const QUrl &url, const QByteArray &body, const QByteArray &contentType, Handler handler,
-              const QString &bearerToken = QString(), Priority priority = Priority::Normal);
+              const QString &bearerToken = QString(), Priority priority = Priority::Normal,
+              Retry retry = Retry::Transient);
 
     int queuedCount() const { return int(m_queue.size() + m_backgroundQueue.size()); }
     bool isBusy() const { return m_inFlight || queuedCount() > 0; }
@@ -81,12 +88,13 @@ private:
         QByteArray verb = "GET";
         QByteArray body;
         QByteArray contentType;
+        Retry retry = Retry::Transient;
     };
 
     void pump();
     void dispatch(Job job);
     void finishJob(Job job, HttpResponse response);
-    static bool isRetriable(const Transport::Reply &reply);
+    static bool isRetriable(const Transport::Reply &reply, Retry retry);
 
     std::unique_ptr<Transport> m_transport;
     HttpCache *m_cache;

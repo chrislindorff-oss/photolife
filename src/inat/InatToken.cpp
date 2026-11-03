@@ -8,13 +8,11 @@ namespace pl::inat {
 
 QString extractApiToken(const QString &text)
 {
-    // A JWT: three base64url parts, the first two JSON (so "eyJ...").
-    static const QRegularExpression jwt(QStringLiteral(R"(^eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+$)"));
-    const QString trimmed = text.trimmed();
-    QString token = trimmed;
-    if (trimmed.startsWith(QLatin1Char('{')))
-        token = QJsonDocument::fromJson(trimmed.toUtf8()).object().value(QStringLiteral("api_token")).toString();
-    return jwt.match(token).hasMatch() ? token : QString();
+    // A JWT: three base64url parts, the first two JSON (so "eyJ..."), found
+    // wherever it is in the text: Firefox shows the page's JSON as a table,
+    // and Ctrl+A, Ctrl+C there copies `api_token<tab>"eyJ..."`.
+    static const QRegularExpression jwt(QStringLiteral(R"((?<![\w-])eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+(?![\w-]))"));
+    return jwt.match(text).captured(0);
 }
 
 std::optional<QDateTime> apiTokenExpiry(const QString &token)

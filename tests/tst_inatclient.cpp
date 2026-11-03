@@ -1,5 +1,8 @@
 #include <QtTest>
 
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include "FakeTransport.h"
 #include "net/HttpClient.h"
 #include "net/INatClient.h"
@@ -23,11 +26,18 @@ private slots:
     void fetchObservationsSendsDateRangeWhenProvided();
     void fetchObservationsOmitsDateParamsWhenInvalid();
     void fetchObservationsWithNoTaxaSearchesEveryTaxon();
+    void fetchObservationsCanIncludeThoseWithoutPhotos();
     void fetchAllObservationsSendsTaxonOnlyWhenGiven();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
     void scoreImagePostsThePhotoWithWhereAndWhen();
     void scoreImageReportsAnExpiredToken();
+
+    void fetchMeGivesTheLogin();
+    void createObservationPostsItsFields();
+    void createObservationSaysWhatIsWrong();
+    void findObservationByUuidTellsWhetherItExists();
+    void addObservationPhotoPostsTheFile();
 
 private:
     FakeTransport *m_transport = nullptr;
@@ -298,6 +308,29 @@ void TestINatClient::fetchObservationsWithNoTaxaSearchesEveryTaxon()
     QVERIFY(url.contains(QStringLiteral("user_login=someone")));
 }
 
+void TestINatClient::fetchObservationsCanIncludeThoseWithoutPhotos()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(
+            R"({"total_results": 1, "results": [{"id": 901, "observed_on": "2025-10-18",
+                "taxon": {"id": 12936, "name": "Petroica phoenicea", "ancestor_ids": [48460, 1, 7000, 12936]}}]})"));
+    });
+
+    std::optional<Outcome<ObservationPage>> got;
+    m_inat->fetchObservations(QStringLiteral("someone"), {}, 0, QDate(2025, 10, 17), QDate(2025, 10, 19), 1,
+                              [&](Outcome<ObservationPage> out) { got = out; }, false);
+    QTRY_VERIFY(got.has_value());
+    QVERIFY(!m_transport->received.at(0).url.query().contains(QStringLiteral("photos=")));
+    QCOMPARE(got->value.results.size(), 1);
+    // The taxon's ancestors, without the taxon itself.
+    QCOMPARE(got->value.results.at(0).taxonAncestorIds, (QList<qint64>{48460, 1, 7000}));
+
+    bool done = false;
+    m_inat->fetchObservations(QStringLiteral("someone"), {}, 0, QDate(), QDate(), 1, [&](auto) { done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY(m_transport->received.at(1).url.query().contains(QStringLiteral("photos=true")));
+}
+
 void TestINatClient::httpErrorBecomesOutcomeError()
 {
     wire([](const Transport::Request &, int) { return FakeTransport::httpStatus(500); });
@@ -383,6 +416,130 @@ void TestINatClient::scoreImageReportsAnExpiredToken()
     QVERIFY(!got.ok());
     QCOMPARE(got.status, 401);
     QVERIFY(!m_transport->received.at(0).body.contains("name=\"lat\""));
+}
+
+void TestINatClient::fetchMeGivesTheLogin()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(R"({"total_results": 1, "results": [{"id": 77, "login": "someone"}]})");
+    });
+    m_inat->setAccessToken(QStringLiteral("eyJ.token"));
+    Outcome<QString> got;
+    bool done = false;
+    m_inat->fetchMe([&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY2(got.ok(), qPrintable(got.error));
+    QCOMPARE(got.value, QStringLiteral("someone"));
+    QCOMPARE(m_transport->received.at(0).url.toString(), QStringLiteral("https://api.test/v1/users/me"));
+    QCOMPARE(m_transport->received.at(0).bearerToken, QStringLiteral("eyJ.token"));
+}
+
+void TestINatClient::createObservationPostsItsFields()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(R"({"id": 901, "uuid": "a-b-c"})");
+    });
+    m_inat->setAccessToken(QStringLiteral("eyJ.token"));
+
+    NewObservation obs;
+    obs.uuid = QStringLiteral("a-b-c");
+    obs.taxonId = 12936;
+    obs.speciesGuess = QStringLiteral("Flame Robin");
+    obs.date = QDate(2025, 10, 18);
+    obs.time = QTime(8, 15, 30);
+    obs.latitude = -37.8304;
+    obs.longitude = 144.9796;
+    obs.geoprivacy = QStringLiteral("obscured");
+    obs.description = QStringLiteral("On the fence");
+    obs.fromVision = true;
+    Outcome<qint64> got;
+    bool done = false;
+    m_inat->createObservation(obs, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY2(got.ok(), qPrintable(got.error));
+    QCOMPARE(got.value, 901);
+
+    const Transport::Request &req = m_transport->received.at(0);
+    QCOMPARE(req.verb, QByteArray("POST"));
+    QCOMPARE(req.url.toString(), QStringLiteral("https://api.test/v1/observations"));
+    QCOMPARE(req.bearerToken, QStringLiteral("eyJ.token"));
+    QCOMPARE(req.contentType, QByteArray("application/json"));
+    const QJsonObject o = QJsonDocument::fromJson(req.body).object().value(QStringLiteral("observation")).toObject();
+    QCOMPARE(o.value(QStringLiteral("uuid")).toString(), QStringLiteral("a-b-c"));
+    QCOMPARE(o.value(QStringLiteral("taxon_id")).toInteger(), 12936);
+    QCOMPARE(o.value(QStringLiteral("species_guess")).toString(), QStringLiteral("Flame Robin"));
+    QCOMPARE(o.value(QStringLiteral("observed_on_string")).toString(), QStringLiteral("2025-10-18 08:15:30"));
+    QCOMPARE(o.value(QStringLiteral("latitude")).toDouble(), -37.8304);
+    QCOMPARE(o.value(QStringLiteral("longitude")).toDouble(), 144.9796);
+    QCOMPARE(o.value(QStringLiteral("geoprivacy")).toString(), QStringLiteral("obscured"));
+    QCOMPARE(o.value(QStringLiteral("description")).toString(), QStringLiteral("On the fence"));
+    QVERIFY(o.value(QStringLiteral("owners_identification_from_vision")).toBool());
+}
+
+// A refusal comes back with iNaturalist's own reason, and a server error
+// isn't sent again (it may have made the observation).
+void TestINatClient::createObservationSaysWhatIsWrong()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::httpStatus(422, R"({"error": {"original": {"error": "Latitude is not a number"}}, "status": 422})");
+    });
+    NewObservation obs;
+    obs.date = QDate(2025, 10, 18);
+    Outcome<qint64> got;
+    bool done = false;
+    m_inat->createObservation(obs, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QCOMPARE(got.status, 422);
+    QVERIFY2(got.error.contains(QStringLiteral("Latitude is not a number")), qPrintable(got.error));
+    QVERIFY(!QJsonDocument::fromJson(m_transport->received.at(0).body).object()
+                 .value(QStringLiteral("observation")).toObject().contains(QStringLiteral("time")));
+
+    wire([](const Transport::Request &, int) { return FakeTransport::httpStatus(502); });
+    done = false;
+    m_inat->createObservation(obs, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QCOMPARE(got.status, 502);
+    QCOMPARE(m_transport->received.size(), 1);
+}
+
+void TestINatClient::findObservationByUuidTellsWhetherItExists()
+{
+    wire([](const Transport::Request &req, int) {
+        if (req.url.query().contains(QStringLiteral("made")))
+            return FakeTransport::ok(R"({"total_results": 1, "results": [{"id": 901}]})");
+        return FakeTransport::ok(R"({"total_results": 0, "results": []})");
+    });
+    Outcome<std::optional<qint64>> got;
+    bool done = false;
+    m_inat->findObservationByUuid(QStringLiteral("made"), [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY(got.ok());
+    QCOMPARE(got.value, std::optional<qint64>(901));
+    done = false;
+    m_inat->findObservationByUuid(QStringLiteral("never"), [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY(got.ok());
+    QVERIFY(!got.value);
+    QCOMPARE(m_transport->received.at(1).url.toString(), QStringLiteral("https://api.test/v1/observations?uuid=never"));
+}
+
+void TestINatClient::addObservationPhotoPostsTheFile()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(R"({"id": 5, "observation_id": 901, "photo": {"id": 4401, "url": "x"}})");
+    });
+    m_inat->setAccessToken(QStringLiteral("eyJ.token"));
+    Outcome<qint64> got;
+    bool done = false;
+    m_inat->addObservationPhoto(901, "JPEGDATA", QStringLiteral("Flame Robin 1.jpg"), [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY2(got.ok(), qPrintable(got.error));
+    QCOMPARE(got.value, 4401);
+    const Transport::Request &req = m_transport->received.at(0);
+    QCOMPARE(req.url.toString(), QStringLiteral("https://api.test/v1/observation_photos"));
+    QCOMPARE(req.bearerToken, QStringLiteral("eyJ.token"));
+    QVERIFY(req.body.contains("name=\"observation_photo[observation_id]\"\r\n\r\n901\r\n"));
+    QVERIFY(req.body.contains("name=\"file\"; filename=\"Flame Robin 1.jpg\"\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA\r\n"));
 }
 
 QTEST_GUILESS_MAIN(TestINatClient)

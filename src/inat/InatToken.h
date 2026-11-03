@@ -11,8 +11,9 @@ namespace pl::inat {
 // shown as {"api_token":"..."}.
 inline constexpr char kApiTokenPage[] = "https://www.inaturalist.org/users/api_token";
 
-// The API token in text copied from that page -- its JSON, or the bare token
-// -- or empty when the text isn't one.
+// The API token in text copied from that page -- its JSON, as a browser's
+// JSON viewer copies it (Firefox: `api_token<tab>"eyJ..."`), or the bare
+// token -- or empty when there isn't one in it.
 QString extractApiToken(const QString &text);
 
 // When an API token stops working, from its "exp" claim; nullopt when it
