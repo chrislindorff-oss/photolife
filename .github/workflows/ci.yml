@@ -68,7 +68,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # The AppImage's own runner and Qt (release.yml), so this tests what
+          # ships. (ubuntu-latest is now Ubuntu 26, whose GCC can't link Qt
+          # 6.7.2: "multiple definition of QtPrivate::IsFloatType_v<_Float16>".)
+          - os: ubuntu-22.04
             qt: "6.7.2"
           - os: windows-latest
             qt: "6.7.2"
