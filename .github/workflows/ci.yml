@@ -49,8 +49,12 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
+      # Job logs need a GitHub sign-in to read, but annotations are public:
+      # this turns each compiler error into one.
       - name: Build
-        run: cmake --build build
+        run: |
+          echo "::add-matcher::.github/gcc-problem-matcher.json"
+          cmake --build build
 
       - name: Test
         env:
@@ -123,8 +127,12 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ env.EXIV2_CMAKE_ARGS }}
 
+      # Job logs need a GitHub sign-in to read, but annotations are public:
+      # this turns each compiler error into one.
       - name: Build
-        run: cmake --build build
+        run: |
+          echo "::add-matcher::.github/gcc-problem-matcher.json"
+          cmake --build build
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
