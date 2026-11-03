@@ -12,6 +12,24 @@
           "message": 5
         }
       ]
+    },
+    {
+      "owner": "gcc-link",
+      "pattern": [
+        {
+          "regexp": "^(.*(?:undefined reference to|multiple definition of|collect2: error|ld returned \\d+ exit status|cannot find -l).*)$",
+          "message": 1
+        }
+      ]
+    },
+    {
+      "owner": "ninja",
+      "pattern": [
+        {
+          "regexp": "^(FAILED: .*)$",
+          "message": 1
+        }
+      ]
     }
   ]
 }

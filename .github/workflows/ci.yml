@@ -47,7 +47,7 @@ jobs:
             ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev libexiv2-dev
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COLOR_DIAGNOSTICS=OFF
 
       # Job logs need a GitHub sign-in to read, but annotations are public:
       # this turns each compiler error into one.
@@ -125,7 +125,7 @@ jobs:
       - uses: lukka/get-cmake@latest
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ${{ env.EXIV2_CMAKE_ARGS }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COLOR_DIAGNOSTICS=OFF ${{ env.EXIV2_CMAKE_ARGS }}
 
       # Job logs need a GitHub sign-in to read, but annotations are public:
       # this turns each compiler error into one.
