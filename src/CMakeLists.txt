@@ -87,6 +87,7 @@ qt_add_library(photolife_core STATIC
     raw/RawPreview.h        raw/RawPreview.cpp
     scan/CatalogueMaintenance.h scan/CatalogueMaintenance.cpp
     scan/CaptureRenamer.h scan/CaptureRenamer.cpp
+    scan/LibraryRenamer.h scan/LibraryRenamer.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp
@@ -120,6 +121,7 @@ qt_add_library(photolife_core STATIC
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
     ui/ExportDialog.h       ui/ExportDialog.cpp
     ui/FileNamingDialog.h   ui/FileNamingDialog.cpp
+    ui/RenameFilesDialog.h  ui/RenameFilesDialog.cpp
     ui/HelpWindow.h         ui/HelpWindow.cpp
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/InatObservationMatchDialog.h ui/InatObservationMatchDialog.cpp

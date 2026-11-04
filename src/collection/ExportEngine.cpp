@@ -271,6 +271,7 @@ struct RenditionRow
     QString taxonName;
     QString commonName;
     QString locality;
+    QString fileLocality;
 };
 
 QList<RenditionRow> fetchRenditions(const QString &connectionName, int projectId,
@@ -297,7 +298,7 @@ QList<RenditionRow> fetchRenditions(const QString &connectionName, int projectId
     QSqlQuery q(QSqlDatabase::database(connectionName, false));
     q.prepare(QStringLiteral(
         "SELECT r.path, r.file_size, t.inat_id, r.content_hash, "
-        "       c.id, c.captured_on, t.name, t.common_name, g.locality "
+        "       c.id, c.captured_on, t.name, t.common_name, g.locality, c.locality_text "
         "FROM capture c "
         "JOIN capture_match m ON m.id = ("
         "   SELECT id FROM capture_match WHERE capture_id = c.id "
@@ -332,6 +333,7 @@ QList<RenditionRow> fetchRenditions(const QString &connectionName, int projectId
         row.taxonName = q.value(6).toString();
         row.commonName = q.value(7).toString();
         row.locality = q.value(8).toString();
+        row.fileLocality = q.value(9).toString();
         rows.append(row);
     }
     return rows;
@@ -364,6 +366,7 @@ QHash<qint64, QString> namesForCaptures(const QList<RenditionRow> &rows,
         fields.town = place.town;
         fields.state = place.state;
         fields.country = place.country;
+        fields.fileLocality = row.fileLocality;
         fields.author = options.authorName;
         fields.originalStem = QFileInfo(row.path).completeBaseName();
         if (pattern.uses(NameToken::Sequence)) {

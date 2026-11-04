@@ -29,6 +29,7 @@ photo file are when you explicitly ask it to (see
   <li><a href="#refphotos">Reference photos &amp; best shots</a></li>
   <li><a href="#photo-of-the-day">Nature Photo of the Day</a></li>
   <li><a href="#map">The map &amp; photo localities</a></li>
+  <li><a href="#rename">Renaming photos on your drive</a></li>
   <li><a href="#export">Exporting a photo collection</a></li>
   <li><a href="#inat">iNaturalist tools</a></li>
   <li><a href="#inat-upload">Uploading observations to iNaturalist</a></li>
@@ -149,7 +150,10 @@ known from your library's photos appear at once, even offline).</p>
       pan &mdash; and the arrow keys keep that zoom and spot from photo to photo (see
       <a href="#viewer">The image viewer</a>). <b>R</b> there marks the photo as a reject
       and moves on to the next, so you can cull a burst full size; on a rejected photo it
-      takes the reject back. The <b>Reject</b> button beside the arrows does the same.</li>
+      takes the reject back. The <b>Reject</b> button beside the arrows does the same.
+      <b>N</b> there (or the <b>Name</b> button) names the photo on view, and the photos
+      after it up to the next named one, just as in the grid: the Name popup opens over the
+      photo, and the caption shows the name.</li>
   <li>To stop a name carrying forward, focus the <b>last</b> photo of that taxon &mdash;
       not the first photo of the next one &mdash; and press <b>E</b>, or right-click and
       choose <b>Mark as Last Photo of &ldquo;<i>name</i>&rdquo;</b> (the menu shows the
@@ -564,6 +568,38 @@ F11 makes it full screen.</p>
 opens</b>. <b>View &rarr; Nature Photo of the Day&hellip;</b> shows it at any time,
 and <b>View &rarr; Show Photo of the Day at Start-up</b> turns it back on.</p>
 
+<h2 id="rename">Renaming photos on your drive</h2>
+<p>Select one or more photos in the library, right-click them and choose <b>Rename Files on
+Drive&hellip;</b>. This renames the <b>actual files</b> on your drive, not just how PhotoLife
+shows them. A photo's RAW, JPEG and editing sidecars (<i>.xmp</i>, <i>.dop</i>&hellip;) are
+renamed together, and the catalogue follows, so matches, best shots and locations stay with
+the photo. There are two ways to name them:</p>
+<ul>
+  <li><b>Change the name part</b>: the name at the start of each file name is replaced and
+      the rest kept, so <i>Wasp Gall 1 - Sailors Tk, Steiglitz 14-6-2020 (1).JPG</i> becomes
+      <i>Apiomorpha - Sailors Tk, Steiglitz 14-6-2020 (1).JPG</i>. Beside it, choose how each
+      photo is named from its identified species: <b>Common name</b>, <b>Scientific
+      name</b>, <b>Common name (Scientific name)</b> or <b>Scientific name (Common name)</b>
+      &mdash; photos of different species each get their own, and a species without a common
+      name goes by its scientific one. Or type a name (<b>As typed</b>) for them all. Picking
+      a form also fills in the folder's new name the same way, unless you've changed it.</li>
+  <li><b>Build the whole name from parts</b>: <b>Choose Parts&hellip;</b> opens the same
+      builder as <a href="#export">exporting</a>, with scientific or common name, date, time,
+      town, <b>Locality (from file name)</b>, author, sequence number and your own text. The
+      pattern is remembered for next time, apart from the export's.</li>
+</ul>
+<p>When the photos are all in one folder, tick <b>Also rename the folder</b> to rename it
+too. It's filled in with the species' name, scientific or common to match how the folder is
+named now, and you can change it. The folder's other photos and the folders inside it go
+with it. A folder you added in Settings (a library root) isn't renamed here.</p>
+<p>The list shows every photo's name now and after before anything changes. Nothing is ever
+overwritten: a name already taken in the folder gets the next <i>(2)</i>, <i>(3)</i>.
+Photos kept online only are left as they are. If you change your mind, right-click and choose
+<b>Undo Last Rename on Drive</b> to put the names back; it works until PhotoLife closes. Other
+programs that remember the old names, such as a Lightroom catalogue, won't follow. If you
+<a href="#sharing">sync your photos online</a>, the renamed files upload under their new
+names, and the old names stay online until you take out photos deleted here.</p>
+
 <h2 id="map">The map &amp; photo localities</h2>
 <p>The <b>Map</b> tab plots every geotagged photo in the current tree selection as a
 pin on the map, scoped exactly like <b>Photos of Tree Selection</b>. <b>Map</b> and
@@ -760,8 +796,13 @@ location. One observation can have several photos.</p>
       observation among your own on iNaturalist, and in your library. A match is the
       same or a related species (a genus or subspecies observation counts, as does one
       not yet identified), the same day (or within 12 hours when both have a time), and
-      within 1 km (or one of them has no location). <b>Check iNaturalist</b> looks
-      without uploading. A photo that's an exact copy of one already on iNaturalist (the
+      within 1 km (or one of them has no location). <b>Upload</b> always does this first,
+      so you're asked before a likely duplicate is sent; <b>Check iNaturalist</b> looks
+      without uploading. Observations and photos PhotoLife already knows are on
+      iNaturalist (sent from PhotoLife, or downloaded from there) aren't looked for: they
+      show on a light green background, with <b>Sent</b> or <b>On iNaturalist</b>, and the
+      message after a check says how many there are. They're never sent again; an
+      observation with only some of its photos there gets just the missing ones. A photo that's an exact copy of one already on iNaturalist (the
       same file in another folder) shows as on iNaturalist, and isn't sent.</li>
   <li><b>Reviewing a match.</b> An observation that matches one already there is held:
       unticked, with <b>Maybe already on iNaturalist</b> in its Status. Double-click the
@@ -786,6 +827,19 @@ the catalogue straight away, so nothing is ever sent twice: after a failure, a s
 an expired token, <b>Upload</b> sends only what's missing, adding any photos left over
 to the observation already made. Photos on iNaturalist show as <b>On iNaturalist</b>
 when added again, and <b>Download My Observations</b> knows you have them.</p>
+<p><b>Deleted on iNaturalist?</b> If you delete an observation, or a photo from one, on
+iNaturalist itself, PhotoLife still has it recorded as sent. Right-click those photos (or the
+observation) on the upload page and choose <b>Not on iNaturalist Any More&hellip;</b>.
+PhotoLife asks iNaturalist what's still there:</p>
+<ul>
+  <li>an observation that's gone is forgotten for all its photos, which then go up as a new
+      observation;</li>
+  <li>a photo taken out of an observation that's still there goes back into it;</li>
+  <li>photos still on iNaturalist are left as they are, unless you choose to send them
+      again anyway.</li>
+</ul>
+<p>Then press <b>Upload</b>. If iNaturalist can't be reached, you can still mark the
+selected photos as not there, and they go up as a new observation.</p>
 
 <h2 id="identify">Identify with iNaturalist</h2>
 <p>iNaturalist's computer vision &mdash; the suggestions its own app makes &mdash; can
@@ -823,7 +877,8 @@ to the ends, and Esc closes it. The star button adds or removes the photo as a b
 shot. If the photo has GPS data, <b>View on Map</b> opens its location in your
 browser. <b>I</b> (or <b>Identify</b>) asks iNaturalist what the photo shows &mdash; or,
 after a <b>Shift+drag</b> round part of it, just that part (see
-<a href="#identify">Identify with iNaturalist</a>).</p>
+<a href="#identify">Identify with iNaturalist</a>). Opened from Organise, <b>R</b>
+rejects the photo and <b>N</b> names it (and the photos after it).</p>
 <p><b>Zooming.</b> Press <b>A</b> (or double-click) to switch between fitting the window
 and actual pixels (1:1, one photo pixel per screen pixel), centred on the spot under the
 pointer. The mouse wheel zooms in and out around the pointer, <b>+</b>/<b>&minus;</b>
@@ -859,6 +914,9 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       the RAW, JPEG and .xmp sidecar renamed together; a name already taken gets the next
       number, and nothing is overwritten. Photos kept online only aren't renamed. It
       needs your username in the iNaturalist view.</li>
+  <li><b>Rename Files on Drive&hellip;</b> (right-click photos in the library) renames the
+      photos' files, and their folder if you ask (see <a href="#rename">Renaming photos on your
+      drive</a>).</li>
   <li><b>Set Location on Map&hellip;</b> (right-click photos in Organise or the library)
       writes the location into a JPEG's GPS data, keeping the file's date. A RAW file
       gets it in an <i>.xmp</i> sidecar beside it &mdash; its existing one (Lightroom's

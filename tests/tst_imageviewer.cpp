@@ -79,6 +79,27 @@ private slots:
         QCOMPARE(viewer.windowTitle(), QStringLiteral("a"));
     }
 
+    // Organise's viewer: N asks for the photo on view to be named; elsewhere
+    // it does nothing.
+    void nNamesWhereOffered()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        ImageViewer viewer;
+        QVector<ImageViewer::Item> shown = items(dir, true);
+        for (ImageViewer::Item &item : shown)
+            item.canName = true;
+        viewer.setItems(shown, 1);
+        QSignalSpy spy(&viewer, &ImageViewer::nameRequested);
+        QTest::keyClick(&viewer, Qt::Key_N);
+        QCOMPARE(spy.size(), 1);
+        QCOMPARE(spy.at(0).at(0).toInt(), 1);
+
+        viewer.setItems(items(dir, true), 0);
+        QTest::keyClick(&viewer, Qt::Key_N);
+        QCOMPARE(spy.size(), 1);
+    }
+
     // Shift+drag round part of the photo selects it, as a part of the
     // picture (0..1); Esc clears it first and only then closes.
     void shiftDragSelectsAPart()

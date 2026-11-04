@@ -27,7 +27,8 @@ class ImageCanvas;
 // around the pointer, + / - step, 0 or F fits. Zoomed in, drag with the hand
 // to pan. F11 toggles full screen. Stepping to another photo keeps the zoom and spot, for comparing a
 // burst's sharpness. Where the owner allows it (Organise), R rejects the
-// photo -- or takes it back -- and a rejected one moves on to the next.
+// photo -- or takes it back -- and a rejected one moves on to the next, and
+// N asks the owner to name it (nameRequested()).
 // Given an IdentifyPanel (setIdentifyPanel()), I asks iNaturalist what the
 // photo shows -- or, after a Shift+drag round something small, just that
 // part -- and the suggestions show at the right; one picked comes back
@@ -50,6 +51,7 @@ public:
         double longitude = 0.0;
         bool canReject = false;     // R marks it as a reject (Organise)
         bool rejected = false;
+        bool canName = false;       // N names it (Organise)
         bool canIdentify = false;   // I identifies it (with an IdentifyPanel set)
         QDate taken;                // when it was taken, if known -- for identifying
     };
@@ -74,6 +76,8 @@ public:
 signals:
     void bestShotToggleRequested(qint64 captureId, bool nominate);
     void rejectToggleRequested(int index, bool reject);
+    // N (or the Name button) on the photo at `index`.
+    void nameRequested(int index);
     // A suggestion was picked for the photo at `index`.
     void taxonChosen(int index, const pl::taxonomy::Taxon &taxon);
 
@@ -96,6 +100,7 @@ private:
     void updateBestShotButton();
     void updateMapButton();
     void updateRejectButton();
+    void updateNameButton();
     void updateIdentifyButton();
     void toggleReject();
     void identify();
@@ -110,6 +115,7 @@ private:
     QPushButton *m_bestShot;
     QPushButton *m_viewOnMap;
     QPushButton *m_reject;
+    QPushButton *m_name;
     QPushButton *m_identifyButton;
 
     QVector<Item> m_items;

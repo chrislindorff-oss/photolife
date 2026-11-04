@@ -63,8 +63,11 @@ private:
     void updateCellSize();
     void updateCounts();
     // Names the photo at `row` (and its run); `identify` starts with
-    // iNaturalist's suggestions.
-    void nameAt(int row, bool identify = false);
+    // iNaturalist's suggestions; `over` (the full-size viewer) puts the popup
+    // over that window instead of beside the photo's cell. True when named.
+    bool nameAt(int row, bool identify = false, QWidget *over = nullptr);
+    // The viewer's captions, after a name that may have changed the run's.
+    void refreshViewer(int row);
     // Identify Runs: names the unnamed runs from iNaturalist's suggestions.
     void identifyRuns();
     void toggleRejected(int row = -1);

@@ -33,6 +33,7 @@ private slots:
     void linkedPhotosAreNeverSent();
     void addingToAnObservationOnlySendsPhotos();
     void photosGoInTheOrderGiven();
+    void resetForgetsWhatIsntThereAnyMore();
 
 private:
     std::unique_ptr<QTemporaryDir> m_dir;
@@ -311,6 +312,30 @@ void TestObservationUploader::photosGoInTheOrderGiven()
     const QJsonObject o = QJsonDocument::fromJson(m_transport->received.at(0).body).object()
                               .value(QStringLiteral("observation")).toObject();
     QCOMPARE(o.value(QStringLiteral("observed_on_string")).toString(), QStringLiteral("2025-10-18 08:01:00"));
+}
+
+void TestObservationUploader::resetForgetsWhatIsntThereAnyMore()
+{
+    // 1 and 2 sent to 901 (photos 11, 12); 3 to 902 (photo 13).
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    QVERIFY(q.exec(QStringLiteral("UPDATE capture SET inat_observation_id = 901, inat_photo_id = 10 + id WHERE id <= 2")));
+    QVERIFY(q.exec(QStringLiteral("UPDATE capture SET inat_observation_id = 902, inat_photo_id = 13 WHERE id = 3")));
+    const QList<UploadPhoto> photos = ObservationUploader::loadPhotos(m_db->connectionName(), {1, 2, 3});
+
+    // 902 deleted; 901 still there, without photo 12.
+    const ObservationUploader::ResetPlan plan = ObservationUploader::planReset(photos, {{901, {11}}});
+    QCOMPARE(plan.goneObservations, (QList<qint64>{902}));
+    QCOMPARE(plan.photosGone, (QList<int>{2}));
+    QCOMPARE(plan.stillThere, (QList<int>{1}));
+    QVERIFY(plan.copies.isEmpty());
+
+    QVERIFY(ObservationUploader::forget(m_db->connectionName(), plan.goneObservations, plan.photosGone));
+    QCOMPARE(stamped(), (QList<std::pair<qint64, qint64>>{{901, 11}, {901, 0}, {0, 0}}));
+    // 2 goes to 901 again; 3 is new.
+    for (const UploadPhoto &p : ObservationUploader::loadPhotos(m_db->connectionName(), {1, 2, 3})) {
+        QCOMPARE(p.done(), p.captureId == 1);
+        QCOMPARE(p.observationId, p.captureId == 3 ? 0 : 901);
+    }
 }
 
 QTEST_GUILESS_MAIN(TestObservationUploader)

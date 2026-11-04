@@ -16,6 +16,7 @@ NameFields sampleFields()
     f.country = QStringLiteral("Australia");
     f.author = QStringLiteral("C. Lee");
     f.originalStem = QStringLiteral("IMG_4821");
+    f.fileLocality = QStringLiteral("Point Roadknight");
     return f;
 }
 
@@ -41,6 +42,7 @@ private slots:
     void rendersSequenceZeroPadded();
     void fallsBackToOriginalNameWhenNothingIsLeft();
     void capsLength();
+    void rendersTheFileLocality();
     void roundTripsThroughJson();
     void ignoresUnknownTokensInJson();
     void splitsLocality_data();
@@ -137,10 +139,17 @@ void TestFileNamePattern::capsLength()
     QCOMPARE(p.render(sampleFields()).size(), FileNamePattern::kMaxStemLength);
 }
 
+void TestFileNamePattern::rendersTheFileLocality()
+{
+    FileNamePattern p = patternOf({NameToken::CommonName, NameToken::FileLocality});
+    p.separator = QStringLiteral(" - ");
+    QCOMPARE(p.render(sampleFields()), QStringLiteral("Pink Fingers - Point Roadknight"));
+}
+
 void TestFileNamePattern::roundTripsThroughJson()
 {
     FileNamePattern p = patternOf({NameToken::ScientificName, NameToken::DateTaken,
-                                   NameToken::Sequence});
+                                   NameToken::FileLocality, NameToken::Sequence});
     p.parts.insert(1, {NameToken::Text, QStringLiteral("ref")});
     p.separator = QStringLiteral("-");
     p.dateFormat = QStringLiteral("yyyyMMdd");

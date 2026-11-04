@@ -24,6 +24,9 @@ public:
     // rest kept. Safe for the file system.
     static QString renamedStem(const QString &baseName, const QString &nameText, const QString &name);
 
+    // `stem` made safe for the file system, as renameTo() names a photo.
+    static QString cleanStem(const QString &stem);
+
     struct Result
     {
         bool renamed = false;
@@ -34,8 +37,13 @@ public:
     // Renames capture `captureId` for `name`. Photos whose files aren't all
     // on this computer (kept online) are left as they are.
     Result rename(qint64 captureId, const QString &name);
+    // The same, to the whole new stem `stem` (made safe for the file system).
+    Result renameTo(qint64 captureId, const QString &stem);
 
 private:
+    // `newName` the name part (`namePart`) or the whole stem.
+    Result renameTo(qint64 captureId, const QString &newName, bool namePart);
+
     QString m_connectionName;
 };
 

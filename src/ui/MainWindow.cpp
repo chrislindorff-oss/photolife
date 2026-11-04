@@ -29,6 +29,7 @@
 #include "net/UpdateChecker.h"
 #include "raw/RawPreview.h"
 #include "scan/CaptureRenamer.h"
+#include "scan/LibraryRenamer.h"
 #include "scan/FileScanner.h"
 #include "scan/CatalogueMaintenance.h"
 #include "scan/Exif.h"
@@ -77,6 +78,7 @@
 #include "ui/PlaceConfirmDialog.h"
 #include "ui/ContactSheetDialog.h"
 #include "ui/ReferencePhotoDialog.h"
+#include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/ServerDialogs.h"
 #include "ui/StaleMatchDialog.h"
@@ -3305,6 +3307,20 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
         connect(pasteLoc, &QAction::triggered, this, [this, chosen] { pasteLocation(chosen); });
 
         menu.addSeparator();
+        QAction *rename = menu.addAction(tr("Rename Files on Drive…"));
+        rename->setEnabled(onlineIds.size() < sel.size());
+        rename->setToolTip(onlineIds.size() < sel.size()
+                               ? tr("Rename these photos' actual files on your drive (and, if you like, their "
+                                    "folder).")
+                               : tr("These photos are kept online only: download them to rename them."));
+        connect(rename, &QAction::triggered, this, [this, grid] { renameOnDrive(grid); });
+        if (!m_lastRename.isEmpty()) {
+            QAction *undo = menu.addAction(tr("Undo Last Rename on Drive"));
+            undo->setToolTip(tr("Put back the names the last Rename Files on Drive gave."));
+            connect(undo, &QAction::triggered, this, &MainWindow::undoLastRename);
+        }
+
+        menu.addSeparator();
         QAction *remove = menu.addAction(
             selected > 1 ? tr("Remove %1 Photos from PhotoLife…").arg(selected)
                          : tr("Remove Photo from PhotoLife…"));
@@ -3825,6 +3841,103 @@ QString MainWindow::renameCapturesFromInat(const QList<InatMatchTarget> &targets
                                 int(failures.size()))
                                  .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
     return renamed > 0 ? tr("Renamed %n photo(s) \u201c%1\u201d.", nullptr, renamed).arg(name) : QString();
+}
+
+void MainWindow::renameOnDrive(QListView *grid)
+{
+    QList<qint64> ids;
+    for (const QModelIndex &s : grid->selectionModel()->selectedIndexes())
+        ids << s.data(model::CaptureListModel::IdRole).toLongLong();
+    if (ids.isEmpty() || !ensureCanEdit())
+        return;
+    RenameFilesDialog dialog(m_app.database().connectionName(), ids, m_app.settings(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QString title = tr("Rename Files on Drive");
+    LastRename done;
+    QStringList failures;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    scan::CaptureRenamer renamer(m_app.database().connectionName());
+    for (const scan::LibraryRenamer::Photo &p : dialog.photos()) {
+        if (!p.onDisk || p.newStem == p.oldStem)
+            continue;
+        const scan::CaptureRenamer::Result r = renamer.renameTo(p.captureId, p.newStem);
+        if (r.renamed)
+            done.stems.append({p.captureId, p.oldStem});
+        else if (!r.error.isEmpty())
+            failures << QStringLiteral("%1: %2").arg(p.oldStem, r.error);
+    }
+    QString folderNote;
+    if (const int folderId = dialog.folderId(); folderId > 0) {
+        QString before;
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        q.prepare(QStringLiteral("SELECT name FROM folder WHERE id = ?"));
+        q.addBindValue(folderId);
+        if (q.exec() && q.next())
+            before = q.value(0).toString();
+        const scan::LibraryRenamer::FolderResult r = scan::LibraryRenamer::renameFolder(
+            m_app.database().connectionName(), folderId, dialog.folderName(), m_app.settings().watchedRoots());
+        if (r.renamed) {
+            done.folderId = folderId;
+            done.folderName = before;
+            folderNote = tr(", and the folder to “%1”").arg(QFileInfo(r.newPath).fileName());
+        } else if (!r.error.isEmpty()) {
+            failures << tr("The folder “%1”: %2").arg(before, r.error);
+        }
+    }
+    QApplication::restoreOverrideCursor();
+    if (!done.isEmpty())
+        m_lastRename = done;
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, title,
+                             tr("These couldn't be renamed, and kept their names:\n\n%1")
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    reloadAfterMatching();
+    // So the folder's new name is read for its species, and watched.
+    if (done.folderId > 0)
+        requestScan();
+    const int renamed = int(done.stems.size());
+    statusBar()->showMessage((renamed == 1 ? tr("Renamed 1 photo on drive") : tr("Renamed %1 photos on drive").arg(renamed))
+                                 + folderNote
+                                 + tr(". Right-click → Undo Last Rename on Drive puts the names back."),
+                             10000);
+}
+
+void MainWindow::undoLastRename()
+{
+    if (m_lastRename.isEmpty() || !ensureCanEdit())
+        return;
+    const LastRename last = m_lastRename;
+    m_lastRename = {};
+    QStringList failures;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    if (last.folderId > 0) {
+        const scan::LibraryRenamer::FolderResult r = scan::LibraryRenamer::renameFolder(
+            m_app.database().connectionName(), last.folderId, last.folderName, m_app.settings().watchedRoots());
+        if (!r.renamed && !r.error.isEmpty())
+            failures << tr("The folder: %1").arg(r.error);
+    }
+    scan::CaptureRenamer renamer(m_app.database().connectionName());
+    int back = 0;
+    for (const auto &[captureId, stem] : last.stems) {
+        const scan::CaptureRenamer::Result r = renamer.renameTo(captureId, stem);
+        if (r.renamed)
+            ++back;
+        else if (!r.error.isEmpty())
+            failures << QStringLiteral("%1: %2").arg(stem, r.error);
+    }
+    QApplication::restoreOverrideCursor();
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, tr("Undo Last Rename on Drive"),
+                             tr("These couldn't be put back:\n\n%1")
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    reloadAfterMatching();
+    if (last.folderId > 0)
+        requestScan();
+    statusBar()->showMessage(back == 1 ? tr("Put back the name of 1 photo.")
+                                       : tr("Put back the names of %1 photos.").arg(back),
+                             6000);
 }
 
 void MainWindow::applyInatSpecies(const QList<InatMatchTarget> &targets,

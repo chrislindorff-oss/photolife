@@ -90,6 +90,9 @@ private:
     void rebuild();
     void refreshRow(int row);
     QString statusOf(const Row &row) const;
+    // "2 observations are already on iNaturalist (in green)…", from what the
+    // catalogue knows; empty when none are.
+    QString knownOnInat() const;
     QList<int> selectedRows() const;
     // The photo selected, as (row, photo); (-1, -1) when it isn't one photo.
     std::pair<int, int> selectedPhoto() const;
@@ -110,6 +113,13 @@ private:
     void removeSelected();
     void regroup();
     void openOnInat();
+    // The selected photos recorded as on iNaturalist, deleted there by hand:
+    // asks iNaturalist what's left, forgets what isn't, so Upload sends them again.
+    void notOnInatAnyMore();
+    // Once the catalogue has forgotten what isn't on iNaturalist: the
+    // observations holding these photos, made again from it.
+    void forgetAndReload(const QList<qint64> &observationIds, const QList<int> &photoCaptureIds,
+                         const QList<int> &wholeCaptureIds, const QList<int> &captureIds);
     // Photo `from` of row `fromRow` to position `to` of row `toRow`.
     void movePhoto(int fromRow, int from, int toRow, int to);
     void moveSelected(int by);

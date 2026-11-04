@@ -132,6 +132,62 @@ bool ObservationUploader::link(const QString &connectionName, const QList<int> &
     return q.exec();
 }
 
+ObservationUploader::ResetPlan ObservationUploader::planReset(const QList<UploadPhoto> &photos,
+                                                             const QHash<qint64, QSet<qint64>> &onInat)
+{
+    ResetPlan plan;
+    for (const UploadPhoto &p : photos) {
+        if (!p.done() || p.observationId <= 0)
+            continue;
+        const auto there = onInat.constFind(p.observationId);
+        if (there == onInat.constEnd()) {
+            if (!plan.goneObservations.contains(p.observationId))
+                plan.goneObservations << p.observationId;
+        } else if (!p.copyOf.isEmpty()) {
+            plan.copies << p.captureId;
+        } else if (p.photoId > 0 && !there->contains(p.photoId)) {
+            plan.photosGone << p.captureId;
+        } else {
+            plan.stillThere << p.captureId;
+        }
+    }
+    return plan;
+}
+
+bool ObservationUploader::forget(const QString &connectionName, const QList<qint64> &observationIds,
+                                 const QList<int> &photoCaptureIds, const QList<int> &wholeCaptureIds)
+{
+    QSqlDatabase db = QSqlDatabase::database(connectionName, false);
+    bool ok = true;
+    if (!observationIds.isEmpty()) {
+        QStringList ids;
+        for (qint64 id : observationIds)
+            ids << QString::number(id);
+        QSqlQuery q(db);
+        ok = q.exec(QStringLiteral("UPDATE capture SET inat_observation_id = NULL, inat_photo_id = NULL "
+                                   "WHERE inat_observation_id IN (%1)")
+                        .arg(ids.join(QLatin1Char(','))));
+    }
+    if (ok && !photoCaptureIds.isEmpty()) {
+        QStringList ids;
+        for (int id : photoCaptureIds)
+            ids << QString::number(id);
+        QSqlQuery q(db);
+        ok = q.exec(QStringLiteral("UPDATE capture SET inat_photo_id = NULL WHERE id IN (%1)")
+                        .arg(ids.join(QLatin1Char(','))));
+    }
+    if (ok && !wholeCaptureIds.isEmpty()) {
+        QStringList ids;
+        for (int id : wholeCaptureIds)
+            ids << QString::number(id);
+        QSqlQuery q(db);
+        ok = q.exec(QStringLiteral("UPDATE capture SET inat_observation_id = NULL, inat_photo_id = NULL "
+                                   "WHERE id IN (%1)")
+                        .arg(ids.join(QLatin1Char(','))));
+    }
+    return ok;
+}
+
 void ObservationUploader::start(const QList<Job> &jobs)
 {
     m_jobs = jobs;

@@ -27,6 +27,7 @@ private slots:
     void fetchObservationsOmitsDateParamsWhenInvalid();
     void fetchObservationsWithNoTaxaSearchesEveryTaxon();
     void fetchObservationsCanIncludeThoseWithoutPhotos();
+    void fetchObservationsByIdGivesThoseStillThere();
     void fetchAllObservationsSendsTaxonOnlyWhenGiven();
     void httpErrorBecomesOutcomeError();
     void invalidJsonBecomesOutcomeError();
@@ -329,6 +330,23 @@ void TestINatClient::fetchObservationsCanIncludeThoseWithoutPhotos()
     m_inat->fetchObservations(QStringLiteral("someone"), {}, 0, QDate(), QDate(), 1, [&](auto) { done = true; });
     QTRY_VERIFY(done);
     QVERIFY(m_transport->received.at(1).url.query().contains(QStringLiteral("photos=true")));
+}
+
+void TestINatClient::fetchObservationsByIdGivesThoseStillThere()
+{
+    wire([](const Transport::Request &, int) {
+        return FakeTransport::ok(QByteArrayLiteral(
+            R"({"total_results": 1, "results": [{"id": 901, "observed_on": "2025-10-18",
+                "photos": [{"id": 5001, "url": "https://x/square.jpg"}]}]})"));
+    });
+    std::optional<Outcome<ObservationPage>> got;
+    m_inat->fetchObservationsById({901, 902}, [&](Outcome<ObservationPage> out) { got = out; });
+    QTRY_VERIFY(got.has_value());
+    QCOMPARE(m_transport->received.at(0).url.toString(),
+             QStringLiteral("https://api.test/v1/observations?id=901,902&per_page=200"));
+    QCOMPARE(got->value.results.size(), 1);   // 902 was deleted
+    QCOMPARE(got->value.results.at(0).photos.size(), 1);
+    QCOMPARE(got->value.results.at(0).photos.at(0).id, 5001);
 }
 
 void TestINatClient::httpErrorBecomesOutcomeError()

@@ -35,6 +35,7 @@
 #include <QMessageBox>
 #include <QPointer>
 #include <QProgressBar>
+#include <QPainter>
 #include <QPushButton>
 #include <QPlainTextEdit>
 #include <QSignalBlocker>
@@ -59,6 +60,7 @@ enum Column { SpeciesColumn, DateColumn, PlaceColumn, PhotosColumn, NoteColumn, 
 
 constexpr int kRowRole = Qt::UserRole;        // a top-level item's row
 constexpr int kPhotoRole = Qt::UserRole + 1;  // a photo item's index in its row
+constexpr int kSentRole = Qt::UserRole + 3;   // on iNaturalist already: washed green
 
 QString speciesText(const taxonomy::Taxon &taxon)
 {
@@ -92,6 +94,18 @@ public:
     std::function<void(int fromRow, int from, int toRow, int to)> onDrop;
 
 protected:
+    // What's on iNaturalist already, in a light green wash across the whole
+    // row. (The theme's item style would hide an item's own background.)
+    void drawRow(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        if (index.siblingAtColumn(0).data(kSentRole).toBool()) {
+            QColor wash = themeColors(currentThemeVariant()).positive;
+            wash.setAlpha(55);
+            painter->fillRect(option.rect, wash);
+        }
+        QTreeWidget::drawRow(painter, option, index);
+    }
+
     void dropEvent(QDropEvent *event) override
     {
         const QList<QTreeWidgetItem *> dragged = selectedItems();
@@ -543,6 +557,9 @@ void InatUploadPage::rebuild()
                 child->setText(StatusColumn, tr("A copy of %1 is there").arg(p.copyOf));
             else if (p.linked)
                 child->setText(StatusColumn, tr("Not sent: the same sighting"));
+            child->setData(0, kSentRole, p.done());
+            if (p.done())
+                child->setToolTip(StatusColumn, tr("Already on iNaturalist: it won't be sent again."));
             if (i == 0 && row.obs.photos.size() > 1) {
                 child->setText(NoteColumn, tr("Cover"));
                 child->setToolTip(NoteColumn, tr("The photo iNaturalist shows for this observation."));
@@ -591,10 +608,12 @@ void InatUploadPage::refreshRow(int r)
     top->setForeground(StatusColumn, row.failed                             ? QBrush(colors.danger)
                                      : obs.problems() != 0 || row.held() ? QBrush(colors.statusPending)
                                                                          : QBrush());
+    top->setData(0, kSentRole, obs.uploaded());
     if (obs.uploaded()) {
         top->setFlags(top->flags() & ~Qt::ItemIsUserCheckable);
         top->setData(SpeciesColumn, Qt::CheckStateRole, QVariant());
-        top->setToolTip(StatusColumn, tr("Double-click to open it on iNaturalist."));
+        top->setToolTip(StatusColumn, tr("Already on iNaturalist, so it won't be sent again. Double-click to open "
+                                         "it there."));
     } else {
         top->setCheckState(SpeciesColumn, row.use && !obs.problems() ? Qt::Checked : Qt::Unchecked);
         top->setToolTip(StatusColumn, row.hits.isEmpty() ? QString()
@@ -1149,8 +1168,134 @@ void InatUploadPage::contextMenuAt(const QPoint &pos)
     QAction *open = menu.addAction(tr("Open on iNaturalist"));
     open->setEnabled(obs.observationId > 0);
     connect(open, &QAction::triggered, this, &InatUploadPage::openOnInat);
+    bool anyDone = false;
+    for (int id : ids)
+        for (const Row &row : std::as_const(m_rows))
+            for (const inat::UploadPhoto &p : row.obs.photos)
+                anyDone = anyDone || (p.captureId == id && p.done());
+    QAction *reset = menu.addAction(tr("Not on iNaturalist Any More…"));
+    reset->setToolTip(tr("Deleted on iNaturalist? PhotoLife asks iNaturalist what's still there, and forgets what "
+                         "isn't, so Upload sends it again."));
+    reset->setEnabled(!busy && anyDone);
+    connect(reset, &QAction::triggered, this, &InatUploadPage::notOnInatAnyMore);
     menu.setToolTipsVisible(true);
     menu.exec(m_tree->viewport()->mapToGlobal(pos));
+}
+
+void InatUploadPage::notOnInatAnyMore()
+{
+    if (isBusy() || (m_canEdit && !m_canEdit()))
+        return;
+    QList<inat::UploadPhoto> photos;
+    QList<qint64> observations;
+    const QList<int> ids = selectedCaptures();
+    for (const Row &row : std::as_const(m_rows))
+        for (const inat::UploadPhoto &p : row.obs.photos)
+            if (ids.contains(p.captureId) && p.done() && p.observationId > 0) {
+                photos << p;
+                if (!observations.contains(p.observationId))
+                    observations << p.observationId;
+            }
+    if (photos.isEmpty())
+        return;
+
+    const QString title = tr("Not on iNaturalist Any More");
+    m_message->setText(tr("Asking iNaturalist which of these are still there…"));
+    m_app.inat().setAccessToken(m_app.settings().inatApiToken());
+    QPointer<InatUploadPage> self(this);
+    m_app.inat().fetchObservationsById(observations, [self, photos, title](
+                                                         net::Outcome<net::ObservationPage> out) {
+        if (!self)
+            return;
+        QList<int> captures;
+        for (const inat::UploadPhoto &p : photos)
+            captures << p.captureId;
+        if (!out.ok()) {
+            self->m_message->setText(tr("Couldn't reach iNaturalist: %1").arg(out.error));
+            if (QMessageBox::warning(self.data(), title,
+                                     tr("Couldn't ask iNaturalist what's still there (%1).\n\nMark these %2 as not "
+                                        "on iNaturalist anyway? Upload then sends them as a new observation; any "
+                                        "still there would be on iNaturalist twice.")
+                                         .arg(out.error, plural(int(photos.size()), tr("1 photo"), tr("%1 photos"))),
+                                     QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel)
+                == QMessageBox::Yes)
+                self->forgetAndReload({}, {}, captures, captures);
+            return;
+        }
+        QHash<qint64, QSet<qint64>> onInat;
+        for (const taxonomy::Observation &o : out.value.results) {
+            QSet<qint64> photoIds;
+            for (const taxonomy::ObservationPhoto &p : o.photos)
+                photoIds.insert(p.id);
+            onInat.insert(o.id, photoIds);
+        }
+        const inat::ObservationUploader::ResetPlan plan = inat::ObservationUploader::planReset(photos, onInat);
+        QList<int> photosGone = plan.photosGone;
+        if (!plan.stillThere.isEmpty()) {
+            const bool others = !plan.goneObservations.isEmpty() || !plan.photosGone.isEmpty();
+            QMessageBox box(QMessageBox::Question, title,
+                            plural(int(plan.stillThere.size()),
+                                   tr("1 of these photos is still on iNaturalist, in its observation."),
+                                   tr("%1 of these photos are still on iNaturalist, in their observations."))
+                                + tr("\n\nSend them again anyway? They'd be added to that observation a second "
+                                     "time."),
+                            QMessageBox::Cancel, self);
+            QPushButton *keep = others ? box.addButton(tr("Only the Others"), QMessageBox::AcceptRole) : nullptr;
+            QPushButton *all = box.addButton(others ? tr("All of Them") : tr("Send Again Anyway"),
+                                             QMessageBox::DestructiveRole);
+            box.setDefaultButton(keep ? keep : static_cast<QPushButton *>(box.button(QMessageBox::Cancel)));
+            box.exec();
+            if (box.clickedButton() == all)
+                photosGone += plan.stillThere;
+            else if (!keep || box.clickedButton() != keep) {
+                self->m_message->clear();
+                return;
+            }
+        }
+        if (plan.goneObservations.isEmpty() && photosGone.isEmpty()) {
+            self->m_message->setText(plan.copies.isEmpty()
+                                         ? tr("Those are still on iNaturalist: nothing changed.")
+                                         : tr("Those are copies of photos still on iNaturalist: nothing changed."));
+            return;
+        }
+        self->forgetAndReload(plan.goneObservations, photosGone, {}, captures);
+        QStringList said;
+        if (!plan.goneObservations.isEmpty())
+            said << plural(int(plan.goneObservations.size()),
+                           tr("1 observation isn't on iNaturalist any more: its photos go as a new one."),
+                           tr("%1 observations aren't on iNaturalist any more: their photos go as new ones."));
+        if (!photosGone.isEmpty())
+            said << plural(int(photosGone.size()), tr("1 photo goes back into its observation."),
+                           tr("%1 photos go back into their observations."));
+        if (!plan.copies.isEmpty())
+            said << plural(int(plan.copies.size()), tr("1 is a copy of a photo still there, so it stays."),
+                           tr("%1 are copies of photos still there, so they stay."));
+        self->m_message->setText(said.join(QLatin1Char(' ')) + tr(" Press Upload to send them."));
+    });
+}
+
+void InatUploadPage::forgetAndReload(const QList<qint64> &observationIds, const QList<int> &photoCaptureIds,
+                                     const QList<int> &wholeCaptureIds, const QList<int> &captureIds)
+{
+    if (!inat::ObservationUploader::forget(m_app.database().connectionName(), observationIds, photoCaptureIds,
+                                           wholeCaptureIds)) {
+        m_message->setText(tr("Couldn't update the catalogue: nothing changed."));
+        return;
+    }
+    // The observations holding them, grouped again from what's recorded now.
+    QList<int> again;
+    for (int r = int(m_rows.size()) - 1; r >= 0; --r) {
+        bool holds = false;
+        for (const inat::UploadPhoto &p : m_rows.at(r).obs.photos)
+            holds = holds || captureIds.contains(p.captureId)
+                    || observationIds.contains(p.observationId);
+        if (!holds)
+            continue;
+        for (const inat::UploadPhoto &p : m_rows.at(r).obs.photos)
+            again << p.captureId;
+        m_rows.removeAt(r);
+    }
+    addCaptures(again);
 }
 
 void InatUploadPage::movePhoto(int fromRow, int from, int toRow, int to)
@@ -1317,7 +1462,8 @@ void InatUploadPage::checkInat(bool thenUpload)
         if (thenUpload)
             sendReady();
         else
-            m_message->setText(tr("Nothing to look for: each needs a date."));
+            m_message->setText(knownOnInat().isEmpty() ? tr("Nothing to look for: each needs a date.")
+                                                       : knownOnInat() + tr(" There's nothing else to look for."));
         return;
     }
     m_uploadAfterCheck = thenUpload;
@@ -1372,13 +1518,17 @@ void InatUploadPage::checkFinished(bool ok, const QString &error, int status,
             sendReady();
         return;
     }
+    const QString known = knownOnInat();
     if (held == 0) {
-        m_message->setText(tr("None of these is on iNaturalist already, as far as PhotoLife can tell."));
+        m_message->setText(known.isEmpty()
+                               ? tr("None of these is on iNaturalist already, as far as PhotoLife can tell.")
+                               : known + tr(" Of the others, none looks like one already there."));
         if (m_uploadAfterCheck)
             sendReady();
         return;
     }
-    m_message->setText(heldText + tr(": they're held. Double-click their Status to compare and decide."));
+    m_message->setText((known.isEmpty() ? QString() : known + QLatin1Char(' '))
+                       + heldText + tr(": they're held. Double-click their Status to compare and decide."));
     if (!m_uploadAfterCheck)
         return;
     if (ready == 0) {
@@ -1394,6 +1544,25 @@ void InatUploadPage::checkFinished(bool ok, const QString &error, int status,
                               QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes)
         == QMessageBox::Yes)
         sendReady();
+}
+
+QString InatUploadPage::knownOnInat() const
+{
+    int whole = 0, part = 0;
+    for (const Row &row : std::as_const(m_rows)) {
+        if (row.obs.uploaded())
+            ++whole;
+        else if (row.obs.observationId > 0)
+            ++part;
+    }
+    QStringList said;
+    if (whole > 0)
+        said << plural(whole, tr("1 observation is already on iNaturalist"),
+                       tr("%1 observations are already on iNaturalist"));
+    if (part > 0)
+        said << plural(part, tr("1 is there with photos still to add"), tr("%1 are there with photos still to add"));
+    return said.isEmpty() ? QString()
+                          : said.join(tr(", and ")) + tr(" (in green): they won't be sent again.");
 }
 
 void InatUploadPage::sendReady()

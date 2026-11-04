@@ -499,6 +499,20 @@ void INatClient::fetchObservations(const QString &userLogin, const QList<qint64>
     getObservationPage(url, std::move(done));
 }
 
+void INatClient::fetchObservationsById(const QList<qint64> &observationIds,
+                                       std::function<void(Outcome<ObservationPage>)> done)
+{
+    QStringList ids;
+    for (qint64 id : observationIds.mid(0, 200))
+        ids << QString::number(id);
+    QUrl url(m_baseUrl + QStringLiteral("/observations"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("id"), ids.join(QLatin1Char(',')));
+    q.addQueryItem(QStringLiteral("per_page"), QStringLiteral("200"));
+    url.setQuery(q);
+    getObservationPage(url, std::move(done));
+}
+
 void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 taxonId,
                                       qint64 idAbove,
                                       std::function<void(Outcome<ObservationPage>)> done)

@@ -36,6 +36,7 @@ constexpr auto kExportThumbnailsOnly = "export/thumbnailsOnly";
 constexpr auto kExportRenameFiles = "export/renameFiles";
 constexpr auto kExportFileNamePattern = "export/fileNamePattern";   // JSON
 constexpr auto kExportAuthorName = "export/authorName";
+constexpr auto kLibraryRenamePattern = "library/renamePattern";   // JSON
 constexpr auto kContactSheetOptions = "export/contactSheet/options";   // JSON
 constexpr auto kContactSheetFolder = "export/contactSheet/folder";
 
@@ -535,6 +536,18 @@ collection::FileNamePattern Settings::exportFileNamePattern() const
 void Settings::setExportFileNamePattern(const collection::FileNamePattern &pattern)
 {
     m_settings.setValue(QLatin1String(kExportFileNamePattern),
+                        QJsonDocument(pattern.toJson()).toJson(QJsonDocument::Compact));
+}
+
+collection::FileNamePattern Settings::libraryRenamePattern() const
+{
+    const QByteArray json = m_settings.value(QLatin1String(kLibraryRenamePattern)).toByteArray();
+    return collection::FileNamePattern::fromJson(QJsonDocument::fromJson(json).object());
+}
+
+void Settings::setLibraryRenamePattern(const collection::FileNamePattern &pattern)
+{
+    m_settings.setValue(QLatin1String(kLibraryRenamePattern),
                         QJsonDocument(pattern.toJson()).toJson(QJsonDocument::Compact));
 }
 

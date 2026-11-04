@@ -405,6 +405,10 @@ private:
     void reviewTreeChanges(int projectId, const QList<taxonomy::TreeChange> &changes);
     // Renames the photos' files for `name`; says what was done, for the status bar.
     QString renameCapturesFromInat(const QList<InatMatchTarget> &targets, const QString &name);
+    // Rename Files on Drive: the photos selected in `grid` (and their folder).
+    void renameOnDrive(QListView *grid);
+    // Puts back the names the last Rename Files on Drive gave.
+    void undoLastRename();
     void removeMissingCaptures();
     void fixRawGeolocation();
     void fetchPhotoLocalities();
@@ -632,6 +636,17 @@ private:
     QString m_groupMatchName;   // set while a group match runs; empty for a full Match Library
     bool m_matchingDownload = false;   // set while matching just an iNaturalist download's photos
     QComboBox *m_filterCombo = nullptr;
+
+    // The last Rename Files on Drive, this session, so it can be undone:
+    // each photo's name before it, and the folder's.
+    struct LastRename
+    {
+        QList<QPair<qint64, QString>> stems;
+        int folderId = 0;
+        QString folderName;
+        bool isEmpty() const { return stems.isEmpty() && folderId == 0; }
+    };
+    LastRename m_lastRename;
 };
 
 } // namespace pl

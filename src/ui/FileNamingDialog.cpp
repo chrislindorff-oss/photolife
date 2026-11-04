@@ -62,17 +62,23 @@ QString itemText(NameToken token, const QString &text)
 
 FileNamingDialog::FileNamingDialog(pl::Database &db, int projectId, const FileNamePattern &pattern,
                                    const QString &authorName, QWidget *parent)
-    : QDialog(parent)
+    : FileNamingDialog(loadSamples(db, projectId), pattern, authorName,
+                       tr("Build the name each exported file gets. Parts a photo has no value for "
+                          "(e.g. no common name or no location) are left out of its name. A photo's RAW "
+                          "and JPEG get the same name, and each keeps its own extension."),
+                       parent)
+{
+}
+
+FileNamingDialog::FileNamingDialog(const QList<Sample> &samples, const FileNamePattern &pattern,
+                                   const QString &authorName, const QString &hintText, QWidget *parent)
+    : QDialog(parent), m_samples(samples)
 {
     setWindowTitle(tr("File Naming"));
     setModal(true);
     resize(620, 560);
 
-    auto *hint = new QLabel(
-        tr("Build the name each exported file gets. Parts a photo has no value for "
-           "(e.g. no common name or no location) are left out of its name. A photo's RAW "
-           "and JPEG get the same name, and each keeps its own extension."),
-        this);
+    auto *hint = new QLabel(hintText, this);
     hint->setWordWrap(true);
 
     m_presets = new QComboBox(this);
@@ -182,7 +188,19 @@ FileNamingDialog::FileNamingDialog(pl::Database &db, int projectId, const FileNa
     layout->addWidget(previewBox);
     layout->addWidget(buttons);
 
-    loadSamples(db, projectId);
+    if (m_samples.isEmpty()) {
+        Sample sample;
+        sample.fields.originalStem = QStringLiteral("IMG_4821");
+        sample.suffix = QStringLiteral("jpg");
+        sample.fields.captured = QDateTime(QDate(2024, 3, 9), QTime(10, 42, 7));
+        sample.fields.scientificName = QStringLiteral("Litoria caerulea");
+        sample.fields.commonName = QStringLiteral("Australian Green Tree Frog");
+        sample.fields.town = QStringLiteral("Cairns");
+        sample.fields.state = QStringLiteral("Queensland");
+        sample.fields.country = QStringLiteral("Australia");
+        sample.fields.fileLocality = QStringLiteral("Barron Gorge");
+        m_samples << sample;
+    }
     setPattern(pattern.isEmpty() ? defaultPattern() : pattern);
 
     connect(m_separator, &QComboBox::currentIndexChanged, this, &FileNamingDialog::updatePreview);
@@ -203,13 +221,14 @@ FileNamePattern FileNamingDialog::defaultPattern()
     return pattern;
 }
 
-void FileNamingDialog::loadSamples(pl::Database &db, int projectId)
+QList<FileNamingDialog::Sample> FileNamingDialog::loadSamples(pl::Database &db, int projectId)
 {
+    QList<Sample> samples;
     // A few real photos from this tree, so the preview shows names the user
     // will actually get -- preferring ones with a date and a locality.
     QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
     q.prepare(QStringLiteral(
-        "SELECT r.path, c.captured_on, t.name, t.common_name, g.locality "
+        "SELECT r.path, c.captured_on, t.name, t.common_name, g.locality, c.locality_text "
         "FROM capture c "
         "JOIN capture_match m ON m.id = ("
         "   SELECT id FROM capture_match WHERE capture_id = c.id "
@@ -238,22 +257,11 @@ void FileNamingDialog::loadSamples(pl::Database &db, int projectId)
             sample.fields.town = place.town;
             sample.fields.state = place.state;
             sample.fields.country = place.country;
-            m_samples << sample;
+            sample.fields.fileLocality = q.value(5).toString();
+            samples << sample;
         }
     }
-
-    if (m_samples.isEmpty()) {
-        Sample sample;
-        sample.fields.originalStem = QStringLiteral("IMG_4821");
-        sample.suffix = QStringLiteral("jpg");
-        sample.fields.captured = QDateTime(QDate(2024, 3, 9), QTime(10, 42, 7));
-        sample.fields.scientificName = QStringLiteral("Litoria caerulea");
-        sample.fields.commonName = QStringLiteral("Australian Green Tree Frog");
-        sample.fields.town = QStringLiteral("Cairns");
-        sample.fields.state = QStringLiteral("Queensland");
-        sample.fields.country = QStringLiteral("Australia");
-        m_samples << sample;
-    }
+    return samples;
 }
 
 void FileNamingDialog::setPattern(const FileNamePattern &pattern)

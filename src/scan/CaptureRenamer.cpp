@@ -36,6 +36,11 @@ QString cleaned(const QString &text)
 
 } // namespace
 
+QString CaptureRenamer::cleanStem(const QString &stem)
+{
+    return cleaned(stem.left(kMaxStem));
+}
+
 CaptureRenamer::CaptureRenamer(QString connectionName) : m_connectionName(std::move(connectionName)) {}
 
 QString CaptureRenamer::renamedStem(const QString &baseName, const QString &nameText, const QString &name)
@@ -52,6 +57,16 @@ QString CaptureRenamer::renamedStem(const QString &baseName, const QString &name
 }
 
 CaptureRenamer::Result CaptureRenamer::rename(qint64 captureId, const QString &name)
+{
+    return renameTo(captureId, name, true);
+}
+
+CaptureRenamer::Result CaptureRenamer::renameTo(qint64 captureId, const QString &stem)
+{
+    return renameTo(captureId, stem, false);
+}
+
+CaptureRenamer::Result CaptureRenamer::renameTo(qint64 captureId, const QString &newName, bool namePart)
 {
     Result result;
     QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
@@ -107,7 +122,7 @@ CaptureRenamer::Result CaptureRenamer::rename(qint64 captureId, const QString &n
 
     // A free name: no file of that stem in the folder (any extension, any
     // case) and no other photo of that name in the catalogue.
-    QString stem = renamedStem(base, nameText, name);
+    QString stem = namePart ? renamedStem(base, nameText, newName) : cleanStem(newName);
     if (stem.isEmpty() || stem == base) {
         result.error = stem.isEmpty() ? QStringLiteral("no name") : QString();
         result.newBaseName = base;

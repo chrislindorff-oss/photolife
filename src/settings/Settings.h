@@ -200,6 +200,10 @@ public:
     void setExportFileNamePattern(const collection::FileNamePattern &pattern);
     QString exportAuthorName() const;
     void setExportAuthorName(const QString &name);
+    // Rename Files on Drive's "build the whole name from parts" pattern,
+    // kept apart from the export's.
+    collection::FileNamePattern libraryRenamePattern() const;
+    void setLibraryRenamePattern(const collection::FileNamePattern &pattern);
 
     // The Reference Photos "Export Contact Sheet (PDF)…" dialog's last
     // choices (all but the title and subtitle, which follow the tree), and

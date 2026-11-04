@@ -17,6 +17,7 @@ enum class NameToken {
     Town,
     State,
     Country,
+    FileLocality,   // the place in the library file's own name ("Sailors Tk, Steiglitz")
     Author,
     OriginalName,   // the library file's own name, without its extension
     Sequence,       // 001, 002, ... among photos that would otherwise share a name
@@ -40,6 +41,7 @@ struct NameFields
     QString town;
     QString state;
     QString country;
+    QString fileLocality;   // capture.locality_text
     QString author;
     QString originalStem;
     int sequence = 0;     // 0 = leave the Sequence part out

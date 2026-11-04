@@ -25,6 +25,7 @@ constexpr TokenInfo kTokens[] = {
     {NameToken::Town, "town", QT_TRANSLATE_NOOP("FileNamePattern", "Town")},
     {NameToken::State, "state", QT_TRANSLATE_NOOP("FileNamePattern", "State")},
     {NameToken::Country, "country", QT_TRANSLATE_NOOP("FileNamePattern", "Country")},
+    {NameToken::FileLocality, "fileLocality", QT_TRANSLATE_NOOP("FileNamePattern", "Locality (from file name)")},
     {NameToken::Author, "author", QT_TRANSLATE_NOOP("FileNamePattern", "Author")},
     {NameToken::OriginalName, "originalName", QT_TRANSLATE_NOOP("FileNamePattern", "Original filename")},
     {NameToken::Sequence, "sequence", QT_TRANSLATE_NOOP("FileNamePattern", "Sequence number")},
@@ -63,6 +64,7 @@ QString rawValue(const NamePart &part, const FileNamePattern &pattern, const Nam
     case NameToken::Town: return f.town;
     case NameToken::State: return f.state;
     case NameToken::Country: return f.country;
+    case NameToken::FileLocality: return f.fileLocality;
     case NameToken::Author: return f.author;
     case NameToken::OriginalName: return f.originalStem;
     case NameToken::Sequence:

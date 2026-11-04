@@ -1138,22 +1138,40 @@ void OrganiseView::changed(int row)
     updatePreview();
 }
 
-void OrganiseView::nameAt(int row, bool identify)
+bool OrganiseView::nameAt(int row, bool identify, QWidget *over)
 {
     if (row < 0 || row >= m_session.count())
-        return;
+        return false;
     const organise::Item &item = m_session.items().at(row);
-    NamePopup popup(m_app, item, m_session.nameAt(row), m_session.recentNames(), this);
+    NamePopup popup(m_app, item, m_session.nameAt(row), m_session.recentNames(), over ? over : this);
     if (identify)
         popup.startIdentify();
-    // Beside the photo it names.
-    const QRect r = m_list->visualRect(m_model->index(row));
-    QPoint at = m_list->viewport()->mapToGlobal(QPoint(r.right() + 4, r.top()));
-    popup.move(at);
+    if (over) {
+        // Over the viewer, which may be full screen.
+        popup.move(over->geometry().center() - popup.rect().center());
+    } else {
+        // Beside the photo it names.
+        const QRect r = m_list->visualRect(m_model->index(row));
+        QPoint at = m_list->viewport()->mapToGlobal(QPoint(r.right() + 4, r.top()));
+        popup.move(at);
+    }
     if (popup.exec() != QDialog::Accepted)
-        return;
+        return false;
     m_session.setName(row, popup.cleared() ? QString() : popup.chosen());
     changed(row);
+    return true;
+}
+
+void OrganiseView::refreshViewer(int row)
+{
+    if (!m_viewer)
+        return;
+    // A name carries on to the photos after it, so their captions change too.
+    for (int i = 0; i < m_session.count(); ++i)
+        m_viewer->updateItem(i, viewerItem(i));
+    const QModelIndex at = m_model->index(row);
+    m_list->setCurrentIndex(at);
+    m_list->scrollTo(at);
 }
 
 void OrganiseView::toggleRejected(int row)
@@ -1237,6 +1255,7 @@ ImageViewer::Item OrganiseView::viewerItem(int row) const
                 + (m_session.isBest(row) ? tr(" · ★ best shot") : QString());
     v.canReject = true;
     v.rejected = m_session.isRejected(row);
+    v.canName = true;
     v.canIdentify = true;
     v.hasGps = it.hasGps();
     if (it.hasGps()) {
@@ -1341,10 +1360,12 @@ void OrganiseView::showFullSize(int row)
                 return;
             m_session.setName(i, IdentifyPanel::photoName(m_app, taxon));
             changed(i);
-            m_viewer->updateItem(i, viewerItem(i));
-            const QModelIndex at = m_model->index(i);
-            m_list->setCurrentIndex(at);
-            m_list->scrollTo(at);
+            refreshViewer(i);
+        });
+        // N in the viewer: the Name popup, over it.
+        connect(m_viewer, &ImageViewer::nameRequested, this, [this](int i) {
+            if (nameAt(i, false, m_viewer))
+                refreshViewer(i);
         });
     }
     m_viewer->show();

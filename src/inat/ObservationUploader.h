@@ -4,6 +4,7 @@
 #include "net/INatClient.h"
 
 #include <QList>
+#include <QSet>
 #include <QObject>
 #include <QString>
 
@@ -50,6 +51,23 @@ public:
     // sending them (the user said it's the same sighting): a negative
     // inat_photo_id, minus the capture's own id.
     static bool link(const QString &connectionName, const QList<int> &captureIds, qint64 observationId);
+
+    // Sending photos again that are recorded as on iNaturalist but aren't
+    // (deleted there by hand), given `onInat`: each of their observations
+    // still there, with its photos' ids.
+    struct ResetPlan
+    {
+        QList<qint64> goneObservations;   // deleted there: forgotten for every photo of theirs
+        QList<int> photosGone;            // their observation is there without them: re-added to it
+        QList<int> stillThere;            // on iNaturalist still (or the same sighting as one there)
+        QList<int> copies;                // copies of a photo still there: nothing to forget of their own
+    };
+    static ResetPlan planReset(const QList<UploadPhoto> &photos, const QHash<qint64, QSet<qint64>> &onInat);
+    // Forgets every capture's record of these observations, these captures'
+    // photos (they stay with their observation, to be added to it), and all
+    // that's recorded of `wholeCaptureIds` (to go as a new observation).
+    static bool forget(const QString &connectionName, const QList<qint64> &observationIds,
+                       const QList<int> &photoCaptureIds, const QList<int> &wholeCaptureIds = {});
 
 signals:
     void jobStarted(int key);

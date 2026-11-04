@@ -178,6 +178,14 @@ ImageViewer::ImageViewer(QWidget *parent)
     m_reject->hide();
     connect(m_reject, &QPushButton::clicked, this, &ImageViewer::toggleReject);
 
+    m_name = new QPushButton(tr("Name (N)"), this);
+    m_name->setToolTip(tr("Name this photo, and the photos after it up to the next named one."));
+    m_name->hide();
+    connect(m_name, &QPushButton::clicked, this, [this] {
+        if (!m_items.isEmpty() && m_items.at(m_index).canName)
+            emit nameRequested(m_index);
+    });
+
     m_identifyButton = new QPushButton(tr("Identify (I)"), this);
     m_identifyButton->setToolTip(tr("Ask iNaturalist's computer vision what this photo shows. "
                                     "Shift+drag round something small first to ask about just that "
@@ -191,6 +199,7 @@ ImageViewer::ImageViewer(QWidget *parent)
     nav->addWidget(m_bestShot);
     nav->addWidget(m_viewOnMap);
     nav->addWidget(m_reject);
+    nav->addWidget(m_name);
     nav->addWidget(m_identifyButton);
     nav->addStretch(1);
     nav->addWidget(m_counter);
@@ -300,6 +309,7 @@ void ImageViewer::showCurrent()
         m_bestShot->hide();
         m_viewOnMap->hide();
         m_reject->hide();
+        m_name->hide();
         m_identifyButton->hide();
         return;
     }
@@ -330,6 +340,7 @@ void ImageViewer::showCurrent()
     updateBestShotButton();
     updateMapButton();
     updateRejectButton();
+    updateNameButton();
     updateIdentifyButton();
 }
 
@@ -349,6 +360,11 @@ void ImageViewer::updateRejectButton()
     m_reject->setStyleSheet(rejected ? QStringLiteral("QPushButton { color: #c33; font-weight: bold; }")
                                      : QString());
     m_reject->show();
+}
+
+void ImageViewer::updateNameButton()
+{
+    m_name->setVisible(!m_items.isEmpty() && m_items.at(m_index).canName);
 }
 
 void ImageViewer::toggleReject()
@@ -380,6 +396,7 @@ void ImageViewer::updateItem(int index, const Item &item)
     updateBestShotButton();
     updateMapButton();
     updateRejectButton();
+    updateNameButton();
     updateIdentifyButton();
 }
 
@@ -647,6 +664,12 @@ void ImageViewer::keyPressEvent(QKeyEvent *event)
     case Qt::Key_R:
         if (!m_items.isEmpty() && m_items.at(m_index).canReject)
             toggleReject();
+        else
+            QDialog::keyPressEvent(event);
+        break;
+    case Qt::Key_N:
+        if (!m_items.isEmpty() && m_items.at(m_index).canName)
+            emit nameRequested(m_index);
         else
             QDialog::keyPressEvent(event);
         break;

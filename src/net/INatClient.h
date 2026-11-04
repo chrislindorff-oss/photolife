@@ -215,6 +215,12 @@ public:
                            qint64 placeId, const QDate &dateFrom, const QDate &dateTo, int page,
                            std::function<void(Outcome<ObservationPage>)> done, bool photosOnly = true);
 
+    // GET /v1/observations?id=: those of these observations still on
+    // iNaturalist (at most 200), with their photos. One deleted there is
+    // simply missing from the results.
+    void fetchObservationsById(const QList<qint64> &observationIds,
+                               std::function<void(Outcome<ObservationPage>)> done);
+
     // Every one of the user's observations with photos, in ascending id
     // order: pass 0 for the first page, then the last result's id to
     // continue. An empty page means there are no more. `taxonId` > 0 limits
