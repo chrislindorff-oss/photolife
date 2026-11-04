@@ -20,6 +20,7 @@
 #include <QSqlQuery>
 
 #include "app/Application.h"
+#include "ui/MainWindow.h"
 #include "checklist/ChecklistImporter.h"
 #include "checklist/ChecklistParser.h"
 #include "db/Database.h"
@@ -563,5 +564,10 @@ int main(int argc, char *argv[])
                                           parser.value(intoOption));
 
     app.showMainWindow();
+    // The Nature Photo of the Day, once the window is up.
+    QTimer::singleShot(600, &app, [&app] {
+        if (pl::MainWindow *window = app.mainWindow())
+            window->showPhotoOfTheDay(true);
+    });
     return QApplication::exec();
 }

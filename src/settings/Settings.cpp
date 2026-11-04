@@ -560,6 +560,51 @@ void Settings::setContactSheetOptions(const collection::ContactSheetOptions &opt
                         QJsonDocument(options.toJson()).toJson(QJsonDocument::Compact));
 }
 
+bool Settings::photoOfDayAtStartup() const
+{
+    return m_settings.value(QStringLiteral("photoOfDay/atStartup"), true).toBool();
+}
+
+void Settings::setPhotoOfDayAtStartup(bool on)
+{
+    m_settings.setValue(QStringLiteral("photoOfDay/atStartup"), on);
+}
+
+QString Settings::photoOfDayKey(const char *name) const
+{
+    const QString key = QStringLiteral("photoOfDay/") + QLatin1String(name);
+    return profileKey(key, key);
+}
+
+QDate Settings::photoOfDayDate() const
+{
+    return QDate::fromString(m_settings.value(photoOfDayKey("date")).toString(), Qt::ISODate);
+}
+
+int Settings::photoOfDayCaptureId() const
+{
+    return m_settings.value(photoOfDayKey("captureId"), 0).toInt();
+}
+
+QList<int> Settings::photoOfDayShown() const
+{
+    QList<int> ids;
+    const QString value = m_settings.value(photoOfDayKey("shown")).toString();
+    for (const QString &id : value.split(QLatin1Char(','), Qt::SkipEmptyParts))
+        ids << id.toInt();
+    return ids;
+}
+
+void Settings::setPhotoOfDay(const QDate &day, int captureId, const QList<int> &shown)
+{
+    QStringList ids;
+    for (int id : shown)
+        ids << QString::number(id);
+    m_settings.setValue(photoOfDayKey("date"), day.toString(Qt::ISODate));
+    m_settings.setValue(photoOfDayKey("captureId"), captureId);
+    m_settings.setValue(photoOfDayKey("shown"), ids.join(QLatin1Char(',')));
+}
+
 bool Settings::guideShowAtStartup() const
 {
     return m_settings.value(QStringLiteral("guide/showAtStartup"), true).toBool();

@@ -113,6 +113,13 @@ public:
     explicit MainWindow(Application &app, QWidget *parent = nullptr);
     ~MainWindow() override;
 
+    // Nature Photo of the Day: today's photo (a new one each day). At
+    // start-up, only when that's turned on, and quietly nothing when there's
+    // no photo to show.
+    void showPhotoOfTheDay(bool atStartup);
+    // All Library Photos, with this photo selected.
+    void showCaptureInLibrary(int captureId);
+
 protected:
     void closeEvent(QCloseEvent *event) override;
 

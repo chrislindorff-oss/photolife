@@ -264,6 +264,15 @@ public:
     // done; and the steps it can't see in the catalogue.
     bool guideShowAtStartup() const;
     void setGuideShowAtStartup(bool on);
+    // Nature Photo of the Day: whether it pops up when PhotoLife opens, and
+    // which photo it is today (and which have had their day already) -- the
+    // latter per catalogue, whose photos they are.
+    bool photoOfDayAtStartup() const;
+    void setPhotoOfDayAtStartup(bool on);
+    QDate photoOfDayDate() const;
+    int photoOfDayCaptureId() const;
+    QList<int> photoOfDayShown() const;
+    void setPhotoOfDay(const QDate &day, int captureId, const QList<int> &shown);
     bool guideExploredCoverage() const;
     void setGuideExploredCoverage(bool on);
     bool guideOrganised() const;
@@ -274,6 +283,7 @@ private:
     QString activeServerId() const;
     // A per-profile key: Local keeps the original (pre-profile) keys, a
     // server its own group.
+    QString photoOfDayKey(const char *name) const;   // per catalogue
     QString profileKey(const QString &serverKey, const QString &localKey) const;
 
     mutable QSettings m_settings;

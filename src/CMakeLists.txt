@@ -4,6 +4,7 @@ qt_add_library(photolife_core STATIC
     app/Logging.h           app/Logging.cpp
     app/StorageStats.h      app/StorageStats.cpp
     catalogue/BestShotStore.h catalogue/BestShotStore.cpp
+    catalogue/PhotoOfTheDay.h catalogue/PhotoOfTheDay.cpp
     catalogue/UntreedMatchStore.h catalogue/UntreedMatchStore.cpp
     checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
     checklist/ChecklistParser.h checklist/ChecklistParser.cpp
@@ -123,6 +124,7 @@ qt_add_library(photolife_core STATIC
     ui/ImageViewer.h        ui/ImageViewer.cpp
     ui/InatObservationMatchDialog.h ui/InatObservationMatchDialog.cpp
     ui/InatUploadPage.h ui/InatUploadPage.cpp
+    ui/PhotoOfTheDayDialog.h ui/PhotoOfTheDayDialog.cpp
     ui/UploadDuplicateDialog.h ui/UploadDuplicateDialog.cpp
     ui/UploadPhotoPicker.h ui/UploadPhotoPicker.cpp
     ui/InatComparePage.h    ui/InatComparePage.cpp

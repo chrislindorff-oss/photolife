@@ -3,6 +3,7 @@
 #include "app/Application.h"
 #include "app/StorageStats.h"
 #include "catalogue/BestShotStore.h"
+#include "catalogue/PhotoOfTheDay.h"
 #include "catalogue/UntreedMatchStore.h"
 #include "db/Database.h"
 #include "db/PostgresConnectionMonitor.h"
@@ -52,6 +53,7 @@
 #include "ui/CatalogueConnectDialog.h"
 #include "ui/CatalogueSettingsDialog.h"
 #include "ui/CaptureDelegate.h"
+#include "ui/PhotoOfTheDayDialog.h"
 #include "ui/PhotosOnComputerDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/ExportDialog.h"
@@ -794,6 +796,47 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
         showGuide();
 }
 
+void MainWindow::showPhotoOfTheDay(bool atStartup)
+{
+    if (atStartup && !m_app.settings().photoOfDayAtStartup())
+        return;
+    const Settings &settings = m_app.settings();
+    const catalogue::PhotoOfTheDay::State state{settings.photoOfDayDate(), settings.photoOfDayCaptureId(),
+                                                settings.photoOfDayShown()};
+    const std::optional<catalogue::PhotoOfTheDay::Pick> pick = catalogue::PhotoOfTheDay::choose(
+        m_app.database().connectionName(), QDate::currentDate(), state,
+        [](const QString &path) { return !CaptureDelegate::isOnlineOnly(path) && QFileInfo::exists(path); });
+    if (!pick) {
+        if (!atStartup)
+            QMessageBox::information(this, tr("Nature Photo of the Day"),
+                                     tr("There's no photo to show yet: it's chosen from your library's identified "
+                                        "photos (best shots first) whose files are on this computer."));
+        return;
+    }
+    m_app.settings().setPhotoOfDay(pick->state.day, pick->state.captureId, pick->state.shown);
+    auto *dialog = new PhotoOfTheDayDialog(m_app, *pick, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &PhotoOfTheDayDialog::showInLibrary, this, &MainWindow::showCaptureInLibrary);
+    dialog->open();
+}
+
+void MainWindow::showCaptureInLibrary(int captureId)
+{
+    m_viewLibraryAction->setChecked(true);
+    for (int r = 0; r < m_model->rowCount(); ++r) {
+        const QModelIndex idx = m_model->index(r, 0);
+        if (idx.data(model::CaptureListModel::IdRole).toInt() != captureId)
+            continue;
+        m_photoStack->setCurrentWidget(m_grid);
+        m_grid->clearSelection();
+        m_grid->setCurrentIndex(idx);
+        m_grid->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+        m_grid->setFocus();
+        return;
+    }
+    statusBar()->showMessage(tr("That photo isn't among those All Library Photos is showing now."), 8000);
+}
+
 bool MainWindow::hasAustralianTree() const
 {
     auto &store = m_app.taxonomyStore();
@@ -1130,6 +1173,17 @@ void MainWindow::buildViewMenu()
     });
     // In step however it changed (the window manager's own control too).
     connect(m_viewMenu, &QMenu::aboutToShow, fullScreen, [this, fullScreen] { fullScreen->setChecked(isFullScreen()); });
+
+    m_viewMenu->addAction(tr("Nature &Photo of the Day…"), this, [this] { showPhotoOfTheDay(false); });
+    auto *photoAtStartup = m_viewMenu->addAction(tr("Show Photo of the Day at Start-up"));
+    photoAtStartup->setCheckable(true);
+    photoAtStartup->setToolTip(tr("A photo from your library, best shots first, pops up when PhotoLife opens: "
+                                  "a new one each day."));
+    connect(photoAtStartup, &QAction::toggled, this, [this](bool on) { m_app.settings().setPhotoOfDayAtStartup(on); });
+    connect(m_viewMenu, &QMenu::aboutToShow, photoAtStartup, [this, photoAtStartup] {
+        const QSignalBlocker block(photoAtStartup);
+        photoAtStartup->setChecked(m_app.settings().photoOfDayAtStartup());
+    });
 
     auto *displayMenu = m_viewMenu->addMenu(tr("&Display…"));
     displayMenu->menuAction()->setToolTip(

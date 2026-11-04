@@ -76,6 +76,7 @@ public:
                      std::optional<CatalogueDescriptor> descriptorOverride = {});
 
     void showMainWindow();
+    MainWindow *mainWindow() const { return m_mainWindow.get(); }
 
     Database &database();
     Settings &settings();
