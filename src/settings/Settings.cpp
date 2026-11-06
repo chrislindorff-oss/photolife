@@ -424,6 +424,46 @@ void Settings::setDarkModeEnabled(bool enabled)
     m_settings.setValue(QLatin1String(kDarkMode), enabled);
 }
 
+bool Settings::missingShowsInfraspecific() const
+{
+    return m_settings.value(QStringLiteral("ui/missingShowsInfraspecific"), true).toBool();
+}
+
+void Settings::setMissingShowsInfraspecific(bool shown)
+{
+    m_settings.setValue(QStringLiteral("ui/missingShowsInfraspecific"), shown);
+}
+
+bool Settings::missingAsGrid() const
+{
+    return m_settings.value(QStringLiteral("ui/missingAsGrid"), false).toBool();
+}
+
+void Settings::setMissingAsGrid(bool grid)
+{
+    m_settings.setValue(QStringLiteral("ui/missingAsGrid"), grid);
+}
+
+bool Settings::lifeListShowsInfraspecific() const
+{
+    return m_settings.value(QStringLiteral("ui/lifeListShowsInfraspecific"), false).toBool();
+}
+
+void Settings::setLifeListShowsInfraspecific(bool show)
+{
+    m_settings.setValue(QStringLiteral("ui/lifeListShowsInfraspecific"), show);
+}
+
+bool Settings::lifeListThumbnails() const
+{
+    return m_settings.value(QStringLiteral("ui/lifeListThumbnails"), false).toBool();
+}
+
+void Settings::setLifeListThumbnails(bool show)
+{
+    m_settings.setValue(QStringLiteral("ui/lifeListThumbnails"), show);
+}
+
 bool Settings::treePanelShown(const QString &view) const
 {
     const bool byDefault = view == QLatin1String("tree") || view == QLatin1String("library");

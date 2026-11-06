@@ -287,6 +287,14 @@ void CaptureListModel::setBestShotOnly(bool on)
     reload();
 }
 
+void CaptureListModel::setGpsFilter(GpsFilter filter)
+{
+    if (m_gpsFilter == filter)
+        return;
+    m_gpsFilter = filter;
+    reloadAsync();
+}
+
 void CaptureListModel::applyBestShot(const QList<int> &captureIds, bool on)
 {
     if (captureIds.isEmpty())
@@ -332,7 +340,7 @@ void CaptureListModel::reload()
 
     if (m_db.isOpen()) {
         const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly,
-                                 m_taxonSet};
+                                 m_taxonSet, m_gpsFilter};
         m_rows = fetchRows(QSqlDatabase::database(m_db.connectionName(), false), params);
         for (int i = 0; i < m_rows.size(); ++i) {
             if (!m_rows[i].previewHash.isEmpty())
@@ -360,7 +368,7 @@ void CaptureListModel::reloadAsync()
     ensureWorker();
     const quint64 generation = ++m_generation;
     emit requestFetch(generation, QueryParams{m_statusFilter, m_taxonScope, m_projectScope,
-                                              m_bestShotOnly, m_taxonSet});
+                                              m_bestShotOnly, m_taxonSet, m_gpsFilter});
 }
 
 void CaptureListModel::onRowsReady(quint64 generation, QList<Row> rows)
@@ -447,6 +455,11 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             // is a type error there), but a plain truthy 0/1 on SQLite. A
             // bare boolean-context reference is valid truthiness on both.
             clauses << QStringLiteral("is_best_shot");
+        // As the GEO pill is drawn (HasGpsRole): both coordinates known.
+        if (params.gpsFilter == GpsFilter::With)
+            clauses << QStringLiteral("(latitude IS NOT NULL AND longitude IS NOT NULL)");
+        else if (params.gpsFilter == GpsFilter::Without)
+            clauses << QStringLiteral("(latitude IS NULL OR longitude IS NULL)");
 
         const QString where =
             clauses.isEmpty() ? QString()

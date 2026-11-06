@@ -2,9 +2,11 @@
 
 #include "catalogue/UntreedMatchStore.h"
 #include "coverage/CoverageCalculator.h"
+#include "coverage/LifeList.h"
 #include "libsync/PhotoSyncService.h"
 #include "settings/Settings.h"
 #include "sync/SyncService.h"
+#include "ui/ImageViewer.h"
 #include "ui/ServerBar.h"
 
 #include <QPointer>
@@ -52,6 +54,7 @@ class PostgresConnectionMonitor;
 
 namespace model {
 class CaptureListModel;
+class LifeListModel;
 class ReferencePhotoModel;
 class TaxonomyTreeModel;
 }
@@ -98,7 +101,6 @@ class CoveragePanel;
 class HelpWindow;
 class GettingStartedPanel;
 struct GuideState;
-class ImageViewer;
 class InatToolsView;
 class OrganiseView;
 class MapView;
@@ -182,6 +184,7 @@ private:
     QWidget *buildMapPage();
     QWidget *buildBestShotsPage();
     QWidget *buildMissingPage();
+    QWidget *buildLifeListPage();
     QWidget *buildUntreedPage();
     QWidget *buildReferencePhotosPage();
     void updateReferencePhotoStatus();
@@ -345,6 +348,13 @@ private:
     void rebuildRankFilterMenu();
     void updateMissingList();
     void showMissingListContextMenu(const QPoint &pos);
+    // Photographic Life List: reloadLifeList() re-reads it from the catalogue
+    // (after any coverage refresh); showLifeList() numbers and shows it (the
+    // subspecies toggle); openLifeListPhoto() shows a row's first photo full
+    // screen, the shown rows' first photos a step away.
+    void reloadLifeList();
+    void showLifeList();
+    void openLifeListPhoto(const QModelIndex &proxyIndex);
     // "Not in Any Tree" tab: reloadUntreedTaxa() re-runs the catalogue query
     // (after anything that can change matches or tree membership);
     // updateUntreedList() just repopulates the list from the cached result
@@ -356,6 +366,8 @@ private:
     void addUntreedTaxonToTree(QTreeWidgetItem *item, int projectId);
     void viewReferencePhoto(qint64 inatId);
     void openViewer(QAbstractItemModel *model, const QModelIndex &index);
+    // The viewer, made (and wired up) the first time, showing `items`.
+    void showInViewer(const QVector<ImageViewer::Item> &items, int start);
     QListView *makeCaptureGrid(QAbstractItemModel *model);
     void removeSelectedCaptures(QListView *grid);
     // Library photos' species and/or coordinates from one of the user's own
@@ -463,6 +475,25 @@ private:
     QLabel *m_bestShotHeader = nullptr;
     QTreeWidget *m_missingList = nullptr;
     QLineEdit *m_missingSearch = nullptr;
+    QCheckBox *m_missingInfra = nullptr;   // show subspecies, varieties and forms
+    QLabel *m_missingCounts = nullptr;
+    // ...and the same taxa as a grid of their reference photos.
+    QCheckBox *m_missingAsGrid = nullptr;
+    QStackedWidget *m_missingStack = nullptr;
+    QListView *m_missingGrid = nullptr;
+    QLabel *m_missingGridNote = nullptr;
+    model::ReferencePhotoModel *m_missingPhotoModel = nullptr;
+    QWidget *m_missingPage = nullptr;
+
+    QList<coverage::LifeListEntry> m_lifeListAll;   // reloadLifeList()'s, species and below
+    QWidget *m_lifeListPage = nullptr;
+    QLineEdit *m_lifeListSearch = nullptr;
+    QCheckBox *m_lifeListInfra = nullptr;    // subspecies, varieties and hybrids as entries
+    QCheckBox *m_lifeListThumbs = nullptr;   // each entry's first photo
+    QLabel *m_lifeListCounts = nullptr;
+    QTreeView *m_lifeListView = nullptr;
+    model::LifeListModel *m_lifeListModel = nullptr;
+    QSortFilterProxyModel *m_lifeListProxy = nullptr;
 
     QList<catalogue::UntreedTaxon> m_untreedTaxa;   // last reloadUntreedTaxa() result
     QTreeWidget *m_untreedList = nullptr;

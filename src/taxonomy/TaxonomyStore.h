@@ -54,6 +54,10 @@ public:
     // (subspecies, variety, form, hybrid, infrahybrid).
     static bool isInfraspecificRank(const QString &rank);
 
+    // Not a species proper: a subspecies, variety or form, or a hybrid (of
+    // species or genera) -- what Unphotographed Taxa and the life list can hide.
+    static bool isBelowSpeciesRank(const QString &rank);
+
     // --- writes -------------------------------------------------------------
 
     bool upsertPlace(const Place &place);

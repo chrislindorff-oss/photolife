@@ -75,7 +75,8 @@ toolbar):</p>
 <ul>
   <li><b>Reference Tree</b> &mdash; the tab row underneath shows
       <b>Photos of Tree Selection</b>, <b>Map</b>, <b>My Best Shots</b>,
-      <b>Unphotographed Taxa</b>, <b>Not in Any Tree</b> and <b>Reference Photos</b>
+      <b>Unphotographed Taxa</b>, <b>Photographic Life List</b>, <b>Not in Any Tree</b> and
+      <b>Reference Photos</b>
       &mdash; all of them scoped to whatever taxon or reference tree you have
       selected on the left.</li>
   <li><b>All Library Photos</b> &mdash; every photo in the catalogue, regardless of
@@ -201,7 +202,9 @@ walks it, records every image, and groups a RAW file and its same-name JPEG as o
 <p>It watches your folders afterwards and re-scans automatically when they change.
 <b>Library &rarr; Rescan Library</b> (F5) forces a full re-scan; unchanged files are
 never re-read, and <b>Stop Scan</b> cancels one in progress. A file you rename or move
-keeps its matches and thumbnail &mdash; PhotoLife recognises it by its contents.</p>
+keeps its matches and thumbnail &mdash; PhotoLife recognises it by its contents.
+Rename or move one in your file manager and every grid takes the new name a moment later;
+open it before then and PhotoLife looks for it first, then opens it.</p>
 <p><b>Library &rarr; Manage Library Folders&hellip;</b> lists the folders being watched,
 flags any that have gone missing, and lets you stop watching one (its catalogued photos
 are kept). <b>Library &rarr; Remove Photos With Missing Files&hellip;</b> finds
@@ -482,7 +485,10 @@ mouse.</p>
 <p>The <b>Photos of Tree Selection</b> tab follows your selection in the tree: pick a
 taxon and you see its cover photo, its details, and a grid of just its photos. The
 <b>Reassign to Taxon&hellip;</b> button moves the selected photos (or, with none
-selected, every photo shown) to a different taxon. The <b>Coverage</b> column in the
+selected, every photo shown) to a different taxon. The box under it shows <b>Any
+location</b>, or only the photos <b>With a location (GEO)</b>, or only those <b>Without a
+location</b> &mdash; handy for finding the ones still to geotag with <b>Paste Location</b> or
+<b>Set Location on Map&hellip;</b> (the Map tab follows it too). The <b>Coverage</b> column in the
 tree shows a <b>&#10004;</b> for photographed species, a <b>&middot;</b> for missing
 ones, and a &ldquo;have / total&rdquo; count on genera and families.</p>
 <p>The panel under the tree summarises the whole tree: species photographed,
@@ -502,9 +508,31 @@ threatened filters replace each other; click the active one again, or <b>Clear
 filter</b>, to go back to the whole tree.</p>
 <p>The <b>Unphotographed Taxa</b> tab is a plain list of the gaps, with its own filter
 box &mdash; activate an entry to jump to it in the tree, or right-click it to view its
-reference photo. The <b>Only taxa I&rsquo;ve photographed</b> checkbox above the tree
+reference photo. A line above it counts what's missing: species, and subspecies,
+varieties, forms and hybrids. Untick <b>Show subspecies, varieties and hybrids</b> to list
+species only; ticked, a missing subspecies or variety sits under its species, and a hybrid
+under its genus. The choice is remembered,
+and the tab's count follows it. Tick <b>Photo grid</b> to see the same taxa as a grid of
+small iNaturalist reference photos instead of a list: double-click one to find it in the
+tree, or right-click to view a larger image or open it on iNaturalist. Taxa without a
+reference photo yet show an empty square; <b>Fetch Reference Photos</b>, on the Reference
+Photos tab, gets them. The <b>Only taxa I&rsquo;ve photographed</b> checkbox above the tree
 collapses it to just the branches you have a photo somewhere in &mdash; a quick
 &ldquo;what have I got&rdquo; view. Untick it to see the whole reference tree again.</p>
+<p>The <b>Photographic Life List</b> tab lists the tree's species you've photographed in
+the order you first photographed them, numbered 1, 2, 3&hellip; &mdash; number 1 is the
+species with the earliest dated photo of any in the tree. Each entry shows the date of
+that first photo, its names, where it was taken and how many photos you have of it. A
+photo of a subspecies or variety counts for its species too, so the earlier of them dates
+the species. Tick <b>Show subspecies, varieties and hybrids</b> to number those as entries
+of their own as well. Tick <b>Thumbnails</b> to see each entry's first photo; double-click
+a row, or right-click it and choose <b>View Full Screen</b>, to see it full size (the
+arrow keys then step through the list's first photos in order). Right-click also offers
+<b>Show All Photos of This Taxon</b> and <b>Open on iNaturalist</b>. Click a column
+heading to sort by it; click <b>#</b> to return to the life list order. Dates come from
+each photo's EXIF data or its file name; a photo with no date, or one later than today
+(a misread file name, say), doesn't date an entry, and species with only such photos
+come last, unnumbered. Both ticks are remembered.</p>
 <p>The coverage box beside it filters to <b>Fully covered</b> taxa (Coverage
 <b>X&nbsp;/&nbsp;X</b>, or &#10004; for a species) or <b>Not fully covered</b> ones,
 among the ranks you've chosen to show with <b>Ranks&hellip;</b>. For example, show only
@@ -625,7 +653,10 @@ on a thumbnail elsewhere in the app, or hover it for the exact coordinates.</p>
 region) for each geotagged photo from OpenStreetMap. It goes slowly, to respect
 OpenStreetMap's usage limits, and remembers results, so it only needs doing once per
 photo. Turn on <b>Locality</b> under <b>View &rarr; Display&hellip;</b> to show it
-under thumbnails.</p>
+under thumbnails. When you give photos a location yourself (<b>Set Location on
+Map&hellip;</b>, pasting a location, or from an iNaturalist observation), PhotoLife looks
+up the new spot's place name straight away, so the <b>Photographic Life List</b>'s
+<b>Where</b> column fills in.</p>
 
 <h2 id="export">Exporting a photo collection</h2>
 <p><b>Reference Tree &rarr; Export Photo Collection&hellip;</b> copies the current

@@ -83,6 +83,11 @@ bool TaxonomyStore::isInfraspecificRank(const QString &rank)
     return infra.contains(rank.toLower());
 }
 
+bool TaxonomyStore::isBelowSpeciesRank(const QString &rank)
+{
+    return isInfraspecificRank(rank) || rank.compare(QLatin1String("genushybrid"), Qt::CaseInsensitive) == 0;
+}
+
 TaxonomyStore::TaxonomyStore(QString connectionName)
     : m_connectionName(std::move(connectionName))
 {
@@ -1793,34 +1798,43 @@ QList<TaxonomyStore::LeafPhoto> TaxonomyStore::projectLeafPhotos(
     if (taxonInatIds.isEmpty())
         return out;
 
-    QStringList placeholders(taxonInatIds.size(), QStringLiteral("?"));
-    const QString sql = QStringLiteral(
-        "SELECT t.inat_id, t.name, t.common_name, t.rank, t.photo_url, t.photo_attribution "
-        "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
-        "WHERE pt.project_id = ? AND t.inat_id IN (%1) "
-        "ORDER BY t.name").arg(placeholders.join(QLatin1Char(',')));
+    // In chunks, within the bind-parameter limit: a big tree can be missing
+    // thousands of species.
+    constexpr int chunkSize = kMaxBatchBindParams - 1;
+    for (qsizetype from = 0; from < taxonInatIds.size(); from += chunkSize) {
+        const QList<qint64> chunk = taxonInatIds.mid(from, chunkSize);
+        QStringList placeholders(chunk.size(), QStringLiteral("?"));
+        const QString sql = QStringLiteral(
+            "SELECT t.inat_id, t.name, t.common_name, t.rank, t.photo_url, t.photo_attribution "
+            "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
+            "WHERE pt.project_id = ? AND t.inat_id IN (%1) "
+            "ORDER BY t.name").arg(placeholders.join(QLatin1Char(',')));
 
-    QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
-    q.prepare(sql);
-    q.addBindValue(projectId);
-    for (qint64 id : taxonInatIds)
-        q.addBindValue(qlonglong(id));
-    if (!q.exec())
-        return out;
+        QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+        q.prepare(sql);
+        q.addBindValue(projectId);
+        for (qint64 id : chunk)
+            q.addBindValue(qlonglong(id));
+        if (!q.exec())
+            return out;
 
-    while (q.next()) {
-        const QString rank = q.value(3).toString();
-        if (!isLeafRank(rank))
-            continue;
-        LeafPhoto p;
-        p.inatId = q.value(0).toLongLong();
-        p.name = q.value(1).toString();
-        p.commonName = q.value(2).toString();
-        p.rank = rank;
-        p.photoUrl = q.value(4).toString();
-        p.attribution = q.value(5).toString();
-        out.append(p);
+        while (q.next()) {
+            const QString rank = q.value(3).toString();
+            if (!isLeafRank(rank))
+                continue;
+            LeafPhoto p;
+            p.inatId = q.value(0).toLongLong();
+            p.name = q.value(1).toString();
+            p.commonName = q.value(2).toString();
+            p.rank = rank;
+            p.photoUrl = q.value(4).toString();
+            p.attribution = q.value(5).toString();
+            out.append(p);
+        }
     }
+    if (taxonInatIds.size() > chunkSize)
+        std::stable_sort(out.begin(), out.end(),
+                         [](const LeafPhoto &a, const LeafPhoto &b) { return a.name < b.name; });
     return out;
 }
 

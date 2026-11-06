@@ -74,6 +74,7 @@ class TestExifWriter : public QObject
 private slots:
     void writesAndRoundTripsMetadata();
     void safeWriteReplacesOriginalWithVerifiedResult();
+    void newLocationReplacesTheOldOne();
     void safeWriteLeavesNoTempFileBehindOnFailure();
     void sidecarGpsIsWrittenAndReadBack();
     void locationGoesIntoJpegAndRawSidecar();
@@ -131,6 +132,29 @@ void TestExifWriter::safeWriteReplacesOriginalWithVerifiedResult()
     // The image itself wasn't damaged by the copy/replace.
     QImage after(path);
     QCOMPARE(after.size(), img.size());
+}
+
+void TestExifWriter::newLocationReplacesTheOldOne()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("photo.jpg"));
+    QImage img(20, 20, QImage::Format_RGB32);
+    img.fill(Qt::green);
+    QVERIFY(img.save(path, "JPG"));
+
+    // Three places in turn, the last across both hemispheres: each must win.
+    const QList<QPair<double, double>> places{{-37.8136, 144.9631}, {-47.3582, 66.7387}, {51.5007, -0.1246}};
+    for (const auto &[lat, lon] : places) {
+        ExifFields fields;
+        fields.latitude = lat;
+        fields.longitude = lon;
+        QString error;
+        QVERIFY2(writeExifSafely(path, fields, &error), qPrintable(error));
+        const scan::ExifData read = scan::readJpegExif(path);
+        QVERIFY(read.hasGps());
+        QVERIFY2(qAbs(*read.latitude - lat) < 0.0001, qPrintable(QString::number(*read.latitude)));
+        QVERIFY2(qAbs(*read.longitude - lon) < 0.0001, qPrintable(QString::number(*read.longitude)));
+    }
 }
 
 void TestExifWriter::safeWriteLeavesNoTempFileBehindOnFailure()

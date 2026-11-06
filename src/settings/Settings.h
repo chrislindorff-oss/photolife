@@ -147,6 +147,18 @@ public:
     // Whether the Reference Trees panel is shown in a view ("tree",
     // "library", "review", "inat", "organise"): by default only where the
     // tree is used -- the Reference Tree and All Library Photos views.
+    // Unphotographed Taxa lists subspecies, varieties, forms and hybrids too (default on).
+    bool missingShowsInfraspecific() const;
+    void setMissingShowsInfraspecific(bool shown);
+    // Unphotographed Taxa as a grid of reference photos rather than a list.
+    bool missingAsGrid() const;
+    void setMissingAsGrid(bool grid);
+    // Photographic Life List: subspecies, varieties and hybrids as entries of
+    // their own (off: species only); each entry's first photo as a thumbnail.
+    bool lifeListShowsInfraspecific() const;
+    void setLifeListShowsInfraspecific(bool show);
+    bool lifeListThumbnails() const;
+    void setLifeListThumbnails(bool show);
     bool treePanelShown(const QString &view) const;
     void setTreePanelShown(const QString &view, bool shown);
 

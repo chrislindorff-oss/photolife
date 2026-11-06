@@ -8,6 +8,7 @@
 #include "db/Database.h"
 #include "db/PostgresConnectionMonitor.h"
 #include "model/CaptureListModel.h"
+#include "model/LifeListModel.h"
 #include "collection/ContactSheetWriter.h"
 #include "model/ReferencePhotoModel.h"
 #include "model/TaxonomyTreeModel.h"
@@ -77,6 +78,7 @@
 #include "ui/NewProjectDialog.h"
 #include "ui/PlaceConfirmDialog.h"
 #include "ui/ContactSheetDialog.h"
+#include "ui/ReferencePhotoDelegate.h"
 #include "ui/ReferencePhotoDialog.h"
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
@@ -139,6 +141,8 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QScrollBar>
+#include <QSortFilterProxyModel>
 #include <QTreeView>
 #include <QSplitter>
 #include <QUrl>
@@ -405,7 +409,10 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 endMatchProgress();   // before any Renamed Photos question
                 m_matchAction->setEnabled(true);
                 m_model->reload();
+                m_taxonModel->reload();
                 m_bestShotModel->reload();
+                if (m_untreedModel)
+                    m_untreedModel->reload();
                 updateEmptyState();
                 refreshCoverage();
                 m_reviewPane->reload();
@@ -669,6 +676,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                     m_taxonModel->reload();
                 if (m_bestShotModel)
                     m_bestShotModel->reload();
+                reloadLifeList();
             });
 
     connect(m_checklistImporter, &checklist::ChecklistImporter::progress, this,
@@ -1651,6 +1659,7 @@ void MainWindow::refreshCoverageNow()
     if (pid <= 0 || !m_app.database().isOpen()) {
         m_coveragePanel->clear();
         mutateTreePreservingState([this] { m_treeModel->setCoverage({}); });
+        reloadLifeList();
         onTreeSelectionChanged();
         lap("tree");
         logIfSlow(pid);
@@ -1676,6 +1685,8 @@ void MainWindow::refreshCoverageNow()
 
     mutateTreePreservingState([this] { m_treeModel->setCoverage(m_coverage); });
     updateMissingList();
+    reloadLifeList();
+    lap("lifeList");
     onTreeSelectionChanged();
     lap("tree");
     logIfSlow(pid);
@@ -1983,9 +1994,27 @@ void MainWindow::updateMissingList()
     // Every leaf-rank taxon (species, or an infraspecific/hybrid rank below
     // it) with no photo anywhere in its own subtree.
     QList<coverage::TaxonCoverage> missing;
+    int missingSpecies = 0, missingBelow = 0;
+    const bool showBelow = !m_missingInfra || m_missingInfra->isChecked();
     for (const auto &tc : m_coverage.byTaxon) {
-        if (taxonomy::TaxonomyStore::isLeafRank(tc.rank) && !tc.subtreeHasPhotos)
-            missing.append(tc);
+        if (!taxonomy::TaxonomyStore::isLeafRank(tc.rank) || tc.subtreeHasPhotos)
+            continue;
+        const bool below = taxonomy::TaxonomyStore::isBelowSpeciesRank(tc.rank);
+        ++(below ? missingBelow : missingSpecies);
+        if (below && !showBelow)
+            continue;
+        missing.append(tc);
+    }
+    if (m_missingInfra) {
+        m_missingInfra->setText(tr("Show subspecies, varieties and hybrids (%1)").arg(missingBelow));
+        m_missingInfra->setEnabled(missingBelow > 0 || !showBelow);
+    }
+    if (m_missingCounts) {
+        const QString species = missingSpecies == 1 ? tr("1 species") : tr("%1 species").arg(missingSpecies);
+        const QString below = missingBelow == 1 ? tr("1 subspecies, variety, form or hybrid")
+                                                : tr("%1 subspecies, varieties, forms and hybrids").arg(missingBelow);
+        m_missingCounts->setText(showBelow ? tr("Unphotographed: %1 and %2").arg(species, below)
+                                           : tr("Unphotographed: %1 (%2 hidden)").arg(species, below));
     }
 
     // Split into missing species (top-level rows) and missing infraspecific
@@ -2018,6 +2047,12 @@ void MainWindow::updateMissingList()
 
     const QString filter = m_missingSearch ? m_missingSearch->text().trimmed() : QString();
     const QColor warning = pl::themeColors(pl::currentThemeVariant()).warning;
+    // The missing taxa listed (not the species a missing variety hangs off),
+    // for the photo grid.
+    QSet<qint64> missingIds;
+    for (const auto &tc : std::as_const(missing))
+        missingIds.insert(tc.inatId);
+    QList<qint64> shownIds;
     for (const auto &tc : topLevelList) {
         QList<coverage::TaxonCoverage> children = childrenByParent.value(tc.inatId);
         std::sort(children.begin(), children.end(),
@@ -2034,6 +2069,10 @@ void MainWindow::updateMissingList()
         if (!selfMatches && visibleChildren.isEmpty())
             continue;
 
+        if (selfMatches && missingIds.contains(tc.inatId))
+            shownIds << tc.inatId;
+        for (const auto &child : visibleChildren)
+            shownIds << child.inatId;
         auto *parentItem = new QTreeWidgetItem(m_missingList);
         parentItem->setText(0, missingTaxonLabel(tc));
         parentItem->setData(0, Qt::UserRole, tc.inatId);
@@ -2050,7 +2089,13 @@ void MainWindow::updateMissingList()
         parentItem->setExpanded(true);
     }
 
-    const int missingTab = m_tabs->indexOf(m_missingList->parentWidget());
+    if (m_missingAsGrid && m_missingAsGrid->isChecked()) {
+        m_missingPhotoModel->setProject(currentProjectId());
+        // An empty set would mean the whole tree: nothing, here.
+        m_missingPhotoModel->setTaxonSetScope(shownIds.isEmpty() ? QList<qint64>{-1} : shownIds);
+    }
+
+    const int missingTab = m_tabs->indexOf(m_missingPage);
     if (missingTab >= 0)
         m_tabs->setTabText(missingTab, missing.isEmpty()
                                           ? tr("Unphotographed Taxa")
@@ -2189,6 +2234,42 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
         return;
     }
 
+    // Its file isn't where the catalogue last saw it: renamed or moved
+    // outside PhotoLife, before the folder watcher's rescan caught up. Look
+    // now, then open it under its new name.
+    const QString clickedPath = clicked.data(model::CaptureListModel::PreviewPathRole).toString();
+    if (!clickedPath.isEmpty() && !QFileInfo::exists(clickedPath)) {
+        const int captureId = clicked.data(model::CaptureListModel::IdRole).toInt();
+        if (!m_app.catalogueEditable()) {
+            statusBar()->showMessage(tr("This photo's file isn't at %1 any more.").arg(clickedPath), 8000);
+            return;
+        }
+        statusBar()->showMessage(tr("This photo's file has been renamed or moved — finding it…"));
+        const QPointer<QAbstractItemModel> guard(model);
+        requestScan([this, guard, captureId, clickedPath] {
+            // The grids have reloaded by now (onScanFinished runs first).
+            if (!guard)
+                return;
+            for (int r = 0; r < guard->rowCount(); ++r) {
+                const QModelIndex at = guard->index(r, 0);
+                if (at.data(model::CaptureListModel::IdRole).toInt() != captureId)
+                    continue;
+                const QString path = at.data(model::CaptureListModel::PreviewPathRole).toString();
+                if (QFileInfo::exists(path)) {
+                    statusBar()->clearMessage();
+                    openViewer(guard, at);
+                    return;
+                }
+                break;
+            }
+            statusBar()->showMessage(tr("Couldn't find this photo's file: it isn't at %1 any more, and no "
+                                        "file with the same contents turned up in your library folders.")
+                                         .arg(clickedPath),
+                                     10000);
+        });
+        return;
+    }
+
     QVector<ImageViewer::Item> items;
     int start = 0;
     for (int r = 0; r < model->rowCount(); ++r) {
@@ -2214,6 +2295,11 @@ void MainWindow::openViewer(QAbstractItemModel *model, const QModelIndex &clicke
             start = items.size();
         items.append(item);
     }
+    showInViewer(items, start);
+}
+
+void MainWindow::showInViewer(const QVector<ImageViewer::Item> &items, int start)
+{
     if (items.isEmpty())
         return;
 
@@ -3660,6 +3746,16 @@ int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double l
                                 "it's kept in PhotoLife's catalogue only:\n\n%1",
                                 nullptr, int(failures.size()))
                                  .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    if (done > 0) {
+        reloadLifeList();   // its Where column, once the place is known
+        // The new spot's place name, from OpenStreetMap: only locations not
+        // looked up before, so usually one request.
+        if (!m_localityFetcher->isRunning()) {
+            if (m_fetchLocalitiesAction)
+                m_fetchLocalitiesAction->setEnabled(false);
+            m_localityFetcher->start();
+        }
+    }
     return done;
 }
 
@@ -4299,6 +4395,7 @@ void MainWindow::fixRawGeolocation()
     m_model->reload();
     m_taxonModel->reload();
     m_bestShotModel->reload();
+    reloadLifeList();
     statusBar()->showMessage(
         tr("Updated GPS location for %n RAW photo(s).", nullptr, updated), 6000);
 }
@@ -4406,6 +4503,7 @@ void MainWindow::buildCentralWidget()
     m_tabs->addTab(buildMapPage(), tr("Map"));
     m_tabs->addTab(buildBestShotsPage(), tr("My Best Shots"));
     m_tabs->addTab(buildMissingPage(), tr("Unphotographed Taxa"));
+    m_tabs->addTab(buildLifeListPage(), tr("Photographic Life List"));
     m_tabs->addTab(buildUntreedPage(), tr("Not in Any Tree"));
     m_tabs->addTab(buildReferencePhotosPage(), tr("Reference Photos"));
 
@@ -4457,6 +4555,9 @@ void MainWindow::buildCentralWidget()
     connect(m_tabs, &QTabWidget::currentChanged, this, [this](int i) {
         if (m_refPhotoPage && m_tabs->widget(i) == m_refPhotoPage)
             maybeFetchReferencePhotos();
+        // Cheap (a few ms), and catches anything that changed it unannounced.
+        if (m_lifeListPage && m_tabs->widget(i) == m_lifeListPage)
+            reloadLifeList();
     });
 
     m_statusLabel = new QLabel(this);
@@ -4484,10 +4585,26 @@ QWidget *MainWindow::buildBrowsePage()
     connect(reassignButton, &QPushButton::clicked, this,
             [this] { reassignPhotos(m_taxonGrid, m_taxonModel); });
 
+    // Only the photos with a location (a GEO pill), or only those still
+    // without one -- e.g. to give them one with Paste Location.
+    auto *gpsFilter = new QComboBox(this);
+    gpsFilter->addItem(tr("Any location"), int(model::CaptureListModel::GpsFilter::Any));
+    gpsFilter->addItem(tr("With a location (GEO)"), int(model::CaptureListModel::GpsFilter::With));
+    gpsFilter->addItem(tr("Without a location"), int(model::CaptureListModel::GpsFilter::Without));
+    gpsFilter->setToolTip(tr("Show only the photos that have a location (a GEO pill), or only those that "
+                             "don't yet. The Map tab follows it too."));
+    connect(gpsFilter, &QComboBox::currentIndexChanged, this, [this, gpsFilter](int i) {
+        m_taxonModel->setGpsFilter(model::CaptureListModel::GpsFilter(gpsFilter->itemData(i).toInt()));
+    });
+    auto *actions = new QVBoxLayout;
+    actions->addWidget(reassignButton);
+    actions->addWidget(gpsFilter);
+    actions->addStretch(1);
+
     auto *header = new QHBoxLayout;
     header->addWidget(m_taxonRepImage);
     header->addWidget(m_taxonInfo, 1);
-    header->addWidget(reassignButton, 0, Qt::AlignTop);
+    header->addLayout(actions);
 
     m_taxonGrid = makeCaptureGrid(m_taxonModel);
     m_taxonGrid->setItemDelegate(new CaptureDelegate(m_taxonGrid));
@@ -4548,6 +4665,21 @@ QWidget *MainWindow::buildMissingPage()
     m_missingSearch->setClearButtonEnabled(true);
     connect(m_missingSearch, &QLineEdit::textChanged, this, &MainWindow::updateMissingList);
 
+    m_missingInfra = new QCheckBox(tr("Show subspecies, varieties and hybrids"), this);
+    m_missingInfra->setToolTip(tr("Also list subspecies, varieties, forms and hybrids you haven't photographed, "
+                                  "under their species or genus. Off: species only."));
+    m_missingInfra->setChecked(m_app.settings().missingShowsInfraspecific());
+    connect(m_missingInfra, &QCheckBox::toggled, this, [this](bool on) {
+        m_app.settings().setMissingShowsInfraspecific(on);
+        updateMissingList();
+    });
+    m_missingCounts = new QLabel(this);
+    m_missingCounts->setObjectName(QStringLiteral("muted"));
+    m_missingAsGrid = new QCheckBox(tr("Photo grid"), this);
+    m_missingAsGrid->setToolTip(tr("Show these taxa as a grid of their iNaturalist reference photos (Fetch Reference "
+                                   "Photos, on the Reference Photos tab, downloads any missing)."));
+    m_missingAsGrid->setChecked(m_app.settings().missingAsGrid());
+
     m_missingList = new QTreeWidget(this);
     m_missingList->setHeaderHidden(true);
     m_missingList->setAlternatingRowColors(true);
@@ -4559,11 +4691,353 @@ QWidget *MainWindow::buildMissingPage()
     connect(m_missingList, &QWidget::customContextMenuRequested, this,
             &MainWindow::showMissingListContextMenu);
 
-    auto *page = new QWidget(this);
-    auto *layout = new QVBoxLayout(page);
-    layout->addWidget(m_missingSearch);
-    layout->addWidget(m_missingList, 1);
-    return page;
+    // The grid: the reference photos of the same taxa, small.
+    m_missingPhotoModel = new model::ReferencePhotoModel(m_app.database(), m_app.photoCache(), this);
+    m_missingGrid = new QListView(this);
+    m_missingGrid->setModel(m_missingPhotoModel);
+    m_missingGrid->setViewMode(QListView::IconMode);
+    m_missingGrid->setResizeMode(QListView::Adjust);
+    m_missingGrid->setMovement(QListView::Static);
+    m_missingGrid->setUniformItemSizes(true);
+    m_missingGrid->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_missingGrid->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // Framed cards: the photo, then its names a line each (see ReferencePhotoDelegate).
+    m_missingGrid->setItemDelegate(new ReferencePhotoDelegate(120, m_missingGrid));
+    m_missingGrid->setSpacing(0);
+    m_missingGrid->setMouseTracking(true);   // a card's frame lights up under the pointer
+    connect(m_missingGrid, &QAbstractItemView::activated, this, [this](const QModelIndex &idx) {
+        selectTaxonInTree(idx.data(model::ReferencePhotoModel::InatIdRole).toLongLong());
+        switchToTreeTab(m_tabs->widget(0));   // Browse
+    });
+    m_missingGrid->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_missingGrid, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        const QModelIndex idx = m_missingGrid->indexAt(pos);
+        if (!idx.isValid())
+            return;
+        m_missingGrid->setCurrentIndex(idx);
+        const qint64 inatId = idx.data(model::ReferencePhotoModel::InatIdRole).toLongLong();
+        QMenu menu(this);
+        QAction *larger = menu.addAction(tr("View Larger Image"), this, [this, idx] { viewLargeReferencePhoto(idx); });
+        larger->setEnabled(!idx.data(model::ReferencePhotoModel::PhotoUrlRole).toString().isEmpty());
+        menu.setDefaultAction(larger);
+        menu.addAction(tr("Show in Tree"), this, [this, inatId] {
+            selectTaxonInTree(inatId);
+            switchToTreeTab(m_tabs->widget(0));   // Browse
+        });
+        menu.addAction(tr("Open on iNaturalist"), this, [inatId] {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
+        });
+        menu.exec(m_missingGrid->viewport()->mapToGlobal(pos));
+    });
+
+    // Taxa without a reference photo to show: how to get them.
+    m_missingGridNote = new QLabel(this);
+    m_missingGridNote->setObjectName(QStringLiteral("muted"));
+    m_missingGridNote->setWordWrap(true);
+    m_missingGridNote->hide();
+    connect(m_missingPhotoModel, &QAbstractItemModel::modelReset, this, [this] {
+        const int without = m_missingPhotoModel->speciesCount() - m_missingPhotoModel->withPhotoCount();
+        m_missingGridNote->setText(
+            without == 1 ? tr("1 of these has no reference photo yet: Fetch Reference Photos, on the Reference "
+                              "Photos tab, gets it.")
+                         : tr("%1 of these have no reference photo yet: Fetch Reference Photos, on the Reference "
+                              "Photos tab, gets them.").arg(without));
+        m_missingGridNote->setVisible(without > 0 && m_missingAsGrid->isChecked());
+    });
+
+    m_missingStack = new QStackedWidget(this);
+    m_missingStack->addWidget(m_missingList);
+    m_missingStack->addWidget(m_missingGrid);
+    m_missingStack->setCurrentWidget(m_missingAsGrid->isChecked() ? static_cast<QWidget *>(m_missingGrid)
+                                                                  : m_missingList);
+    connect(m_missingAsGrid, &QCheckBox::toggled, this, [this](bool grid) {
+        m_app.settings().setMissingAsGrid(grid);
+        m_missingStack->setCurrentWidget(grid ? static_cast<QWidget *>(m_missingGrid) : m_missingList);
+        if (!grid)
+            m_missingGridNote->hide();
+        updateMissingList();
+    });
+
+    m_missingPage = new QWidget(this);
+    auto *layout = new QVBoxLayout(m_missingPage);
+    auto *controls = new QHBoxLayout;
+    controls->addWidget(m_missingSearch, 1);
+    controls->addWidget(m_missingInfra);
+    controls->addWidget(m_missingAsGrid);
+    layout->addLayout(controls);
+    layout->addWidget(m_missingCounts);
+    layout->addWidget(m_missingGridNote);
+    layout->addWidget(m_missingStack, 1);
+    return m_missingPage;
+}
+
+QWidget *MainWindow::buildLifeListPage()
+{
+    using LL = model::LifeListModel;
+    m_lifeListSearch = new QLineEdit(this);
+    m_lifeListSearch->setPlaceholderText(tr("Filter by common or scientific name, or place…"));
+    m_lifeListSearch->setClearButtonEnabled(true);
+
+    m_lifeListInfra = new QCheckBox(tr("Show subspecies, varieties and hybrids"), this);
+    m_lifeListInfra->setToolTip(tr("Also number subspecies, varieties, forms and hybrids as entries of their own. "
+                                   "Off: species only (a photo of a subspecies still counts for its species)."));
+    m_lifeListInfra->setChecked(m_app.settings().lifeListShowsInfraspecific());
+    connect(m_lifeListInfra, &QCheckBox::toggled, this, [this](bool on) {
+        m_app.settings().setLifeListShowsInfraspecific(on);
+        showLifeList();
+    });
+    m_lifeListThumbs = new QCheckBox(tr("Thumbnails"), this);
+    m_lifeListThumbs->setToolTip(tr("Show each entry's first photo. Double-click or right-click one to see it full "
+                                    "screen."));
+    m_lifeListThumbs->setChecked(m_app.settings().lifeListThumbnails());
+
+    m_lifeListCounts = new QLabel(this);
+    m_lifeListCounts->setObjectName(QStringLiteral("muted"));
+    m_lifeListCounts->setWordWrap(true);
+
+    m_lifeListModel = new LL(m_app.thumbnails(), this);
+    m_lifeListProxy = new QSortFilterProxyModel(this);
+    m_lifeListProxy->setSourceModel(m_lifeListModel);
+    m_lifeListProxy->setSortRole(LL::SortRole);
+    m_lifeListProxy->setFilterKeyColumn(-1);
+    m_lifeListProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    connect(m_lifeListSearch, &QLineEdit::textChanged, m_lifeListProxy,
+            &QSortFilterProxyModel::setFilterFixedString);
+
+    m_lifeListView = new QTreeView(this);
+    m_lifeListView->setModel(m_lifeListProxy);
+    m_lifeListView->setRootIsDecorated(false);
+    m_lifeListView->setUniformRowHeights(true);
+    m_lifeListView->setAlternatingRowColors(true);
+    m_lifeListView->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_lifeListView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_lifeListView->setSortingEnabled(true);
+    m_lifeListView->sortByColumn(LL::NumberColumn, Qt::AscendingOrder);
+    QHeaderView *header = m_lifeListView->header();
+    header->setStretchLastSection(false);
+    header->setSectionResizeMode(QHeaderView::Interactive);
+    header->setSectionResizeMode(LL::PlaceColumn, QHeaderView::Stretch);
+    const QFontMetrics fm(m_lifeListView->font());
+    header->resizeSection(LL::NumberColumn, fm.horizontalAdvance(QStringLiteral("00000")) + 24);
+    header->resizeSection(LL::PhotoColumn, 64 + 16);
+    header->resizeSection(LL::DateColumn, fm.horizontalAdvance(tr("First photographed")) + 32);
+    header->resizeSection(LL::CommonColumn, fm.horizontalAdvance(QStringLiteral("M")) * 16);
+    header->resizeSection(LL::ScientificColumn, fm.horizontalAdvance(QStringLiteral("M")) * 17);
+    header->resizeSection(LL::PhotosColumn, fm.horizontalAdvance(tr("Photos")) + 32);
+
+    const auto applyThumbnails = [this](bool on) {
+        m_lifeListModel->setShowThumbnails(on);
+        m_lifeListView->setIconSize(on ? QSize(64, 64) : QSize(16, 16));
+        m_lifeListView->header()->setSectionHidden(model::LifeListModel::PhotoColumn, !on);
+        // Uniform rows take their height from the first: make it measure again.
+        m_lifeListView->doItemsLayout();
+    };
+    applyThumbnails(m_lifeListThumbs->isChecked());
+    connect(m_lifeListThumbs, &QCheckBox::toggled, this, [this, applyThumbnails](bool on) {
+        m_app.settings().setLifeListThumbnails(on);
+        applyThumbnails(on);
+    });
+
+    connect(m_lifeListView, &QAbstractItemView::activated, this,
+            [this](const QModelIndex &idx) { openLifeListPhoto(idx); });
+    m_lifeListView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_lifeListView, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        const QModelIndex idx = m_lifeListView->indexAt(pos);
+        if (!idx.isValid())
+            return;
+        m_lifeListView->setCurrentIndex(idx);
+        const qint64 inatId = idx.data(model::LifeListModel::InatIdRole).toLongLong();
+        const QPersistentModelIndex at(idx);
+        QMenu menu(this);
+        QAction *full = menu.addAction(tr("View Full Screen"), this, [this, at] {
+            if (at.isValid())
+                openLifeListPhoto(at);
+        });
+        full->setEnabled(!idx.data(model::LifeListModel::PreviewPathRole).toString().isEmpty());
+        menu.setDefaultAction(full);
+        menu.addAction(tr("Show All Photos of This Taxon"), this, [this, inatId] {
+            selectTaxonInTree(inatId);
+            switchToTreeTab(m_tabs->widget(0));   // Photos of Tree Selection
+        });
+        menu.addAction(tr("Open on iNaturalist"), this, [inatId] {
+            QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
+        });
+        menu.exec(m_lifeListView->viewport()->mapToGlobal(pos));
+    });
+
+    m_lifeListPage = new QWidget(this);
+    auto *layout = new QVBoxLayout(m_lifeListPage);
+    auto *controls = new QHBoxLayout;
+    controls->addWidget(m_lifeListSearch, 1);
+    controls->addWidget(m_lifeListInfra);
+    controls->addWidget(m_lifeListThumbs);
+    layout->addLayout(controls);
+    layout->addWidget(m_lifeListCounts);
+    layout->addWidget(m_lifeListView, 1);
+    return m_lifeListPage;
+}
+
+void MainWindow::reloadLifeList()
+{
+    if (!m_lifeListModel)
+        return;
+    const int pid = currentProjectId();
+    m_lifeListAll = pid > 0 && m_app.database().isOpen()
+                        ? coverage::loadLifeList(m_app.database().connectionName(), pid)
+                        : QList<coverage::LifeListEntry>{};
+    showLifeList();
+}
+
+void MainWindow::showLifeList()
+{
+    if (!m_lifeListModel)
+        return;
+    const bool showBelow = m_lifeListInfra->isChecked();
+    const QList<coverage::LifeListEntry> shown = coverage::numberedLifeList(m_lifeListAll, showBelow);
+    // Kept across the reload: the row picked and how far down the list is.
+    const qint64 picked = m_lifeListView->currentIndex().data(model::LifeListModel::InatIdRole).toLongLong();
+    const int scrolled = m_lifeListView->verticalScrollBar()->value();
+    m_lifeListModel->setEntries(shown);
+    if (picked > 0) {
+        const QModelIndexList hit = m_lifeListProxy->match(m_lifeListProxy->index(0, 0),
+                                                           model::LifeListModel::InatIdRole, picked, 1,
+                                                           Qt::MatchExactly);
+        if (!hit.isEmpty())
+            m_lifeListView->setCurrentIndex(hit.first());
+    }
+    m_lifeListView->verticalScrollBar()->setValue(scrolled);
+
+    int species = 0, below = 0, belowTotal = 0, undated = 0;
+    QString first, latest;
+    for (const auto &e : std::as_const(m_lifeListAll))
+        belowTotal += e.belowSpecies ? 1 : 0;
+    for (const auto &e : shown) {
+        ++(e.belowSpecies ? below : species);
+        if (e.firstOn.isEmpty()) {
+            ++undated;
+            continue;
+        }
+        if (first.isEmpty())
+            first = e.firstOn;
+        latest = e.firstOn;
+    }
+    m_lifeListInfra->setText(tr("Show subspecies, varieties and hybrids (%1)").arg(belowTotal));
+    m_lifeListInfra->setEnabled(belowTotal > 0 || showBelow);
+
+    QString text;
+    if (shown.isEmpty()) {
+        text = currentProjectId() > 0 ? tr("Nothing in this tree photographed yet.") : tr("Select a reference tree.");
+    } else {
+        text = species == 1 ? tr("1 species photographed") : tr("%1 species photographed").arg(species);
+        if (showBelow)
+            text += below == 1 ? tr(", and 1 subspecies, variety or hybrid")
+                               : tr(", and %1 subspecies, varieties and hybrids").arg(below);
+        if (!first.isEmpty())
+            text += first == latest ? tr(" — the first on %1.").arg(model::LifeListModel::dateText(first))
+                                    : tr(" — the first on %1, the latest new one on %2.")
+                                          .arg(model::LifeListModel::dateText(first),
+                                               model::LifeListModel::dateText(latest));
+        else
+            text += QLatin1Char('.');
+        if (undated > 0)
+            text += undated == 1 ? tr(" 1 has no usable date, so comes last.")
+                                 : tr(" %1 have no usable date, so come last.").arg(undated);
+    }
+    m_lifeListCounts->setText(text);
+
+    const int tab = m_tabs ? m_tabs->indexOf(m_lifeListPage) : -1;
+    if (tab >= 0)
+        m_tabs->setTabText(tab, shown.isEmpty() ? tr("Photographic Life List")
+                                                : tr("Photographic Life List (%1)").arg(shown.size()));
+}
+
+void MainWindow::openLifeListPhoto(const QModelIndex &proxyIndex)
+{
+    using LL = model::LifeListModel;
+    if (!proxyIndex.isValid())
+        return;
+    const QString clickedPath = proxyIndex.data(LL::PreviewPathRole).toString();
+    if (clickedPath.isEmpty())
+        return;
+
+    // A photo only online comes down first.
+    if (CaptureDelegate::isOnlineOnly(clickedPath)) {
+        const QStringList files = onlineOnlyRenditions({proxyIndex.data(LL::CaptureIdRole).toInt()});
+        if (QMessageBox::question(this, tr("Photo Only Online"),
+                                  tr("This photo is kept online, not on this computer. Download "
+                                     "it now?\n\nIt then stays on this computer."))
+            != QMessageBox::Yes)
+            return;
+        const QPersistentModelIndex index(proxyIndex);
+        fetchPhotos(files, [this, index, clickedPath] {
+            if (index.isValid() && QFileInfo::exists(clickedPath))
+                openLifeListPhoto(index);
+        });
+        return;
+    }
+    // Renamed or moved outside PhotoLife: look, then open it under its new name.
+    if (!QFileInfo::exists(clickedPath)) {
+        if (!m_app.catalogueEditable()) {
+            statusBar()->showMessage(tr("This photo's file isn't at %1 any more.").arg(clickedPath), 8000);
+            return;
+        }
+        const qint64 inatId = proxyIndex.data(LL::InatIdRole).toLongLong();
+        statusBar()->showMessage(tr("This photo's file has been renamed or moved — finding it…"));
+        requestScan([this, inatId, clickedPath] {
+            reloadLifeList();   // the scan's own refresh may not have run (nothing found)
+            const QModelIndexList hit = m_lifeListProxy->match(m_lifeListProxy->index(0, 0), LL::InatIdRole,
+                                                               inatId, 1, Qt::MatchExactly);
+            if (!hit.isEmpty() && QFileInfo::exists(hit.first().data(LL::PreviewPathRole).toString())) {
+                statusBar()->clearMessage();
+                openLifeListPhoto(hit.first());
+                return;
+            }
+            statusBar()->showMessage(tr("Couldn't find this photo's file: it isn't at %1 any more, and no "
+                                        "file with the same contents turned up in your library folders.")
+                                         .arg(clickedPath),
+                                     10000);
+        });
+        return;
+    }
+
+    // Which are starred, in one go.
+    QSet<int> starred;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        if (q.exec(QStringLiteral("SELECT capture_id FROM best_shot"))) {
+            while (q.next())
+                starred.insert(q.value(0).toInt());
+        }
+    }
+    // Every shown row's first photo, in the list's order, so the arrow keys step through it.
+    QVector<ImageViewer::Item> items;
+    int start = 0;
+    for (int r = 0; r < m_lifeListProxy->rowCount(); ++r) {
+        const QModelIndex at = m_lifeListProxy->index(r, 0);
+        const coverage::LifeListEntry &e = m_lifeListModel->entry(m_lifeListProxy->mapToSource(at).row());
+        if (e.previewPath.isEmpty())
+            continue;
+        const bool hasCommon = !e.commonName.isEmpty() && e.commonName != e.name;
+        const QString name = hasCommon ? QStringLiteral("%1 (%2)").arg(e.commonName, e.name) : e.name;
+        const QString number = e.number > 0 ? QString::number(e.number) : QStringLiteral("—");
+        ImageViewer::Item item;
+        item.path = e.previewPath;
+        item.title = QStringLiteral("%1 · %2").arg(number, hasCommon ? e.commonName : e.name);
+        item.caption = QStringLiteral("%1. %2\n").arg(number, name)
+                       + (e.firstOn.isEmpty()
+                              ? tr("First photographed: no usable date")
+                              : tr("First photographed %1").arg(model::LifeListModel::dateText(e.firstOn)))
+                       + (e.locality.isEmpty() ? QString() : QStringLiteral(" · ") + e.locality);
+        item.captureId = e.captureId;
+        item.canBestShot = true;
+        item.bestShot = starred.contains(e.captureId);
+        item.canIdentify = true;
+        item.taken = QDate::fromString(e.firstOn.left(10), Qt::ISODate);
+        if (r == proxyIndex.row())
+            start = items.size();
+        items.append(item);
+    }
+    showInViewer(items, start);
 }
 
 namespace {
@@ -5817,6 +6291,17 @@ void MainWindow::onScanFinished(const scan::ScanSummary &summary)
     scheduleChangesCount();
     m_lastScanCompleted = summary.ok() && !summary.cancelled;
     m_model->reload();
+    // A file added, renamed or moved (here or in a file manager): every grid
+    // showing it, and what counts it, takes the new name -- not just All
+    // Library Photos -- so a photo opens straight away from wherever it is.
+    if (summary.capturesAdded + summary.renditionsAdded + summary.renditionsUpdated > 0) {
+        m_taxonModel->reload();
+        m_bestShotModel->reload();
+        if (m_untreedModel)
+            m_untreedModel->reload();
+        m_reviewPane->reload();
+        refreshCoverage();
+    }
     updateEmptyState();
     m_app.libraryWatcher().refresh();
 

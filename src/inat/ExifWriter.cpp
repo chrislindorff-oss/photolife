@@ -65,12 +65,21 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
             exif["Exif.Image.DateTime"] = exifDate.toStdString();
         }
         if (fields.latitude && fields.longitude) {
-            exif["Exif.GPSInfo.GPSLatitudeRef"] = *fields.latitude >= 0 ? "N" : "S";
-            const Exiv2::URationalValue lat = toGpsRational(std::abs(*fields.latitude));
-            exif.add(Exiv2::ExifKey("Exif.GPSInfo.GPSLatitude"), &lat);
-            exif["Exif.GPSInfo.GPSLongitudeRef"] = *fields.longitude >= 0 ? "E" : "W";
-            const Exiv2::URationalValue lon = toGpsRational(std::abs(*fields.longitude));
-            exif.add(Exiv2::ExifKey("Exif.GPSInfo.GPSLongitude"), &lon);
+            // Replaced, not added to: ExifData::add() appends, so a photo
+            // that already had a position kept it first in line (and every
+            // reader took that one), with the new one behind it unseen.
+            const auto replace = [&exif](const char *key, const Exiv2::Value &value) {
+                const Exiv2::ExifKey k(key);
+                for (auto it = exif.findKey(k); it != exif.end(); it = exif.findKey(k))
+                    exif.erase(it);
+                exif.add(k, &value);
+            };
+            const Exiv2::AsciiValue latRef(*fields.latitude >= 0 ? "N" : "S");
+            const Exiv2::AsciiValue lonRef(*fields.longitude >= 0 ? "E" : "W");
+            replace("Exif.GPSInfo.GPSLatitudeRef", latRef);
+            replace("Exif.GPSInfo.GPSLatitude", toGpsRational(std::abs(*fields.latitude)));
+            replace("Exif.GPSInfo.GPSLongitudeRef", lonRef);
+            replace("Exif.GPSInfo.GPSLongitude", toGpsRational(std::abs(*fields.longitude)));
         }
         if (!fields.taxonName.isEmpty()) {
             // No standard EXIF tag for a species identification.

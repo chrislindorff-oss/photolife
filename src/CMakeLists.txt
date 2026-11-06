@@ -15,6 +15,7 @@ qt_add_library(photolife_core STATIC
     collection/ExportService.h collection/ExportService.cpp
     collection/ThumbnailWriter.h collection/ThumbnailWriter.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
+    coverage/LifeList.h coverage/LifeList.cpp
     db/Database.h           db/Database.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
     geo/Distance.h
@@ -68,6 +69,7 @@ qt_add_library(photolife_core STATIC
     match/TaxonResolver.h   match/TaxonResolver.cpp
     match/TextSimilarity.h  match/TextSimilarity.cpp
     model/CaptureListModel.h model/CaptureListModel.cpp
+    model/LifeListModel.h model/LifeListModel.cpp
     model/ReferencePhotoModel.h model/ReferencePhotoModel.cpp
     model/ReviewQueueFilterProxy.h model/ReviewQueueFilterProxy.cpp
     model/ReviewQueueGroupModel.h model/ReviewQueueGroupModel.cpp
@@ -149,6 +151,7 @@ qt_add_library(photolife_core STATIC
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
     ui/PhotosOnComputerDialog.h ui/PhotosOnComputerDialog.cpp
     ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp
+    ui/ReferencePhotoDelegate.h ui/ReferencePhotoDelegate.cpp
     ui/ReferencePhotoDialog.h ui/ReferencePhotoDialog.cpp
     ui/ReviewPane.h         ui/ReviewPane.cpp
     ui/ServerBar.h          ui/ServerBar.cpp

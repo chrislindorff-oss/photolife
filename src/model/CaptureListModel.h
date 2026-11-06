@@ -117,6 +117,12 @@ public:
     void setBestShotOnly(bool on);
     bool bestShotOnly() const { return m_bestShotOnly; }
 
+    // Only photos with a location (the GEO pill), or only those without one.
+    // Combines with the other filters; reloads asynchronously.
+    enum class GpsFilter { Any, With, Without };
+    void setGpsFilter(GpsFilter filter);
+    GpsFilter gpsFilter() const { return m_gpsFilter; }
+
     // Patches the starred state of the given captures in place (no model reset),
     // for a snappy repaint of the star overlay after the user stars/unstars
     // from the grid. Rows not currently loaded are ignored.
@@ -171,6 +177,7 @@ public:
         int projectScope = 0;
         bool bestShotOnly = false;
         QList<qint64> taxonSet;   // empty = disabled; see setTaxonSetScope()
+        GpsFilter gpsFilter = GpsFilter::Any;
     };
 
 signals:
@@ -200,6 +207,7 @@ private:
     qint64 m_taxonScope = 0;
     int m_projectScope = 0;
     bool m_bestShotOnly = false;
+    GpsFilter m_gpsFilter = GpsFilter::Any;
     QList<qint64> m_taxonSet;
     int m_captionFields = CaptionName;
 };

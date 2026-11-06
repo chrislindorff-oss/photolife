@@ -36,6 +36,7 @@ private slots:
     void taxonSetScopeAndTaxonScopeAreMutuallyExclusive();
     void captionLocalityShownOnlyWhenEnabledAndCached();
     void applyGpsPatchesRowInPlaceWithoutReset();
+    void gpsFilterKeepsOnlyPhotosWithOrWithoutALocation();
     void confirmedOrAutoStatusFilterIncludesBothStatuses();
 
 private:
@@ -335,6 +336,38 @@ void TestCaptureListModel::captionLocalityShownOnlyWhenEnabledAndCached()
 
     model.setCaptionFields(CaptureListModel::CaptionName);   // Locality unchecked
     QVERIFY(!model.index(row).data(Qt::DisplayRole).toString().contains(QStringLiteral("Melbourne")));
+}
+
+void TestCaptureListModel::gpsFilterKeepsOnlyPhotosWithOrWithoutALocation()
+{
+    // The crow has a location; the orchid hasn't.
+    QSqlQuery(QSqlDatabase::database(m_db->connectionName(), false))
+        .exec(QStringLiteral("UPDATE capture SET latitude = -37.8, longitude = 144.9 WHERE base_name = 'crow'"));
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    model.reload();
+    QCOMPARE(model.rowCount(), 2);
+
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    model.setGpsFilter(CaptureListModel::GpsFilter::With);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
+    QVERIFY(model.index(0).data(CaptureListModel::HasGpsRole).toBool());
+
+    spy.clear();
+    model.setGpsFilter(CaptureListModel::GpsFilter::Without);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Caladenia carnea")}));
+
+    // Combines with the tree's scope.
+    spy.clear();
+    model.setProjectScope(m_birdProject);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.rowCount(), 0);
+
+    spy.clear();
+    model.setGpsFilter(CaptureListModel::GpsFilter::Any);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
 }
 
 void TestCaptureListModel::applyGpsPatchesRowInPlaceWithoutReset()

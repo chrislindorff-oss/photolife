@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
@@ -93,8 +94,13 @@ GeotagDialog::GeotagDialog(Application &app, const QList<Photo> &photos, const Q
         m_map->setPin(at->x(), at->y());
         pinMoved(at->x(), at->y());
     });
+    auto *searchButton = new QPushButton(tr("Search"), this);
+    searchButton->setAutoDefault(false);   // Enter elsewhere still sets the location
+    searchButton->setToolTip(tr("Find the place typed (or press Enter in the box)"));
+    connect(searchButton, &QPushButton::clicked, this, &GeotagDialog::search);
     auto *find = new QHBoxLayout;
     find->addWidget(m_search, 3);
+    find->addWidget(searchButton);
     find->addWidget(m_coordinates, 2);
 
     m_map = new LocationPickerMap(m_app.tileCache(), m_app.satelliteTileCache(), this);
@@ -241,6 +247,19 @@ void GeotagDialog::accept()
     if (m_intoRaw->isVisible())
         m_app.settings().setGeotagWriteIntoRaw(m_intoRaw->isChecked());
     QDialog::accept();
+}
+
+void GeotagDialog::keyPressEvent(QKeyEvent *event)
+{
+    // The box has already acted on it (returnPressed); don't let the dialog
+    // take it as its default button too.
+    const bool enter = event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter;
+    QWidget *focus = focusWidget();
+    if (enter && (focus == m_search || focus == m_coordinates || focus == m_results)) {
+        event->accept();
+        return;
+    }
+    QDialog::keyPressEvent(event);
 }
 
 void GeotagDialog::resizeEvent(QResizeEvent *event)

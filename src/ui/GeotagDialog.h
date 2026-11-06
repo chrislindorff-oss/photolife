@@ -66,6 +66,8 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
+    // Enter in the search or coordinates box finds the place; it never sets the location.
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void showOwnPhoto();
