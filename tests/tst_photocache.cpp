@@ -18,6 +18,7 @@ private slots:
     void emptyUrlIsNull();
     void returnsAnImageAlreadyOnDisk();
     void unreachableUrlStaysNullAndIsNotRetriedForever();
+    void retryAsksAgainForAFailedUrl();
     void diskUsageCountsOnlyUrlsPresentOnDisk();
     void largerVariantsAskForTheBiggestFirst();
 
@@ -59,17 +60,39 @@ void TestPhotoCache::unreachableUrlStaysNullAndIsNotRetriedForever()
 {
     QTemporaryDir dir;
     PhotoCache cache(dir.path(), QByteArrayLiteral("test/1"));
+    cache.setRetryBaseMs(20);
 
-    // A syntactically valid but unroutable URL: the request fails fast and the
-    // url is marked failed, so a second ask does not schedule anything.
+    // A syntactically valid but unroutable URL: each try fails fast. It's
+    // tried a few times (a dropped connection can be passing), then marked
+    // failed -- one ready() for the lot -- so a second ask schedules nothing.
     const QString url = QStringLiteral("http://127.0.0.1:9/nope.jpg");
     QSignalSpy spy(&cache, &PhotoCache::ready);
     QVERIFY(cache.photo(url).isNull());
     QVERIFY(!cache.hasFailed(url));   // queued, not failed yet
     QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.at(0).at(0).toString(), url);
     QVERIFY(cache.hasFailed(url));
     QVERIFY(cache.photo(url).isNull());   // still null, no crash, no infinite retry
+    QVERIFY(!spy.wait(300));              // ...and nothing more scheduled
+}
+
+void TestPhotoCache::retryAsksAgainForAFailedUrl()
+{
+    QTemporaryDir dir;
+    PhotoCache cache(dir.path(), QByteArrayLiteral("test/1"));
+    cache.setRetryBaseMs(20);
+    const QString url = QStringLiteral("http://127.0.0.1:9/nope.jpg");
+    QSignalSpy spy(&cache, &PhotoCache::ready);
+    cache.photo(url);
+    QVERIFY(spy.wait(5000));
+    QVERIFY(cache.hasFailed(url));
+
+    cache.retry(url);
+    QVERIFY(!cache.hasFailed(url));   // asked for again
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.count(), 2);
+    QVERIFY(cache.hasFailed(url));
 }
 
 void TestPhotoCache::diskUsageCountsOnlyUrlsPresentOnDisk()

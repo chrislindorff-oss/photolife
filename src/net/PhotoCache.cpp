@@ -8,7 +8,9 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QDateTime>
 #include <QSaveFile>
+#include <QTimer>
 
 namespace pl::net {
 
@@ -17,6 +19,9 @@ PhotoCache::PhotoCache(QString cacheDir, QByteArray userAgent, QObject *parent)
       m_nam(new QNetworkAccessManager(this))
 {
     QDir().mkpath(m_cacheDir);
+    // A stalled connection ends as a failure (and a retry), not a photo
+    // that never comes.
+    m_nam->setTransferTimeout(30000);
 }
 
 PhotoCache::~PhotoCache() = default;
@@ -28,7 +33,7 @@ QString PhotoCache::diskPath(const QString &url) const
     return QDir(m_cacheDir).filePath(hash.left(2) + QLatin1Char('/') + hash + QStringLiteral(".jpg"));
 }
 
-QPixmap PhotoCache::photo(const QString &url)
+QPixmap PhotoCache::photo(const QString &url, Urgency urgency)
 {
     if (url.isEmpty())
         return {};
@@ -45,13 +50,40 @@ QPixmap PhotoCache::photo(const QString &url)
         }
     }
 
-    if (m_failed.contains(url) || m_pending.contains(url))
+    if (m_pending.contains(url)) {
+        if (urgency == Urgency::Now && m_waiting.removeOne(url)) {
+            m_waiting.prepend(url);
+            pump();
+        }
         return {};
+    }
+    if (const auto it = m_failed.constFind(url); it != m_failed.constEnd()) {
+        if (it->permanent || QDateTime::currentMSecsSinceEpoch() - it->at < kFailureMemoryMs)
+            return {};
+        m_failed.erase(it);   // long enough ago: worth another go
+    }
 
     m_pending.insert(url);
-    m_waiting.enqueue(url);
-    pump();
+    m_attempts.insert(url, 0);
+    enqueue(url, urgency);
     return {};
+}
+
+void PhotoCache::retry(const QString &url)
+{
+    if (url.isEmpty())
+        return;
+    m_failed.remove(url);
+    photo(url, Urgency::Now);
+}
+
+void PhotoCache::enqueue(const QString &url, Urgency urgency)
+{
+    if (urgency == Urgency::Now)
+        m_waiting.prepend(url);
+    else
+        m_waiting.enqueue(url);
+    pump();
 }
 
 PhotoCache::DiskUsage PhotoCache::diskUsage(const QStringList &urls) const
@@ -170,15 +202,34 @@ void PhotoCache::onFinished(const QString &url, QNetworkReply *reply)
 {
     reply->deleteLater();
     --m_inFlight;
-    m_pending.remove(url);
 
     const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const bool answered = reply->error() == QNetworkReply::NoError && (status == 0 || (status >= 200 && status < 300));
     QImage image;
-    if (reply->error() == QNetworkReply::NoError && (status == 0 || (status >= 200 && status < 300)))
+    if (answered)
         image.loadFromData(reply->readAll());
 
+    // Not there (a 4xx), or not an image: asking again won't change it.
+    const bool permanent = (answered && image.isNull())
+                           || (status >= 400 && status < 500 && status != 408 && status != 429);
+    if (image.isNull() && !permanent) {
+        // A dropped connection, a timeout or a busy server: try again shortly.
+        const int tried = ++m_attempts[url];
+        if (tried < kMaxAttempts) {
+            QTimer::singleShot(m_retryBaseMs * (1 << (tried - 1)), this, [this, url] {
+                // At the front: whoever asked has been waiting already.
+                if (m_pending.contains(url))
+                    enqueue(url, Urgency::Now);
+            });
+            pump();
+            return;
+        }
+    }
+    m_pending.remove(url);
+    m_attempts.remove(url);
+
     if (image.isNull()) {
-        m_failed.insert(url);
+        m_failed.insert(url, {QDateTime::currentMSecsSinceEpoch(), permanent});
     } else {
         if (image.width() > kMaxEdge || image.height() > kMaxEdge)
             image = image.scaled(kMaxEdge, kMaxEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);

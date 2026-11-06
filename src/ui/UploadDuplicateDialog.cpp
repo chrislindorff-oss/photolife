@@ -32,6 +32,25 @@ QListWidget *iconList(QWidget *parent)
     return list;
 }
 
+constexpr int kIsInatRole = Qt::UserRole + 3;   // an iNaturalist photo (not one from the library)
+
+// An iNaturalist photo's tile: the photo, else a word on where it's got to.
+void showInatPhoto(QListWidgetItem *item, net::PhotoCache &cache)
+{
+    const QString url = item->data(kUrlRole).toString();
+    const QPixmap pixmap = cache.photo(url, net::PhotoCache::Urgency::Now);
+    if (!pixmap.isNull()) {
+        item->setIcon(QIcon(pixmap));
+        item->setText(QString());
+        item->setToolTip(QString());
+    } else if (cache.hasFailed(url)) {
+        item->setText(QObject::tr("Couldn't download it — double-click to try again"));
+        item->setToolTip(url);
+    } else {
+        item->setText(QObject::tr("Loading from iNaturalist…"));
+    }
+}
+
 QString observationLink(qint64 id)
 {
     return QStringLiteral("<a href=\"https://www.inaturalist.org/observations/%1\">#%1</a>").arg(id);
@@ -121,9 +140,19 @@ UploadDuplicateDialog::UploadDuplicateDialog(Application &app, const QList<inat:
     layout->addWidget(buttons);
 
     connect(&m_app.photoCache(), &net::PhotoCache::ready, this, [this](const QString &url) {
-        for (int i = 0; i < m_theirs->count(); ++i)
-            if (m_theirs->item(i)->data(kUrlRole).toString() == url)
-                m_theirs->item(i)->setIcon(QIcon(m_app.photoCache().photo(url)));
+        for (int i = 0; i < m_theirs->count(); ++i) {
+            QListWidgetItem *item = m_theirs->item(i);
+            if (item->data(kIsInatRole).toBool() && item->data(kUrlRole).toString() == url)
+                showInatPhoto(item, m_app.photoCache());
+        }
+    });
+    // One that didn't come: try it again.
+    connect(m_theirs, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        const QString url = item->data(kUrlRole).toString();
+        if (!item->data(kIsInatRole).toBool() || !m_app.photoCache().hasFailed(url))
+            return;
+        m_app.photoCache().retry(url);
+        showInatPhoto(item, m_app.photoCache());
     });
     connect(&m_app.thumbnails(), &thumb::ThumbnailCache::ready, this, [this, yours](const QString &key, int px) {
         if (px != thumb::ThumbnailCache::kGridPx)
@@ -177,9 +206,8 @@ void UploadDuplicateDialog::fillPhotos()
     for (const QString &url : e.photoUrls) {
         auto *item = new QListWidgetItem(m_theirs);
         item->setData(kUrlRole, url);
-        const QPixmap pixmap = m_app.photoCache().photo(url);
-        if (!pixmap.isNull())
-            item->setIcon(QIcon(pixmap));
+        item->setData(kIsInatRole, true);
+        showInatPhoto(item, m_app.photoCache());
     }
     if (e.photoUrls.isEmpty() && e.fromLibrary && !e.libraryPath.isEmpty()) {
         auto *item = new QListWidgetItem(e.libraryPhoto, m_theirs);

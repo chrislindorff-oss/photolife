@@ -33,14 +33,27 @@ public:
     PhotoCache(QString cacheDir, QByteArray userAgent, QObject *parent = nullptr);
     ~PhotoCache() override;
 
-    // The pixmap for `url` if it is already in memory or on disk; otherwise a
-    // null pixmap and a scheduled download that emits ready(url) on completion.
-    // A url that has already failed to download stays null and is not retried.
-    QPixmap photo(const QString &url);
+    // How soon a download is wanted: Now goes to the front of the queue (a
+    // dialog waiting on one photo shouldn't sit behind a grid's hundreds).
+    enum class Urgency { Normal, Now };
 
-    // Whether `url` has already failed to download (photo() returns null for
-    // it and schedules nothing, so no ready() will follow).
+    // The pixmap for `url` if it is already in memory or on disk; otherwise a
+    // null pixmap and a scheduled download that emits ready(url) when it ends,
+    // either way. A dropped connection, a timeout or a busy server is tried
+    // again a couple of times first. A url that failed stays null for a while
+    // (for good, when the server says it isn't there) before it's tried again.
+    QPixmap photo(const QString &url, Urgency urgency = Urgency::Normal);
+
+    // Whether `url` has failed to download (photo() returns null for it and,
+    // until its wait is over, schedules nothing, so no ready() will follow).
     bool hasFailed(const QString &url) const { return m_failed.contains(url); }
+
+    // Forgets that `url` failed and asks for it again, at the front of the queue.
+    void retry(const QString &url);
+
+    // The wait before a failed download is tried again within one ask (doubling
+    // each time) -- shortened by tests.
+    void setRetryBaseMs(int ms) { m_retryBaseMs = ms; }
 
     // Where the on-disk cache lives, for reporting total storage use.
     QString cacheDir() const { return m_cacheDir; }
@@ -71,6 +84,7 @@ signals:
 private:
     void pump();
     void startDownload(const QString &url);
+    void enqueue(const QString &url, Urgency urgency);
     void onFinished(const QString &url, QNetworkReply *reply);
     QString diskPath(const QString &url) const;
     QString largePath(const QString &url) const;
@@ -82,11 +96,20 @@ private:
 
     QHash<QString, QPixmap> m_memory;   // url -> pixmap
     QSet<QString> m_pending;            // url in flight or queued
-    QSet<QString> m_failed;             // url that errored; don't retry
+    struct Failure
+    {
+        qint64 at = 0;            // msecs since epoch
+        bool permanent = false;   // a 4xx or not an image: asking again won't help
+    };
+    QHash<QString, Failure> m_failed;   // url whose download ended in failure
+    QHash<QString, int> m_attempts;     // url -> downloads tried, while it's pending
+    int m_retryBaseMs = 1500;
     QQueue<QString> m_waiting;          // url queued behind the concurrency limit
     int m_inFlight = 0;
 
     static constexpr int kMaxConcurrent = 4;
+    static constexpr int kMaxAttempts = 3;
+    static constexpr qint64 kFailureMemoryMs = 2 * 60 * 1000;   // then a new ask tries again
 };
 
 } // namespace pl::net
