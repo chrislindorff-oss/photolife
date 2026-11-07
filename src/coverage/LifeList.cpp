@@ -151,11 +151,12 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
         QSqlQuery q(db);
         q.setForwardOnly(true);
         q.prepare(QStringLiteral(
-            "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name "
+            "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name, t.ancestry "
             "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
         q.addBindValue(projectId);
         if (!q.exec())
             return {};
+        QStringList ancestries;
         while (q.next()) {
             LifeListNode n;
             n.inatId = q.value(0).toLongLong();
@@ -164,6 +165,17 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
             n.name = q.value(3).toString();
             n.commonName = q.value(4).toString();
             nodes << n;
+            ancestries << q.value(5).toString();
+        }
+        // A parent not in the tree: its nearest ancestor that is (see parentWithin).
+        QSet<qint64> present;
+        for (const LifeListNode &n : nodes)
+            present.insert(n.inatId);
+        for (int i = 0; i < nodes.size(); ++i) {
+            const auto parent = taxonomy::TaxonomyStore::parentWithin(
+                nodes[i].parentInatId > 0 ? std::optional<qint64>(nodes[i].parentInatId) : std::nullopt,
+                ancestries.at(i), present);
+            nodes[i].parentInatId = parent.value_or(0);
         }
     }
     QList<LifeListSighting> sightings;
@@ -202,10 +214,11 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
                       "     ORDER BY (r.kind = 'raw'), r.id LIMIT 1), "
                       "  (SELECT r.content_hash FROM rendition r WHERE r.capture_id = c.id "
                       "     ORDER BY (r.kind = 'raw'), r.id LIMIT 1), "
-                      "  g.locality, c.locality_text "
+                      "  g.locality, c.locality_text, cc.capture_id, cc.camera, cc.focal_length "
                       "FROM capture c "
                       "LEFT JOIN geocode_cache g ON g.lat_round = ROUND(CAST(c.latitude AS NUMERIC), 3) "
                       "  AND g.lon_round = ROUND(CAST(c.longitude AS NUMERIC), 3) "
+                      "LEFT JOIN capture_camera cc ON cc.capture_id = c.id "
                       "WHERE c.id IN (%1)")
                       .arg(marks.join(QLatin1Char(','))));
         for (int id : chunk)
@@ -219,6 +232,10 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
                 entries[row].previewPath = q.value(1).toString();
                 entries[row].previewHash = q.value(2).toString();
                 entries[row].locality = place;
+                entries[row].cameraChecked = !q.value(5).isNull();
+                entries[row].camera = q.value(6).toString();
+                if (!q.value(7).isNull())
+                    entries[row].focalLength = q.value(7).toDouble();
             }
         }
     }

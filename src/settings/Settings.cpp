@@ -454,6 +454,38 @@ void Settings::setLifeListShowsInfraspecific(bool show)
     m_settings.setValue(QStringLiteral("ui/lifeListShowsInfraspecific"), show);
 }
 
+bool Settings::treeShowsSeen() const
+{
+    return m_settings.value(QStringLiteral("ui/treeShowsSeen"), false).toBool();
+}
+
+void Settings::setTreeShowsSeen(bool show)
+{
+    m_settings.setValue(QStringLiteral("ui/treeShowsSeen"), show);
+}
+
+QString Settings::treeViewMode() const
+{
+    return m_settings.value(QStringLiteral("ui/treeViewMode"), QStringLiteral("tree")).toString();
+}
+
+void Settings::setTreeViewMode(const QString &mode)
+{
+    m_settings.setValue(QStringLiteral("ui/treeViewMode"), mode);
+}
+
+QStringList Settings::lifeListHiddenColumns() const
+{
+    return m_settings
+        .value(QStringLiteral("ui/lifeListHiddenColumns"), QStringList{QStringLiteral("camera"), QStringLiteral("focal")})
+        .toStringList();
+}
+
+void Settings::setLifeListHiddenColumns(const QStringList &keys)
+{
+    m_settings.setValue(QStringLiteral("ui/lifeListHiddenColumns"), keys);
+}
+
 bool Settings::lifeListThumbnails() const
 {
     return m_settings.value(QStringLiteral("ui/lifeListThumbnails"), false).toBool();

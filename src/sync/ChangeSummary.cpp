@@ -121,6 +121,12 @@ const Spec kSpecs[] = {
      nullptr,
      "SELECT '☆ ' || " PHOTO("c") " || ' (unstarred)' FROM base.best_shot b "
      "LEFT JOIN base.capture c ON c.id = b.capture_id WHERE b.capture_id IN ({REMOVED})"},
+    {"taxon_seen", "seenTaxa", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Seen (not photographed)"), false,
+     "SELECT COALESCE((SELECT t.name FROM main.taxon t WHERE t.inat_id = m.inat_id), 'taxon ' || m.inat_id) "
+     "  || ' — seen' FROM main.taxon_seen m WHERE m.inat_id IN ({ADDED})",
+     nullptr,
+     "SELECT COALESCE((SELECT t.name FROM main.taxon t WHERE t.inat_id = b.inat_id), 'taxon ' || b.inat_id) "
+     "  || ' — no longer seen' FROM base.taxon_seen b WHERE b.inat_id IN ({REMOVED})"},
     {"name_alias", "learnedNames", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Learned names"), false,
      "SELECT m.raw_text || ' → ' || CASE WHEN m.not_a_taxon <> 0 THEN 'not a taxon' "
      "  ELSE COALESCE(t.name, '?') END FROM main.name_alias m "
@@ -153,6 +159,7 @@ const Spec kSpecs[] = {
      "SELECT t.name || ': ' || m.origin || ' (' || m.source || ')' FROM main.taxon_origin m "
      "JOIN main.taxon t ON t.id = m.taxon_id WHERE m.id IN ({ADDED})",
      nullptr, nullptr, "x.source IN ('APC', 'iNaturalist')"},
+    {"capture_camera", "cameraDetails", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Camera details (from EXIF)"), true},
     {"rendition", "photoFiles", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Photo files (scan details)"), true},
     {"taxon", "taxa", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Taxa from iNaturalist"), true,
      "SELECT m.name || ' (' || m.rank || ')' FROM main.taxon m WHERE m.id IN ({ADDED})",

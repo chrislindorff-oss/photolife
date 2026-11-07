@@ -1,14 +1,20 @@
 #include "ui/IdentifyPanel.h"
 
 #include "app/Application.h"
+#include "net/PhotoCache.h"
 #include "settings/Settings.h"
 #include "ui/InatTokenGetter.h"
 #include "ui/Theme.h"
 
 #include <QCheckBox>
+#include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
+#include <QPointer>
+#include <QScreen>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
@@ -31,6 +37,79 @@ QString percent(double score)
 {
     return score < 1 ? QStringLiteral("<1%") : QStringLiteral("%1%").arg(qRound(score));
 }
+
+// A quick look at what a suggestion looks like: iNaturalist's photo of the
+// taxon with its names and credit. A pop-up -- a click anywhere, or Esc,
+// closes it.
+class SuggestionPreview : public QFrame
+{
+public:
+    SuggestionPreview(net::PhotoCache &cache, const taxonomy::Taxon &taxon, QWidget *parent)
+        : QFrame(parent, Qt::Popup), m_cache(cache), m_url(taxon.photoUrl)
+    {
+        setAttribute(Qt::WA_DeleteOnClose);
+        setFrameShape(QFrame::StyledPanel);
+        const QColor muted = themeColors(currentThemeVariant()).mutedText;
+        m_photo = new QLabel(this);
+        m_photo->setAlignment(Qt::AlignCenter);
+        m_photo->setFixedSize(net::PhotoCache::kMaxEdge, net::PhotoCache::kMaxEdge * 3 / 4);
+        auto *names = new QLabel(this);
+        names->setWordWrap(true);
+        names->setAlignment(Qt::AlignCenter);
+        names->setText(taxon.commonName.isEmpty()
+                           ? QStringLiteral("<i>%1</i>").arg(taxon.name.toHtmlEscaped())
+                           : QStringLiteral("<b>%1</b><br><i>%2</i>")
+                                 .arg(taxon.commonName.toHtmlEscaped(), taxon.name.toHtmlEscaped()));
+        auto *credit = new QLabel(taxon.photoAttribution, this);
+        credit->setWordWrap(true);
+        credit->setAlignment(Qt::AlignCenter);
+        QFont small = credit->font();
+        small.setPointSizeF(small.pointSizeF() * 0.85);
+        credit->setFont(small);
+        QPalette pal = credit->palette();
+        pal.setColor(QPalette::WindowText, muted);
+        credit->setPalette(pal);
+        credit->setVisible(!taxon.photoAttribution.isEmpty());
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(8, 8, 8, 8);
+        layout->addWidget(m_photo);
+        layout->addWidget(names);
+        layout->addWidget(credit);
+        setFixedWidth(net::PhotoCache::kMaxEdge + 16);
+
+        connect(&m_cache, &net::PhotoCache::ready, this, [this](const QString &url) {
+            if (url == m_url)
+                showPhoto();
+        });
+        showPhoto(true);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *) override { close(); }
+
+private:
+    void showPhoto(bool ask = false)
+    {
+        if (m_url.isEmpty()) {
+            m_photo->setText(tr("iNaturalist has no photo of this taxon."));
+            return;
+        }
+        const QPixmap pm = ask ? m_cache.photo(m_url, net::PhotoCache::Urgency::Now) : m_cache.photo(m_url);
+        if (pm.isNull()) {
+            m_photo->setText(m_cache.hasFailed(m_url) ? tr("Couldn't download the photo from iNaturalist.")
+                                                      : tr("Loading from iNaturalist…"));
+            return;
+        }
+        const qreal dpr = devicePixelRatioF();
+        QPixmap shown = pm.scaled(m_photo->size() * dpr, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        shown.setDevicePixelRatio(dpr);
+        m_photo->setPixmap(shown);
+    }
+
+    net::PhotoCache &m_cache;
+    QString m_url;
+    QLabel *m_photo = nullptr;
+};
 
 } // namespace
 
@@ -71,6 +150,13 @@ IdentifyPanel::IdentifyPanel(Application &app, QWidget *parent)
         if (item->flags() & Qt::ItemIsEnabled)
             emit chosen(item->data(Qt::UserRole).value<taxonomy::Taxon>());
     });
+    // Right-click (or Space) for a look at what a suggestion is.
+    m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_list, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        if (QListWidgetItem *item = m_list->itemAt(pos))
+            previewSuggestion(item, m_list->viewport()->mapToGlobal(pos));
+    });
+    m_list->installEventFilter(this);
     connect(&m_app, &Application::inatApiTokenChanged, this, [this] {
         if (m_waitingForToken && m_request)
             ask();
@@ -225,8 +311,45 @@ void IdentifyPanel::fill()
         return;
     }
     m_status->setText(m_request && m_request->crop
-                          ? tr("iNaturalist's suggestions for the selected part — click one to use it:")
-                          : tr("iNaturalist's suggestions — click one to use it:"));
+                          ? tr("Suggestions for the selected part — click to use, right-click to see one:")
+                          : tr("iNaturalist's suggestions — click to use, right-click to see one:"));
+}
+
+bool IdentifyPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_list && event->type() == QEvent::KeyPress
+        && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Space) {
+        if (QListWidgetItem *item = m_list->currentItem()) {
+            const QRect at = m_list->visualItemRect(item);
+            previewSuggestion(item, m_list->viewport()->mapToGlobal(at.bottomLeft() + QPoint(24, 0)));
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void IdentifyPanel::previewSuggestion(QListWidgetItem *item, const QPoint &at)
+{
+    const QVariant data = item->data(Qt::UserRole);
+    if (!data.canConvert<taxonomy::Taxon>())
+        return;
+    auto *preview = new SuggestionPreview(m_app.photoCache(), data.value<taxonomy::Taxon>(), this);
+    preview->adjustSize();
+    // Beside the pointer, kept on the screen.
+    QRect r(at + QPoint(12, 12), preview->size());
+    if (const QScreen *screen = QGuiApplication::screenAt(at)) {
+        const QRect avail = screen->availableGeometry();
+        if (r.right() > avail.right())
+            r.moveRight(at.x() - 12);
+        if (r.bottom() > avail.bottom())
+            r.moveBottom(avail.bottom());
+        if (r.left() < avail.left())
+            r.moveLeft(avail.left());
+        if (r.top() < avail.top())
+            r.moveTop(avail.top());
+    }
+    preview->move(r.topLeft());
+    preview->show();
 }
 
 void IdentifyPanel::showMessage(const QString &text, bool offerToken)

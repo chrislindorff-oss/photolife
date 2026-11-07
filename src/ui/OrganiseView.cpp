@@ -44,6 +44,7 @@
 #include <QStyledItemDelegate>
 #include <QToolButton>
 #include <QUrl>
+#include <QFont>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QtConcurrent>
@@ -713,6 +714,15 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     // Ignored both ways: the photo is scaled to whatever space there is, and
     // must never ask for its own size (that would grow the window each time).
     m_preview->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    // How far through the folder: off the photo, at its top left.
+    m_position = new QLabel(this);
+    m_position->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_position->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    {
+        QFont f = m_position->font();
+        f.setBold(true);
+        m_position->setFont(f);
+    }
     m_previewCaption = new QLabel(this);
     m_previewCaption->setAlignment(Qt::AlignCenter);
     m_previewCaption->setWordWrap(true);   // wraps rather than widening the window
@@ -730,6 +740,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     layout->addWidget(m_scanProgress);
     layout->addWidget(m_hint);
     layout->addWidget(m_list);
+    layout->addWidget(m_position);
     layout->addWidget(m_preview, 1);
     layout->addWidget(m_previewCaption);
 
@@ -916,6 +927,11 @@ void OrganiseView::setFilmstrip(bool on)
     m_list->setVerticalScrollBarPolicy(on ? Qt::ScrollBarAlwaysOff : Qt::ScrollBarAsNeeded);
     m_preview->setVisible(on);
     m_previewCaption->setVisible(on);
+    // Above the preview in the filmstrip; above the photos in the grid.
+    if (auto *box = qobject_cast<QVBoxLayout *>(layout())) {
+        box->removeWidget(m_position);
+        box->insertWidget(box->indexOf(m_list) + (on ? 1 : 0), m_position);
+    }
     // The strip is a band across the top; the grid fills the view.
     if (!on)
         m_list->setMaximumHeight(QWIDGETSIZE_MAX);
@@ -1040,8 +1056,20 @@ void OrganiseView::elideFolderLabel()
         m_folderText, Qt::ElideMiddle, std::max(40, m_folderLabel->width())));
 }
 
+void OrganiseView::updatePosition()
+{
+    const int row = m_list->currentIndex().row();
+    if (row < 0 || row >= m_session.count()) {
+        m_position->clear();
+        return;
+    }
+    const int total = m_session.count() + m_session.pendingCount();
+    m_position->setText(tr("Photo %1 of %2").arg(QLocale().toString(row + 1), QLocale().toString(total)));
+}
+
 void OrganiseView::updatePreview()
 {
+    updatePosition();
     if (!m_filmstrip)
         return;
     const int row = m_list->currentIndex().row();
@@ -1090,6 +1118,7 @@ void OrganiseView::updateCounts()
                  nullptr, undo.shots)
                   .arg(QLocale().toString(undo.when, QLocale::ShortFormat))
                   .arg(undo.folders.size()));
+    updatePosition();
     if (!open || m_session.count() == 0) {
         m_counts->setText(open ? tr("No photos in this folder") : QString());
         m_commitButton->setEnabled(false);

@@ -1,10 +1,12 @@
 #include "model/TaxonomyTreeModel.h"
 
+#include "catalogue/SeenStore.h"
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "ui/Theme.h"
 
 #include <QColor>
+#include <QDebug>
 #include <QFont>
 #include <QStringList>
 
@@ -27,12 +29,74 @@ void TaxonomyTreeModel::setProject(int projectId)
         taxonomy::TaxonomyStore store(m_db.connectionName());
         m_flat = store.projectTree(projectId);
     }
+    m_markedSeen = m_db.isOpen() ? catalogue::SeenStore(m_db.connectionName()).seenTaxa() : QSet<qint64>{};
+    recomputeSeen();
     rebuild();
+}
+
+void TaxonomyTreeModel::recomputeSeen()
+{
+    m_seen = coverage::rollUpSeen(m_flat, m_coverage, m_markedSeen);
+}
+
+bool TaxonomyTreeModel::canMarkSeen(qint64 inatId) const
+{
+    const Node *node = m_byId.value(inatId, nullptr);
+    if (!node || !node->data.isLeafRank)
+        return false;
+    const coverage::SeenState s = m_seen.value(inatId);
+    return !s.photographed && s.seenVia == 0;
+}
+
+bool TaxonomyTreeModel::setMarkedSeen(qint64 inatId, bool seen)
+{
+    if (!canMarkSeen(inatId))
+        return false;
+    if (m_markedSeen.contains(inatId) == seen)
+        return true;
+    if (m_editGuard && !m_editGuard())
+        return false;
+    catalogue::SeenStore store(m_db.connectionName());
+    if (!store.setSeen(inatId, seen)) {
+        qWarning() << "Couldn't record a seen tick:" << store.error();
+        return false;
+    }
+    if (seen)
+        m_markedSeen.insert(inatId);
+    else
+        m_markedSeen.remove(inatId);
+    recomputeSeen();
+    emitSeenDataChanged({});
+    emit seenChanged();
+    return true;
+}
+
+coverage::SeenTotals TaxonomyTreeModel::seenTotals() const
+{
+    QList<taxonomy::TreeNode> shown;
+    shown.reserve(m_byId.size());
+    for (const Node *node : m_byId)
+        if (!node->contextOnly)
+            shown << node->data;
+    return coverage::tallySeen(shown, m_seen);
+}
+
+void TaxonomyTreeModel::emitSeenDataChanged(const QModelIndex &parent)
+{
+    const int n = rowCount(parent);
+    if (n == 0)
+        return;
+    emit dataChanged(index(0, NameColumn, parent), index(n - 1, NameColumn, parent), {SeenRole, SeenEditableRole});
+    emit dataChanged(index(0, SeenColumn, parent), index(n - 1, SeenColumn, parent),
+                     {Qt::DisplayRole, Qt::CheckStateRole, Qt::ToolTipRole});
+    for (int r = 0; r < n; ++r)
+        emitSeenDataChanged(index(r, 0, parent));
 }
 
 void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
 {
     m_coverage = coverage;
+    recomputeSeen();
     if (m_photographedOnly || m_threatenedOnly || m_introducedOnly || !m_statusFilter.isEmpty()
         || m_coverageFilter != CoverageFilter::All) {
         // The visible set depends on coverage, so the tree structure changes.
@@ -41,6 +105,7 @@ void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverag
     }
     // Structure is unchanged; coverage feeds several roles on every node.
     emitCoverageDataChanged({});
+    emit seenChanged();
 }
 
 void TaxonomyTreeModel::emitCoverageDataChanged(const QModelIndex &parent)
@@ -49,7 +114,7 @@ void TaxonomyTreeModel::emitCoverageDataChanged(const QModelIndex &parent)
     if (n == 0)
         return;
     emit dataChanged(index(0, 0, parent), index(n - 1, columnCount() - 1, parent),
-                     {Qt::DisplayRole, Qt::FontRole, Qt::ForegroundRole, Qt::ToolTipRole,
+                     {Qt::DisplayRole, Qt::FontRole, Qt::ForegroundRole, Qt::ToolTipRole, Qt::CheckStateRole,
                       HasPhotosRole, SpeciesTotalRole, SpeciesWithPhotosRole, StatusRole});
     for (int r = 0; r < n; ++r)
         emitCoverageDataChanged(index(r, 0, parent));
@@ -227,6 +292,7 @@ void TaxonomyTreeModel::rebuild()
     }
 
     endResetModel();
+    emit seenChanged();
 }
 
 QModelIndex TaxonomyTreeModel::indexForTaxon(qint64 inatId) const
@@ -354,7 +420,7 @@ int TaxonomyTreeModel::rowCount(const QModelIndex &parent) const
 
 int TaxonomyTreeModel::columnCount(const QModelIndex &) const
 {
-    return 3;
+    return ColumnCount;
 }
 
 QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
@@ -363,6 +429,41 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
     if (!node || node == m_root.get())
         return {};
     const taxonomy::TreeNode &t = node->data;
+
+    if (index.column() == SeenColumn) {
+        const coverage::SeenState seen = m_seen.value(t.inatId);
+        switch (role) {
+        case Qt::CheckStateRole:
+            return t.isLeafRank ? QVariant(seen.seen ? Qt::Checked : Qt::Unchecked) : QVariant();
+        case Qt::DisplayRole: {
+            if (t.isLeafRank)
+                return {};
+            const int total = m_coverage.byTaxon.value(t.inatId).speciesTotal;
+            return total > 0 ? QStringLiteral("%1 / %2").arg(seen.speciesSeen).arg(total) : QString();
+        }
+        case Qt::TextAlignmentRole:
+            return int(Qt::AlignCenter);
+        case Qt::ForegroundRole:
+            return pl::themeColors(pl::currentThemeVariant()).mutedText;
+        case Qt::ToolTipRole: {
+            if (!t.isLeafRank)
+                return tr("Species seen (ticked, or photographed) out of those in this group");
+            if (seen.photographed)
+                return tr("Photographed — so seen");
+            if (seen.seenVia != 0) {
+                const auto via = std::find_if(m_flat.cbegin(), m_flat.cend(),
+                                              [&](const taxonomy::TreeNode &n) { return n.inatId == seen.seenVia; });
+                return via != m_flat.cend() ? tr("Seen as %1 %2").arg(via->rank, via->name) : tr("Seen");
+            }
+            return seen.marked ? tr("Seen, not photographed yet — click to untick")
+                               : tr("Click to tick it as seen, though not photographed yet");
+        }
+        case InatIdRole:
+            return t.inatId;
+        default:
+            return {};
+        }
+    }
 
     switch (role) {
     case Qt::DisplayRole: {
@@ -453,6 +554,14 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         return m_coverage.byTaxon.value(t.inatId).subtreeHasPhotos;
     case StatusRole:
         return m_coverage.byTaxon.value(t.inatId).status;
+    case SeenRole:
+        return t.isLeafRank ? QVariant(m_seen.value(t.inatId).seen ? Qt::Checked : Qt::Unchecked) : QVariant();
+    case SeenEditableRole:
+        return canMarkSeen(t.inatId);
+    case CaptureCountRole:
+        return m_coverage.byTaxon.value(t.inatId).captureCount;
+    case CommonNameRole:
+        return t.commonName == t.name ? QString() : t.commonName;
     default:
         return {};
     }
@@ -465,8 +574,32 @@ QVariant TaxonomyTreeModel::headerData(int section, Qt::Orientation orientation,
     switch (section) {
     case 0:  return tr("Taxon");
     case 1:  return tr("Rank");
-    default: return tr("Coverage");
+    case CoverageColumn: return tr("Coverage");
+    default: return tr("Seen");
     }
+}
+
+Qt::ItemFlags TaxonomyTreeModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags f = QAbstractItemModel::flags(index);
+    if (index.column() != SeenColumn)
+        return f;
+    const Node *node = nodeFor(index);
+    if (!node || node == m_root.get() || !node->data.isLeafRank)
+        return f;
+    if (!canMarkSeen(node->data.inatId))
+        return f & ~Qt::ItemIsEnabled;   // a fixed tick: greyed
+    return f | Qt::ItemIsUserCheckable;
+}
+
+bool TaxonomyTreeModel::setData(const QModelIndex &index, const QVariant &value, int role)
+{
+    if (index.column() != SeenColumn || role != Qt::CheckStateRole)
+        return false;
+    const Node *node = nodeFor(index);
+    if (!node || node == m_root.get())
+        return false;
+    return setMarkedSeen(node->data.inatId, value.toInt() == Qt::Checked);
 }
 
 } // namespace pl::model

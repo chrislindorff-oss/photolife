@@ -1,6 +1,7 @@
 #pragma once
 
 #include "coverage/CoverageCalculator.h"
+#include "coverage/SeenTally.h"
 #include "taxonomy/TaxonomyTypes.h"
 
 #include <QAbstractItemModel>
@@ -9,6 +10,7 @@
 #include <QSet>
 #include <QString>
 
+#include <functional>
 #include <memory>
 
 namespace pl {
@@ -17,8 +19,12 @@ class Database;
 
 namespace pl::model {
 
-// Read-only tree over a project's cached taxonomy (TaxonomyStore::projectTree).
-// Columns: 0 = name, 1 = rank. Species in the project's region are flagged.
+// Tree over a project's cached taxonomy (TaxonomyStore::projectTree).
+// Columns: 0 = name, 1 = rank, 2 = coverage, 3 = seen. Species in the
+// project's region are flagged. The Seen column is the one editable part:
+// species and lower taxa not photographed can be ticked as seen (stored in
+// catalogue::SeenStore, for every tree); photographed ones are ticked anyway,
+// and higher taxa show "seen / total" species.
 class TaxonomyTreeModel : public QAbstractItemModel
 {
     Q_OBJECT
@@ -34,12 +40,18 @@ public:
         StatusRole,
         NameRole,       // accepted scientific name only (no common-name suffix)
         ContextOnlyRole,   // shown only as the path to a coverage-filter match
+        SeenRole,          // column 0: the Seen column's Qt::CheckState (species and lower only)
+        SeenEditableRole,  // column 0: whether that tick can be changed by hand
+        CaptureCountRole,  // matched photos of the taxon and everything below it
+        CommonNameRole,    // its common name (empty when it has none)
     };
 
     // Filters the visible-rank taxa by whether their coverage is complete:
     // every species below photographed ("X / X"), or, for a species or
     // lower-rank taxon with no species beneath it, the taxon photographed.
     enum class CoverageFilter { All, Complete, Incomplete };
+
+    enum Column { NameColumn, RankColumn, CoverageColumn, SeenColumn, ColumnCount };
 
     explicit TaxonomyTreeModel(pl::Database &db, QObject *parent = nullptr);
     ~TaxonomyTreeModel() override;
@@ -116,12 +128,30 @@ public:
     // project — including taxa the "photographed only" filter is hiding.
     QList<qint64> findTaxa(const QString &text, int limit = 50) const;
 
+    // Seen: whether a taxon is ticked (by hand, by a photo, or through a
+    // lower taxon), and setting a hand tick -- false when it can't be changed
+    // (photographed, seen through a lower taxon, above species, or not here).
+    coverage::SeenState seenState(qint64 inatId) const { return m_seen.value(inatId); }
+    bool canMarkSeen(qint64 inatId) const;
+    bool setMarkedSeen(qint64 inatId, bool seen);
+    // Asked before a tick is written (a shared catalogue may be read-only).
+    void setEditGuard(std::function<bool()> guard) { m_editGuard = std::move(guard); }
+    // The Seen column added up over the taxa shown now (after the filters;
+    // the grey path-only rows of the coverage filter don't count).
+    coverage::SeenTotals seenTotals() const;
+
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override;
     QModelIndex parent(const QModelIndex &child) const override;
     int rowCount(const QModelIndex &parent = {}) const override;
     int columnCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    bool setData(const QModelIndex &index, const QVariant &value, int role) override;
+
+signals:
+    // The seen ticks or the taxa shown changed: seenTotals() may differ.
+    void seenChanged();
 
 private:
     struct Node
@@ -135,6 +165,8 @@ private:
     Node *nodeFor(const QModelIndex &index) const;
     void rebuild();
     void emitCoverageDataChanged(const QModelIndex &parent);
+    void emitSeenDataChanged(const QModelIndex &parent);
+    void recomputeSeen();
     bool isCoverageComplete(qint64 inatId) const;
     // A taxon the active threatened filter is about: any listed taxon under
     // "threatened only", or one with exactly the filtered status.
@@ -149,6 +181,9 @@ private:
     std::unique_ptr<Node> m_root;           // synthetic; its children are the real roots
     QHash<qint64, Node *> m_byId;           // live nodes by iNat id, rebuilt each rebuild()
     pl::coverage::ProjectCoverage m_coverage;
+    QSet<qint64> m_markedSeen;                         // hand ticks (SeenStore)
+    QHash<qint64, pl::coverage::SeenState> m_seen;     // rolled up over m_flat
+    std::function<bool()> m_editGuard;
     bool m_photographedOnly = false;
     bool m_threatenedOnly = false;
     bool m_introducedOnly = false;

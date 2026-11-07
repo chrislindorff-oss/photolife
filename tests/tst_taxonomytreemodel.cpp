@@ -4,6 +4,7 @@
 #include <QSet>
 #include <QTreeView>
 
+#include "catalogue/SeenStore.h"
 #include "db/Database.h"
 #include "model/TaxonomyTreeModel.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -53,6 +54,11 @@ private slots:
     void coverageFilterFollowsCoverageUpdates();
     void threatenedFilterColoursPhotographedGreenAndMissingRed();
     void introducedFilterShowsIntroducedSpeciesInBlueWithAsterisk();
+    void seenColumnTicksPhotographedAndLetsTheRestBeTicked();
+    void seenTickHoldsInEveryTree();
+    void seenSubspeciesTicksItsSpecies();
+    void seenTotalsFollowTheFilters();
+    void seenEditGuardCanRefuse();
 
 private:
     std::unique_ptr<Database> m_db;
@@ -613,6 +619,129 @@ void TestTaxonomyTreeModel::introducedFilterShowsIntroducedSpeciesInBlueWithAste
     cov.byTaxon[900].subtreeHasPhotos = false;
     model.setCoverage(cov);
     QCOMPARE(mark(900), QStringLiteral("*"));
+}
+
+namespace {
+
+QModelIndex seenCell(const model::TaxonomyTreeModel &m, qint64 inatId)
+{
+    const QModelIndex idx = m.indexForTaxon(inatId);
+    return idx.sibling(idx.row(), model::TaxonomyTreeModel::SeenColumn);
+}
+
+} // namespace
+
+void TestTaxonomyTreeModel::seenColumnTicksPhotographedAndLetsTheRestBeTicked()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());   // Diuris pardina (900) photographed
+    QCOMPARE(model.columnCount(), 4);
+    QCOMPARE(model.headerData(model::TaxonomyTreeModel::SeenColumn, Qt::Horizontal, Qt::DisplayRole).toString(),
+             QStringLiteral("Seen"));
+
+    const QModelIndex pardina = seenCell(model, 900);
+    QCOMPARE(pardina.data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+    QVERIFY(!(model.flags(pardina) & Qt::ItemIsEnabled));   // fixed: it's photographed
+    QVERIFY(!model.setData(pardina, Qt::Unchecked, Qt::CheckStateRole));
+
+    const QModelIndex nutans = seenCell(model, 901);
+    QCOMPARE(nutans.data(Qt::CheckStateRole).toInt(), int(Qt::Unchecked));
+    QVERIFY(model.flags(nutans) & Qt::ItemIsUserCheckable);
+    QVERIFY(model.flags(nutans) & Qt::ItemIsEnabled);
+
+    const QModelIndex family = seenCell(model, 47217);
+    QVERIFY(!family.data(Qt::CheckStateRole).isValid());
+    QCOMPARE(family.data(Qt::DisplayRole).toString(), QStringLiteral("1 / 2"));
+
+    QSignalSpy changed(&model, &model::TaxonomyTreeModel::seenChanged);
+    QVERIFY(model.setData(nutans, Qt::Checked, Qt::CheckStateRole));
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(seenCell(model, 901).data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+    QCOMPARE(seenCell(model, 47217).data(Qt::DisplayRole).toString(), QStringLiteral("2 / 2"));
+    QVERIFY(catalogue::SeenStore(m_db->connectionName()).seenTaxa().contains(901));
+
+    QVERIFY(model.setData(seenCell(model, 901), Qt::Unchecked, Qt::CheckStateRole));
+    QVERIFY(catalogue::SeenStore(m_db->connectionName()).seenTaxa().isEmpty());
+    QCOMPARE(seenCell(model, 47217).data(Qt::DisplayRole).toString(), QStringLiteral("1 / 2"));
+}
+
+void TestTaxonomyTreeModel::seenTickHoldsInEveryTree()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    QVERIFY(model.setMarkedSeen(901, true));
+
+    // Another tree with the same species.
+    const int other = m_store->ensureProject(QStringLiteral("Other"), 801, std::nullopt, QStringLiteral("inat"));
+    m_store->addProjectTaxon(other, 801, false, false);
+    m_store->addProjectTaxon(other, 901, false, false);
+    model::TaxonomyTreeModel second(*m_db);
+    second.setProject(other);
+    QCOMPARE(seenCell(second, 901).data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+    QVERIFY(second.seenState(901).marked);
+}
+
+void TestTaxonomyTreeModel::seenSubspeciesTicksItsSpecies()
+{
+    m_store->upsertTaxon(taxon(902, 901, QStringLiteral("subspecies"), 5, QStringLiteral("Pterostylis nutans alba")));
+    m_store->addProjectTaxon(m_projectId, 902, false, false);
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+
+    QVERIFY(model.setMarkedSeen(902, true));
+    const coverage::SeenState nutans = model.seenState(901);
+    QVERIFY(nutans.seen);
+    QVERIFY(!nutans.marked);
+    QCOMPARE(nutans.seenVia, qint64(902));
+    QVERIFY(!model.canMarkSeen(901));   // seen through its subspecies: untick that instead
+    QVERIFY(!(model.flags(seenCell(model, 901)) & Qt::ItemIsEnabled));
+    QVERIFY(seenCell(model, 901).data(Qt::ToolTipRole).toString().contains(QStringLiteral("alba")));
+
+    const coverage::SeenTotals t = model.seenTotals();
+    QCOMPARE(t.speciesShown, 2);
+    QCOMPARE(t.speciesSeen, 2);
+    QCOMPARE(t.speciesPhotographed, 1);
+    QCOMPARE(t.speciesSeenOnly, 1);
+    QCOMPARE(t.belowSeen, 1);
+}
+
+void TestTaxonomyTreeModel::seenTotalsFollowTheFilters()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    QVERIFY(model.setMarkedSeen(901, true));
+    QCOMPARE(model.seenTotals().speciesShown, 2);
+    QCOMPARE(model.seenTotals().speciesSeen, 2);
+
+    QSignalSpy changed(&model, &model::TaxonomyTreeModel::seenChanged);
+    model.setPhotographedOnly(true);
+    QVERIFY(changed.count() >= 1);
+    QCOMPARE(model.seenTotals().speciesShown, 1);
+    QCOMPARE(model.seenTotals().speciesSeen, 1);
+    QCOMPARE(model.seenTotals().speciesSeenOnly, 0);
+
+    // A tick hidden by a filter can't be changed from here.
+    QVERIFY(!model.canMarkSeen(901));
+}
+
+void TestTaxonomyTreeModel::seenEditGuardCanRefuse()
+{
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(partialCoverage());
+    int asked = 0;
+    model.setEditGuard([&] {
+        ++asked;
+        return false;
+    });
+    QVERIFY(!model.setData(seenCell(model, 901), Qt::Checked, Qt::CheckStateRole));
+    QCOMPARE(asked, 1);
+    QVERIFY(catalogue::SeenStore(m_db->connectionName()).seenTaxa().isEmpty());
+    QCOMPARE(seenCell(model, 901).data(Qt::CheckStateRole).toInt(), int(Qt::Unchecked));
 }
 
 QTEST_MAIN(TestTaxonomyTreeModel)

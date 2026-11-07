@@ -10,6 +10,7 @@
 class QCheckBox;
 class QLabel;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
 
 namespace pl {
@@ -49,6 +50,13 @@ private:
     void showResult(const inat::Identification &result);
     void fill();
     void showMessage(const QString &text, bool offerToken = false);
+    // iNaturalist's photo of the suggestion at `item`, in a small pop-up at `at`.
+    void previewSuggestion(QListWidgetItem *item, const QPoint &at);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
+private:
 
     Application &m_app;
     QLabel *m_status = nullptr;

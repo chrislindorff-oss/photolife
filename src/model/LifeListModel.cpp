@@ -1,5 +1,6 @@
 #include "model/LifeListModel.h"
 
+#include "scan/Exif.h"
 #include "thumb/ThumbnailCache.h"
 
 #include <QDate>
@@ -42,8 +43,10 @@ void LifeListModel::setEntries(const QList<coverage::LifeListEntry> &entries)
     beginResetModel();
     m_entries = entries;
     m_rowsByKey.clear();
+    m_rowsByCapture.clear();
     for (int r = 0; r < m_entries.size(); ++r) {
         const auto &e = m_entries[r];
+        m_rowsByCapture[e.captureId] << r;
         if (!e.previewPath.isEmpty())
             m_rowsByKey[thumb::ThumbnailCache::keyFor(e.previewHash, e.previewPath)] << r;
     }
@@ -57,6 +60,17 @@ void LifeListModel::setShowThumbnails(bool on)
     m_thumbnails = on;
     if (!m_entries.isEmpty())
         emit dataChanged(index(0, PhotoColumn), index(int(m_entries.size()) - 1, PhotoColumn), {Qt::DecorationRole});
+}
+
+void LifeListModel::setCameraInfo(int captureId, const QString &camera, std::optional<double> focalLength)
+{
+    for (int r : m_rowsByCapture.value(captureId)) {
+        coverage::LifeListEntry &e = m_entries[r];
+        e.camera = camera;
+        e.focalLength = focalLength;
+        e.cameraChecked = true;
+        emit dataChanged(index(r, CameraColumn), index(r, FocalColumn));
+    }
 }
 
 QString LifeListModel::dateText(const QString &capturedOn)
@@ -94,6 +108,10 @@ QVariant LifeListModel::data(const QModelIndex &index, int role) const
             return e.name;
         case PlaceColumn:
             return e.locality;
+        case CameraColumn:
+            return e.camera;
+        case FocalColumn:
+            return e.focalLength ? scan::focalText(*e.focalLength) : QString();
         case PhotosColumn:
             return e.photoCount;
         default:
@@ -116,7 +134,7 @@ QVariant LifeListModel::data(const QModelIndex &index, int role) const
         }
         return {};
     case Qt::TextAlignmentRole:
-        if (col == NumberColumn || col == PhotosColumn)
+        if (col == NumberColumn || col == PhotosColumn || col == FocalColumn)
             return int(Qt::AlignRight | Qt::AlignVCenter);
         return int(Qt::AlignLeft | Qt::AlignVCenter);
     case Qt::ToolTipRole:
@@ -126,6 +144,10 @@ QVariant LifeListModel::data(const QModelIndex &index, int role) const
             return tr("None of its photos has a usable date");
         if (col == ScientificColumn && e.belowSpecies)
             return tr("%1 (a %2)").arg(e.name, e.rank.toLower());
+        if ((col == CameraColumn || col == FocalColumn) && !e.cameraChecked && !e.previewPath.isEmpty())
+            return tr("Reading the first photo's details…");
+        if ((col == CameraColumn || col == FocalColumn) && e.cameraChecked)
+            return tr("From the first photo's EXIF");
         return {};
     case SortRole:
         switch (col) {
@@ -141,6 +163,11 @@ QVariant LifeListModel::data(const QModelIndex &index, int role) const
             return e.name.toLower();
         case PlaceColumn:
             return e.locality.toLower();
+        case CameraColumn:
+            // Unknown after every name (A to Z).
+            return e.camera.isEmpty() ? QStringLiteral("\uffff") : e.camera.toLower();
+        case FocalColumn:
+            return e.focalLength ? *e.focalLength : std::numeric_limits<double>::max();
         case PhotosColumn:
             return e.photoCount;
         default:
@@ -174,6 +201,10 @@ QVariant LifeListModel::headerData(int section, Qt::Orientation orientation, int
         return tr("Scientific name");
     case PlaceColumn:
         return tr("Where");
+    case CameraColumn:
+        return tr("Camera");
+    case FocalColumn:
+        return tr("Focal length");
     case PhotosColumn:
         return tr("Photos");
     default:

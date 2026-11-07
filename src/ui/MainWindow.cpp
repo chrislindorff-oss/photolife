@@ -33,6 +33,7 @@
 #include "scan/LibraryRenamer.h"
 #include "scan/FileScanner.h"
 #include "scan/CatalogueMaintenance.h"
+#include "catalogue/CameraInfoStore.h"
 #include "scan/Exif.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
@@ -44,6 +45,7 @@
 #include "taxonomy/ApcOriginSync.h"
 #include "taxonomy/ProjectBuilder.h"
 #include "taxonomy/TreeChangeFinder.h"
+#include "taxonomy/TreeGapFiller.h"
 #include "taxonomy/CommonNameFetcher.h"
 #include "taxonomy/ReferencePhotoFetcher.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -72,6 +74,7 @@
 #include "ui/InatToolsView.h"
 #include "ui/InatUploadPage.h"
 #include "ui/OrganiseView.h"
+#include "ui/TaxonColumnView.h"
 #include "ui/LibraryFoldersDialog.h"
 #include "ui/ManageCataloguesDialog.h"
 #include "ui/MapView.h"
@@ -138,6 +141,7 @@
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QElapsedTimer>
+#include <QButtonGroup>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -221,6 +225,23 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     m_treeModel = new model::TaxonomyTreeModel(m_app.database(), this);
     m_builder = new taxonomy::ProjectBuilder(m_app.inat(), m_app.taxonomyStore(), this);
     m_treeChanges = new taxonomy::TreeChangeFinder(m_app.inat(), m_app.taxonomyStore(), this);
+    m_treeGaps = new taxonomy::TreeGapFiller(m_app.inat(), m_app.taxonomyStore(), this);
+    connect(m_treeGaps, &taxonomy::TreeGapFiller::finished, this,
+            [this](int projectId, int added, const QString &error) {
+                if (!error.isEmpty()) {
+                    // Offline, say: try again next time the tree is shown.
+                    m_treeGapsChecked.remove(projectId);
+                    qInfo() << "Couldn't fill the tree's missing levels:" << error;
+                }
+                if (added <= 0 || projectId != currentProjectId())
+                    return;
+                mutateTreePreservingState([this] { m_treeModel->setProject(currentProjectId()); });
+                refreshCoverage();
+                statusBar()->showMessage(
+                    tr("Added %n level(s) iNaturalist has added since the tree was built (complexes, sections…).",
+                       nullptr, added),
+                    8000);
+            });
     connect(m_treeChanges, &taxonomy::TreeChangeFinder::finished, this,
             [this](int projectId, const QList<taxonomy::TreeChange> &changes, const QString &error) {
                 if (!error.isEmpty()) {
@@ -495,6 +516,8 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 if (idx >= 0)
                     m_projectCombo->setCurrentIndex(idx);
                 refreshCoverage();
+                m_treeGapsChecked.remove(projectId);   // look again after the refresh
+                fillTreeGaps(projectId);
                 if (wasNewTree)
                     fetchInfraspecificTaxa();
                 updateCommonNames(false);   // the new taxa's other names, quietly
@@ -1457,6 +1480,7 @@ void MainWindow::buildReferenceTreeDock()
         m_treeModel->setProject(index >= 0 ? m_projectCombo->itemData(index).toInt() : -1);
         m_treeView->expandToDepth(1);
         refreshCoverage();
+        fillTreeGaps(currentProjectId());
         m_inatView->followActiveTree(currentProjectId());
 
         // Land the user on the newly chosen tree: select its top node, scroll
@@ -1485,6 +1509,11 @@ void MainWindow::buildReferenceTreeDock()
             m_treeView->expandToDepth(6);   // one-shot reveal of the photographed taxa
         onTreeSelectionChanged();
     });
+
+    m_showSeen = new QCheckBox(tr("Seen column"), panel);
+    m_showSeen->setToolTip(tr("Show a Seen column: tick the species you've seen but not "
+                              "photographed yet. Photographed ones are ticked already. The total "
+                              "under the tree counts the taxa shown."));
 
     m_coverageFilterCombo = new QComboBox(panel);
     m_coverageFilterCombo->addItem(tr("All coverage"),
@@ -1517,16 +1546,84 @@ void MainWindow::buildReferenceTreeDock()
 
     m_treeView = new QTreeView(panel);
     m_treeView->setModel(m_treeModel);
+
+    // The same tree as columns, one step down per column (see TaxonColumnView).
+    m_columnView = new TaxonColumnView(m_app, panel);
+    m_columnView->setModel(m_treeModel);
+    connect(m_columnView, &TaxonColumnView::taxonContextMenu, this, &MainWindow::showTaxonContextMenu);
+    connect(m_columnView, &TaxonColumnView::taxonActivated, this,
+            [this](const QModelIndex &) { switchToTreeTab(m_tabs->widget(0)); });   // Photos of Tree Selection
+    connect(m_columnView->card(), &TaxonCard::showPhotosRequested, this, [this](qint64 inatId) {
+        selectTaxonInTree(inatId);
+        switchToTreeTab(m_tabs->widget(0));
+    });
+    // One current taxon for both: the tree's drives everything else.
+    connect(m_columnView->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            [this](const QModelIndex &current) {
+                if (m_syncingColumns || !current.isValid())
+                    return;
+                m_syncingColumns = true;
+                m_treeView->setCurrentIndex(current.sibling(current.row(), 0));
+                m_syncingColumns = false;
+            });
+
+    m_expandAllButton = new QToolButton(panel);
+    m_expandAllButton->setText(tr("Expand All"));
+    m_expandAllButton->setCheckable(true);
+    m_expandAllButton->setToolTip(tr("Open every branch of the tree, and keep it open as you change "
+                                     "trees or filters. Off goes back to the top levels."));
+    const auto keepSelectionInView = [this] {
+        if (m_treeView->currentIndex().isValid())
+            m_treeView->scrollTo(m_treeView->currentIndex(), QAbstractItemView::PositionAtCenter);
+        else
+            m_treeView->scrollToTop();
+    };
+    connect(m_expandAllButton, &QToolButton::toggled, this, [this, keepSelectionInView](bool on) {
+        if (on) {
+            m_treeView->expandAll();
+        } else {
+            m_treeView->collapseAll();
+            m_treeView->expandToDepth(1);
+            // The selection may now be inside a closed branch: show its path.
+            if (const QModelIndex cur = m_treeView->currentIndex(); cur.isValid())
+                for (QModelIndex p = cur.parent(); p.isValid(); p = p.parent())
+                    m_treeView->setExpanded(p, true);
+        }
+        keepSelectionInView();
+    });
+    // A new tree or filter rebuilds the model: open it all again once the
+    // usual expansion (and selection) has been put back.
+    connect(m_treeModel, &QAbstractItemModel::modelReset, this, [this, keepSelectionInView] {
+        if (!m_expandAllButton->isChecked())
+            return;
+        QTimer::singleShot(0, this, [this, keepSelectionInView] {
+            if (!m_expandAllButton->isChecked())
+                return;
+            m_treeView->expandAll();
+            keepSelectionInView();
+        });
+    });
     m_treeView->setUniformRowHeights(true);
     m_treeView->setAlternatingRowColors(true);
     m_treeView->header()->setStretchLastSection(false);
     m_treeView->header()->setSectionResizeMode(0, QHeaderView::Interactive);
     m_treeView->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_treeView->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_treeView->header()->setSectionResizeMode(model::TaxonomyTreeModel::SeenColumn,
+                                               QHeaderView::ResizeToContents);
     m_treeView->setColumnWidth(0, 560);
     m_treeView->setAutoScroll(false);   // keep shallow names visible when selecting deep nodes
     connect(m_treeView->selectionModel(), &QItemSelectionModel::currentChanged,
             this, &MainWindow::onTreeSelectionChanged);
+    connect(m_treeView->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            [this](const QModelIndex &current) {
+                if (m_syncingColumns)
+                    return;
+                m_syncingColumns = true;
+                m_columnView->setProjectId(currentProjectId());
+                m_columnView->setCurrentIndex(current.isValid() ? current.sibling(current.row(), 0) : QModelIndex());
+                m_syncingColumns = false;
+            });
     connect(m_treeView, &QAbstractItemView::doubleClicked, this,
             [this](const QModelIndex &) { switchToTreeTab(m_tabs->widget(0)); });   // Photos of Tree Selection
     m_treeView->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -1545,8 +1642,70 @@ void MainWindow::buildReferenceTreeDock()
         applyIntroducedFilter(false);
     });
 
+    // The Seen column's total, under the tree.
+    m_seenTally = new QLabel(panel);
+    m_seenTally->setWordWrap(true);
+    m_seenTally->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    {
+        QPalette pal = m_seenTally->palette();
+        pal.setColor(QPalette::WindowText, themeColors(currentThemeVariant()).mutedText);
+        m_seenTally->setPalette(pal);
+    }
+    m_treeModel->setEditGuard([this] { return ensureCanEdit(); });
+    connect(m_treeModel, &model::TaxonomyTreeModel::seenChanged, this, &MainWindow::updateSeenTally);
+    connect(m_treeModel, &model::TaxonomyTreeModel::seenChanged, m_columnView, &TaxonColumnView::updateCard);
+    const auto showSeen = [this](bool on) {
+        m_treeView->setColumnHidden(model::TaxonomyTreeModel::SeenColumn, !on);
+        m_columnView->setShowSeen(on);
+        m_seenTally->setVisible(on);
+        updateSeenTally();
+    };
+    connect(m_showSeen, &QCheckBox::toggled, this, [this, showSeen](bool on) {
+        m_app.settings().setTreeShowsSeen(on);
+        showSeen(on);
+    });
+    m_showSeen->setChecked(m_app.settings().treeShowsSeen());
+    showSeen(m_showSeen->isChecked());
+
+    auto *treeBox = new QWidget(panel);
+    auto *treeBoxLayout = new QVBoxLayout(treeBox);
+    treeBoxLayout->setContentsMargins(0, 0, 0, 0);
+    treeBoxLayout->setSpacing(2);
+    m_treeStack = new QStackedWidget(treeBox);
+    m_treeStack->addWidget(m_treeView);
+    // The columns, with the taxon card beside them for a species or lower.
+    auto *columnsPage = new QWidget(treeBox);
+    auto *columnsLayout = new QHBoxLayout(columnsPage);
+    columnsLayout->setContentsMargins(0, 0, 0, 0);
+    columnsLayout->setSpacing(4);
+    columnsLayout->addWidget(m_columnView, 1);
+    m_columnView->card()->setParent(columnsPage);
+    columnsLayout->addWidget(m_columnView->card());
+    m_treeStack->addWidget(columnsPage);
+    treeBoxLayout->addWidget(m_treeStack, 1);
+    treeBoxLayout->addWidget(m_seenTally);
+
+    m_treeModeButton = new QToolButton(panel);
+    m_treeModeButton->setText(tr("Tree"));
+    m_treeModeButton->setCheckable(true);
+    m_treeModeButton->setToolTip(tr("Show the reference tree as an outline"));
+    m_columnsModeButton = new QToolButton(panel);
+    m_columnsModeButton->setText(tr("Columns"));
+    m_columnsModeButton->setCheckable(true);
+    m_columnsModeButton->setToolTip(tr("Browse the tree in columns: click a taxon and what's beneath it "
+                                       "opens in the next column, down to the species. Hide ranks "
+                                       "with Ranks… to make the columns line up by rank."));
+    for (QToolButton *toggle : {m_treeModeButton, m_columnsModeButton, m_expandAllButton})
+        toggle->setProperty("toggle", true);   // marked when on (theme.qss)
+    auto *modeGroup = new QButtonGroup(panel);
+    modeGroup->setExclusive(true);
+    modeGroup->addButton(m_treeModeButton);
+    modeGroup->addButton(m_columnsModeButton);
+    connect(m_treeModeButton, &QToolButton::clicked, this, [this] { setTreeColumnsMode(false, true); });
+    connect(m_columnsModeButton, &QToolButton::clicked, this, [this] { setTreeColumnsMode(true, true); });
+
     auto *split = new QSplitter(Qt::Vertical, panel);
-    split->addWidget(m_treeView);
+    split->addWidget(treeBox);
     split->addWidget(m_coveragePanel);
     split->setStretchFactor(0, 4);
     split->setStretchFactor(1, 1);
@@ -1555,14 +1714,23 @@ void MainWindow::buildReferenceTreeDock()
     layout->addWidget(m_treeSearch);
     auto *filterRow = new QHBoxLayout;
     filterRow->addWidget(m_photographedOnly);
+    filterRow->addWidget(m_showSeen);
     filterRow->addStretch(1);
     filterRow->addWidget(m_coverageFilterCombo);
     layout->addLayout(filterRow);
-    layout->addWidget(m_rankFilterButton);
+    auto *treeButtons = new QHBoxLayout;
+    treeButtons->addWidget(m_rankFilterButton);
+    treeButtons->addWidget(m_expandAllButton);
+    treeButtons->addStretch(1);
+    treeButtons->addWidget(m_treeModeButton);
+    treeButtons->addWidget(m_columnsModeButton);
+    layout->addLayout(treeButtons);
     layout->addWidget(split, 1);
     dock->setWidget(panel);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
     resizeDocks({dock}, {360}, Qt::Horizontal);
+    // As last left (the panel's width comes back with the window layout).
+    setTreeColumnsMode(m_app.settings().treeViewMode() == QLatin1String("columns"), false);
 
     // The dock's own close button hides it with no other way back short of
     // this menu entry -- and mainWindow/state persists that hidden state
@@ -1581,6 +1749,36 @@ void MainWindow::buildReferenceTreeDock()
             return;
         m_app.settings().setTreePanelShown(currentViewKey(), !m_treeDock->isHidden());
     });
+}
+
+void MainWindow::fillTreeGaps(int projectId)
+{
+    // Writes to the tree: not while a shared catalogue is read-only here (the
+    // tree still shows such taxa under their nearest ancestor meanwhile).
+    if (projectId <= 0 || m_treeGapsChecked.contains(projectId) || m_treeGaps->isRunning()
+        || !m_app.catalogueEditable() || (m_builder && m_builder->isRunning()))
+        return;
+    m_treeGapsChecked.insert(projectId);
+    m_treeGaps->fill(projectId);
+}
+
+void MainWindow::updateSeenTally()
+{
+    if (!m_seenTally || !m_seenTally->isVisibleTo(m_seenTally->parentWidget()))
+        return;
+    const coverage::SeenTotals t = m_treeModel->seenTotals();
+    if (t.speciesShown == 0 && t.belowSeen == 0) {
+        m_seenTally->setText(currentProjectId() > 0 ? tr("No species shown.") : QString());
+        return;
+    }
+    const QLocale loc;
+    QString text = tr("<b>Seen %1</b> of the %2 species shown — %3 photographed, %4 seen only")
+                       .arg(loc.toString(t.speciesSeen), loc.toString(t.speciesShown),
+                            loc.toString(t.speciesPhotographed), loc.toString(t.speciesSeenOnly));
+    if (t.belowSeen > 0)
+        text += QStringLiteral(" · ")
+                + tr("also %Ln subspecies, varieties and hybrids", nullptr, t.belowSeen);
+    m_seenTally->setText(text);
 }
 
 QString MainWindow::currentViewKey() const
@@ -2710,9 +2908,50 @@ void MainWindow::startInfraspecificFetch(qint64 scopeInatId, const QString &scop
     m_infraFiller->start(pid, scopeInatId);
 }
 
+void MainWindow::setTreeColumnsMode(bool columns, bool resizePanel)
+{
+    m_treeModeButton->setChecked(!columns);
+    m_columnsModeButton->setChecked(columns);
+    m_expandAllButton->setEnabled(!columns);
+    QWidget *columnsPage = m_columnView->parentWidget();
+    const bool wasColumns = m_treeStack->currentWidget() == columnsPage;
+    m_treeStack->setCurrentWidget(columns ? columnsPage : static_cast<QWidget *>(m_treeView));
+    m_app.settings().setTreeViewMode(columns ? QStringLiteral("columns") : QStringLiteral("tree"));
+    if (columns) {
+        // Open the columns at the current taxon.
+        m_syncingColumns = true;
+        m_columnView->setProjectId(currentProjectId());
+        const QModelIndex cur = m_treeView->currentIndex();
+        m_columnView->setCurrentIndex(cur.isValid() ? cur.sibling(cur.row(), 0) : QModelIndex());
+        m_syncingColumns = false;
+    } else if (const QModelIndex cur = m_treeView->currentIndex(); cur.isValid()) {
+        for (QModelIndex p = cur.parent(); p.isValid(); p = p.parent())
+            m_treeView->setExpanded(p, true);
+        m_treeView->scrollTo(cur, QAbstractItemView::PositionAtCenter);
+    }
+    if (!resizePanel || wasColumns == columns || !m_treeDock || m_treeDock->isFloating())
+        return;
+    // Columns need room: widen the panel, and give it back after.
+    if (columns) {
+        m_treeWidthBeforeColumns = m_treeDock->width();
+        const int wanted = std::min(std::max(1100, m_treeDock->width()), int(width() * 0.65));
+        if (wanted > m_treeDock->width())
+            resizeDocks({m_treeDock}, {wanted}, Qt::Horizontal);
+    } else if (m_treeWidthBeforeColumns > 0) {
+        resizeDocks({m_treeDock}, {m_treeWidthBeforeColumns}, Qt::Horizontal);
+        m_treeWidthBeforeColumns = 0;
+    }
+}
+
 void MainWindow::showTreeContextMenu(const QPoint &pos)
 {
     const QModelIndex idx = m_treeView->indexAt(pos);
+    if (idx.isValid())
+        showTaxonContextMenu(idx, m_treeView->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::showTaxonContextMenu(const QModelIndex &idx, const QPoint &globalPos)
+{
     if (!idx.isValid())
         return;
 
@@ -2756,6 +2995,19 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
             QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
     });
 
+    // Seen, for a species or lower taxon not photographed (the Seen column's tick).
+    if (m_treeModel->canMarkSeen(inatId)) {
+        menu.addSeparator();
+        QAction *seen = menu.addAction(tr("Seen (Not Photographed)"));
+        seen->setCheckable(true);
+        seen->setChecked(m_treeModel->seenState(inatId).marked);
+        seen->setToolTip(tr("Tick it in the Seen column: you've seen it, but have no photo of it yet."));
+        connect(seen, &QAction::toggled, this, [this, inatId](bool on) {
+            if (m_treeModel->setMarkedSeen(inatId, on) && on && !m_showSeen->isChecked())
+                statusBar()->showMessage(tr("Ticked as seen — turn on Seen column to see the ticks."), 5000);
+        });
+    }
+
     // Pruning the tree's own root isn't meaningful -- Delete Reference Tree
     // is the action for that -- so this is left off the menu for it.
     const auto rootId = m_app.taxonomyStore().projectRootTaxonInatId(currentProjectId());
@@ -2766,7 +3018,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
                 [this, inatId, name] { pruneTaxonFromTree(inatId, name); });
     }
 
-    menu.exec(m_treeView->viewport()->mapToGlobal(pos));
+    menu.exec(globalPos);
 }
 
 void MainWindow::pruneTaxonFromTree(qint64 inatId, const QString &name)
@@ -4824,6 +5076,8 @@ QWidget *MainWindow::buildLifeListPage()
     header->resizeSection(LL::CommonColumn, fm.horizontalAdvance(QStringLiteral("M")) * 16);
     header->resizeSection(LL::ScientificColumn, fm.horizontalAdvance(QStringLiteral("M")) * 17);
     header->resizeSection(LL::PhotosColumn, fm.horizontalAdvance(tr("Photos")) + 32);
+    header->resizeSection(LL::CameraColumn, fm.horizontalAdvance(QStringLiteral("Nikon COOLPIX P330")) + 24);
+    header->resizeSection(LL::FocalColumn, fm.horizontalAdvance(tr("Focal length")) + 32);
 
     const auto applyThumbnails = [this](bool on) {
         m_lifeListModel->setShowThumbnails(on);
@@ -4833,10 +5087,52 @@ QWidget *MainWindow::buildLifeListPage()
         m_lifeListView->doItemsLayout();
     };
     applyThumbnails(m_lifeListThumbs->isChecked());
-    connect(m_lifeListThumbs, &QCheckBox::toggled, this, [this, applyThumbnails](bool on) {
+
+    // Columns…: which columns show (# always does). Photo is the Thumbnails
+    // tick; Camera and Focal length come from the first photo's EXIF.
+    m_lifeListColumnsButton = new QToolButton(this);
+    m_lifeListColumnsButton->setText(tr("Columns…"));
+    m_lifeListColumnsButton->setToolTip(tr("Choose the columns to show — including the first photo's camera and "
+                                           "focal length. Right-clicking the column headings does the same."));
+    m_lifeListColumnsButton->setPopupMode(QToolButton::InstantPopup);
+    m_lifeListColumnsMenu = new QMenu(m_lifeListColumnsButton);
+    m_lifeListColumnsButton->setMenu(m_lifeListColumnsMenu);
+    QAction *photoAction = m_lifeListColumnsMenu->addAction(tr("Photo (thumbnails)"));
+    photoAction->setCheckable(true);
+    photoAction->setChecked(m_lifeListThumbs->isChecked());
+    connect(photoAction, &QAction::toggled, m_lifeListThumbs, &QCheckBox::setChecked);
+    connect(m_lifeListThumbs, &QCheckBox::toggled, this, [this, applyThumbnails, photoAction](bool on) {
         m_app.settings().setLifeListThumbnails(on);
         applyThumbnails(on);
+        photoAction->setChecked(on);
     });
+    static const QList<QPair<int, const char *>> kOptionalColumns = {
+        {LL::DateColumn, "date"},     {LL::CommonColumn, "common"}, {LL::ScientificColumn, "scientific"},
+        {LL::PlaceColumn, "place"},   {LL::CameraColumn, "camera"}, {LL::FocalColumn, "focal"},
+        {LL::PhotosColumn, "photos"},
+    };
+    const QStringList hidden = m_app.settings().lifeListHiddenColumns();
+    for (const auto &[column, key] : kOptionalColumns) {
+        const QString title = m_lifeListModel->headerData(column, Qt::Horizontal, Qt::DisplayRole).toString();
+        QAction *action = m_lifeListColumnsMenu->addAction(title);
+        action->setCheckable(true);
+        const bool shown = !hidden.contains(QLatin1String(key));
+        action->setChecked(shown);
+        header->setSectionHidden(column, !shown);
+        connect(action, &QAction::toggled, this, [this, column, key](bool on) {
+            m_lifeListView->header()->setSectionHidden(column, !on);
+            QStringList keys = m_app.settings().lifeListHiddenColumns();
+            keys.removeAll(QLatin1String(key));
+            if (!on)
+                keys << QLatin1String(key);
+            m_app.settings().setLifeListHiddenColumns(keys);
+            if (on && (column == model::LifeListModel::CameraColumn || column == model::LifeListModel::FocalColumn))
+                readLifeListCameras();
+        });
+    }
+    header->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(header, &QWidget::customContextMenuRequested, this,
+            [this](const QPoint &pos) { m_lifeListColumnsMenu->exec(m_lifeListView->header()->mapToGlobal(pos)); });
 
     connect(m_lifeListView, &QAbstractItemView::activated, this,
             [this](const QModelIndex &idx) { openLifeListPhoto(idx); });
@@ -4871,10 +5167,91 @@ QWidget *MainWindow::buildLifeListPage()
     controls->addWidget(m_lifeListSearch, 1);
     controls->addWidget(m_lifeListInfra);
     controls->addWidget(m_lifeListThumbs);
+    controls->addWidget(m_lifeListColumnsButton);
     layout->addLayout(controls);
     layout->addWidget(m_lifeListCounts);
     layout->addWidget(m_lifeListView, 1);
     return m_lifeListPage;
+}
+
+void MainWindow::readLifeListCameras()
+{
+    if (!m_lifeListModel || !m_app.database().isOpen())
+        return;
+    const QHeaderView *header = m_lifeListView->header();
+    if (header->isSectionHidden(model::LifeListModel::CameraColumn)
+        && header->isSectionHidden(model::LifeListModel::FocalColumn))
+        return;   // nobody's looking: don't touch the disk
+    for (const coverage::LifeListEntry &e : std::as_const(m_lifeListAll)) {
+        if (e.cameraChecked || e.previewPath.isEmpty() || m_cameraRequested.contains(e.captureId))
+            continue;
+        // Never make a cloud-synced file download itself just for this.
+        if (CaptureDelegate::isOnlineOnly(e.previewPath))
+            continue;
+        m_cameraRequested.insert(e.captureId);
+        m_cameraQueue.append({e.captureId, e.previewPath});
+        ++m_cameraTotal;
+    }
+    if (!m_cameraReading)
+        readNextCameraChunk();
+}
+
+void MainWindow::readNextCameraChunk()
+{
+    constexpr int kChunk = 50;
+    if (m_cameraQueue.isEmpty()) {
+        if (m_cameraReading && m_cameraDone > 0)
+            statusBar()->showMessage(tr("Read the camera details of %n photo(s).", nullptr, m_cameraDone), 4000);
+        m_cameraReading = false;
+        m_cameraDone = m_cameraTotal = 0;
+        return;
+    }
+    m_cameraReading = true;
+    const QList<QPair<int, QString>> chunk = m_cameraQueue.mid(0, kChunk);
+    m_cameraQueue.remove(0, chunk.size());
+    statusBar()->showMessage(tr("Reading camera details from the life list's photos… %1 of %2")
+                                 .arg(m_cameraDone)
+                                 .arg(m_cameraTotal));
+    auto *watcher = new QFutureWatcher<QList<catalogue::CameraInfo>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, chunk] {
+        const QList<catalogue::CameraInfo> infos = watcher->result();
+        watcher->deleteLater();
+        const int read = int(chunk.size());
+        // A file that wasn't there (renamed, moved) is tried again on a later reload.
+        QSet<int> found;
+        for (const catalogue::CameraInfo &info : infos)
+            found.insert(info.captureId);
+        for (const auto &item : chunk)
+            if (!found.contains(item.first))
+                m_cameraRequested.remove(item.first);
+        catalogue::CameraInfoStore store(m_app.database().connectionName());
+        if (!store.save(infos))
+            qWarning() << "Couldn't keep the camera details:" << store.error();
+        QHash<int, catalogue::CameraInfo> byCapture;
+        for (const catalogue::CameraInfo &info : infos) {
+            byCapture.insert(info.captureId, info);
+            m_lifeListModel->setCameraInfo(info.captureId, info.camera, info.focalLength);
+        }
+        for (coverage::LifeListEntry &e : m_lifeListAll) {
+            if (const auto it = byCapture.constFind(e.captureId); it != byCapture.constEnd()) {
+                e.camera = it->camera;
+                e.focalLength = it->focalLength;
+                e.cameraChecked = true;
+            }
+        }
+        m_cameraDone += read;
+        readNextCameraChunk();
+    });
+    watcher->setFuture(QtConcurrent::run([chunk] {
+        QList<catalogue::CameraInfo> out;
+        for (const auto &[captureId, path] : chunk) {
+            if (!QFileInfo::exists(path))
+                continue;   // moved or renamed: tried again once the library has caught up
+            const scan::ExifData exif = scan::readPhotoExif(path);
+            out.append({captureId, scan::prettyCameraName(exif.cameraMake, exif.cameraModel), exif.focalLength});
+        }
+        return out;
+    }));
 }
 
 void MainWindow::reloadLifeList()
@@ -4906,6 +5283,7 @@ void MainWindow::showLifeList()
             m_lifeListView->setCurrentIndex(hit.first());
     }
     m_lifeListView->verticalScrollBar()->setValue(scrolled);
+    readLifeListCameras();
 
     int species = 0, below = 0, belowTotal = 0, undated = 0;
     QString first, latest;

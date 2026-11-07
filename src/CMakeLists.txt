@@ -4,6 +4,8 @@ qt_add_library(photolife_core STATIC
     app/Logging.h           app/Logging.cpp
     app/StorageStats.h      app/StorageStats.cpp
     catalogue/BestShotStore.h catalogue/BestShotStore.cpp
+    catalogue/SeenStore.h catalogue/SeenStore.cpp
+    catalogue/CameraInfoStore.h catalogue/CameraInfoStore.cpp
     catalogue/PhotoOfTheDay.h catalogue/PhotoOfTheDay.cpp
     catalogue/UntreedMatchStore.h catalogue/UntreedMatchStore.cpp
     checklist/ChecklistImporter.h checklist/ChecklistImporter.cpp
@@ -16,6 +18,7 @@ qt_add_library(photolife_core STATIC
     collection/ThumbnailWriter.h collection/ThumbnailWriter.cpp
     coverage/CoverageCalculator.h coverage/CoverageCalculator.cpp
     coverage/LifeList.h coverage/LifeList.cpp
+    coverage/SeenTally.h coverage/SeenTally.cpp
     db/Database.h           db/Database.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
     geo/Distance.h
@@ -108,6 +111,7 @@ qt_add_library(photolife_core STATIC
     taxonomy/ApcOriginSync.h taxonomy/ApcOriginSync.cpp
     taxonomy/ProjectBuilder.h taxonomy/ProjectBuilder.cpp
     taxonomy/TreeChangeFinder.h taxonomy/TreeChangeFinder.cpp
+    taxonomy/TreeGapFiller.h taxonomy/TreeGapFiller.cpp
     taxonomy/CommonNameFetcher.h taxonomy/CommonNameFetcher.cpp
     taxonomy/ReferencePhotoFetcher.h taxonomy/ReferencePhotoFetcher.cpp
     taxonomy/TaxonomyStore.h taxonomy/TaxonomyStore.cpp
@@ -157,6 +161,7 @@ qt_add_library(photolife_core STATIC
     ui/ServerBar.h          ui/ServerBar.cpp
     ui/ServerDialogs.h      ui/ServerDialogs.cpp
     ui/StaleMatchDialog.h   ui/StaleMatchDialog.cpp
+    ui/TaxonColumnView.h ui/TaxonColumnView.cpp
     ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp
     ui/TaxonPickerDialog.h  ui/TaxonPickerDialog.cpp
     ui/Theme.h              ui/Theme.cpp
@@ -250,6 +255,8 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/020_catalogue_sync.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/021_sync_pushed_by.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/022_project_taxon_kept.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/023_taxon_seen.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/024_capture_camera.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -272,6 +279,8 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/020_catalogue_sync.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/021_sync_pushed_by.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/022_project_taxon_kept.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/023_taxon_seen.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/024_capture_camera.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

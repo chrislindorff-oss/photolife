@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <QString>
 
 #include <optional>
@@ -49,6 +50,15 @@ public:
     // True for a rank at or below species: species itself, the infraspecific
     // ranks, and the hybrid-formula ranks (genus and intraspecific).
     static bool isLeafRank(const QString &rank);
+
+    // The parent to hang a taxon from in a tree holding the taxa `present`:
+    // its own parent when that's in the tree, else the nearest ancestor in
+    // its iNaturalist `ancestry` ("48460/47126/...", root first) that is.
+    // iNaturalist adds levels -- a complex, a section -- and a taxon's record
+    // can name one before the tree has it; without this the taxon would sit
+    // alone at the top. nullopt when nothing above it is in the tree.
+    static std::optional<qint64> parentWithin(std::optional<qint64> parent, const QString &ancestry,
+                                              const QSet<qint64> &present);
 
     // True for a rank that can appear as a direct child of a species taxon
     // (subspecies, variety, form, hybrid, infrahybrid).
@@ -226,6 +236,12 @@ public:
     // Every taxon id excluded from this project (self+descendants recorded
     // at prune time).
     QList<qint64> projectExcludedTaxonIds(int projectId) const;
+
+    // The levels missing between the project's taxa and their nearest
+    // ancestor in the tree -- a complex or section iNaturalist added after
+    // the tree was built, which a taxon's record already names as its parent
+    // (iNat ids, from each such taxon's ancestry). Pruned taxa aren't listed.
+    QList<qint64> projectMissingAncestorIds(int projectId) const;
 
     // Records each of `taxonInatIds` as excluded from the project, as a prune
     // would (for restoring an exported tree -- see treefile/TreeImporter).

@@ -7,6 +7,8 @@
 #include <QIcon>
 #include <QList>
 
+#include <optional>
+
 namespace pl::thumb {
 class ThumbnailCache;
 }
@@ -20,8 +22,8 @@ class LifeListModel : public QAbstractTableModel
     Q_OBJECT
 
 public:
-    enum Column { NumberColumn, PhotoColumn, DateColumn, CommonColumn, ScientificColumn, PlaceColumn, PhotosColumn,
-                  ColumnCount };
+    enum Column { NumberColumn, PhotoColumn, DateColumn, CommonColumn, ScientificColumn, PlaceColumn, CameraColumn,
+                  FocalColumn, PhotosColumn, ColumnCount };
     enum Roles {
         CaptureIdRole = Qt::UserRole + 1,
         InatIdRole,
@@ -36,6 +38,8 @@ public:
     const coverage::LifeListEntry &entry(int row) const { return m_entries.at(row); }
 
     void setShowThumbnails(bool on);
+    // What the photo's EXIF said, once read: fills its Camera and Focal length.
+    void setCameraInfo(int captureId, const QString &camera, std::optional<double> focalLength);
 
     // "14 Mar 2011", or "No date".
     static QString dateText(const QString &capturedOn);
@@ -51,6 +55,7 @@ private:
     thumb::ThumbnailCache &m_thumbs;
     QList<coverage::LifeListEntry> m_entries;
     QHash<QString, QList<int>> m_rowsByKey;   // ThumbnailCache::keyFor -> rows
+    QHash<int, QList<int>> m_rowsByCapture;   // first photo -> rows
     bool m_thumbnails = false;
     QIcon m_placeholder;
 };

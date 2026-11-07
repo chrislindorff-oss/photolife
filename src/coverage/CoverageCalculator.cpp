@@ -57,11 +57,12 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
         QSqlQuery q(db);
         q.setForwardOnly(true);
         q.prepare(QStringLiteral(
-            "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name "
+            "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name, t.ancestry "
             "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
         q.addBindValue(projectId);
         if (!q.exec())
             return coverage;
+        QHash<qint64, QString> ancestry;
         while (q.next()) {
             Node n;
             n.inatId = q.value(0).toLongLong();
@@ -71,7 +72,12 @@ ProjectCoverage computeCoverage(const QString &connectionName, int projectId)
             n.name = q.value(3).toString();
             n.commonName = q.value(4).toString();
             nodes.insert(n.inatId, n);
+            ancestry.insert(n.inatId, q.value(5).toString());
         }
+        // Counted under the nearest ancestor in the tree when its parent isn't (see parentWithin).
+        const QSet<qint64> present(nodes.keyBegin(), nodes.keyEnd());
+        for (auto it = nodes.begin(); it != nodes.end(); ++it)
+            it->parentInatId = taxonomy::TaxonomyStore::parentWithin(it->parentInatId, ancestry.value(it.key()), present);
     }
     if (nodes.isEmpty())
         return coverage;
@@ -340,17 +346,22 @@ int pickRepresentatives(const QString &connectionName, int projectId)
         QSqlQuery q(db);
         q.setForwardOnly(true);
         q.prepare(QStringLiteral(
-            "SELECT t.inat_id, t.parent_inat_id, t.id FROM project_taxon pt "
+            "SELECT t.inat_id, t.parent_inat_id, t.id, t.ancestry FROM project_taxon pt "
             "JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
         q.addBindValue(projectId);
         if (!q.exec())
             return 0;
+        QHash<qint64, QString> ancestry;
         while (q.next()) {
             const qint64 id = q.value(0).toLongLong();
             parentOf.insert(id, q.value(1).isNull() ? std::optional<qint64>()
                                                     : std::optional<qint64>(q.value(1).toLongLong()));
             localIdOf.insert(id, q.value(2).toLongLong());
+            ancestry.insert(id, q.value(3).toString());
         }
+        const QSet<qint64> present(parentOf.keyBegin(), parentOf.keyEnd());
+        for (auto it = parentOf.begin(); it != parentOf.end(); ++it)
+            *it = taxonomy::TaxonomyStore::parentWithin(*it, ancestry.value(it.key()), present);
     }
     if (parentOf.isEmpty())
         return 0;

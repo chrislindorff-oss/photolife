@@ -181,7 +181,105 @@ private slots:
     void parsesGpsSouthWest();
     void parsesGpsNorthEast();
     void readsATiffRawsHeaderAndAFarGpsDirectory();
+    void parsesFocalLength();
+    void readPhotoExifReadsAJpeg();
+    void prettyCameraNames_data();
+    void prettyCameraNames();
+    void focalTexts();
 };
+
+namespace {
+
+// sampleTiff() with a FocalLength (300 mm, as 3000/10) beside the date.
+QByteArray sampleTiffWithFocal()
+{
+    const QByteArray make = QByteArrayLiteral("Nikon\0");
+    const QByteArray dto = QByteArrayLiteral("2020:09:28 07:31:00\0");
+    const quint32 kMakeAt = 38, kExifIfdAt = 44, kDtoAt = 74, kFocalAt = 94;
+    QByteArray b;
+    b.append("II");
+    putU16(b, 0x002A);
+    putU32(b, 8);
+    putU16(b, 2);
+    putEntry(b, 0x010F, 2, make.size(), kMakeAt);
+    putEntry(b, 0x8769, 4, 1, kExifIfdAt);
+    putU32(b, 0);
+    Q_ASSERT(b.size() == int(kMakeAt));
+    b.append(make);
+    Q_ASSERT(b.size() == int(kExifIfdAt));
+    putU16(b, 2);
+    putEntry(b, 0x9003, 2, dto.size(), kDtoAt);
+    putEntry(b, 0x920A, 5, 1, kFocalAt);
+    putU32(b, 0);
+    Q_ASSERT(b.size() == int(kDtoAt));
+    b.append(dto);
+    Q_ASSERT(b.size() == int(kFocalAt));
+    putRational(b, 3000, 10);
+    return b;
+}
+
+} // namespace
+
+void TestExif::parsesFocalLength()
+{
+    const ExifData e = parseExifSegment(sampleTiffWithFocal());
+    QVERIFY(e.focalLength.has_value());
+    QCOMPARE(*e.focalLength, 300.0);
+    QVERIFY(e.hasDate());
+    QVERIFY(!parseExifSegment(sampleTiff()).focalLength.has_value());
+}
+
+void TestExif::readPhotoExifReadsAJpeg()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("a.jpg"));
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(wrapAsJpeg(sampleTiffWithFocal()));
+    f.close();
+    const ExifData e = readPhotoExif(path);
+    QCOMPARE(e.cameraMake, QStringLiteral("Nikon"));
+    QCOMPARE(e.focalLength.value_or(0), 300.0);
+    QVERIFY(!readPhotoExif(dir.filePath(QStringLiteral("missing.jpg"))).focalLength);
+}
+
+void TestExif::prettyCameraNames_data()
+{
+    QTest::addColumn<QString>("make");
+    QTest::addColumn<QString>("model");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("nikon") << "NIKON CORPORATION" << "NIKON D7000" << "Nikon D7000";
+    QTest::newRow("nikon d70") << "NIKON CORPORATION" << "NIKON D70" << "Nikon D70";
+    QTest::newRow("z6 iii") << "NIKON CORPORATION" << "NIKON Z6_3" << "Nikon Z6III";
+    QTest::newRow("z7 ii") << "NIKON CORPORATION" << "NIKON Z 7_2" << "Nikon Z 7II";
+    QTest::newRow("coolpix") << "NIKON" << "COOLPIX P330" << "Nikon COOLPIX P330";
+    QTest::newRow("pixel") << "Google" << "Pixel 9a" << "Google Pixel 9a";
+    QTest::newRow("samsung lower") << "samsung" << "GT-I9100T" << "Samsung GT-I9100T";
+    QTest::newRow("samsung upper") << "SAMSUNG" << "GT-I9100T" << "Samsung GT-I9100T";
+    QTest::newRow("hp") << "Hewlett-Packard Company" << "HP PhotoSmart 315" << "HP PhotoSmart 315";
+    QTest::newRow("canon") << "Canon" << "Canon EOS R5" << "Canon EOS R5";
+    QTest::newRow("olympus") << "OLYMPUS IMAGING CORP." << "E-M1MarkII" << "Olympus E-M1MarkII";
+    QTest::newRow("unknown maker") << "XIAOMI" << "Redmi Note 8" << "Xiaomi Redmi Note 8";
+    QTest::newRow("nul junk") << QString(7, QChar(0)) + " " + QString(7, QChar(0)) << QString(3, QChar(0)) << "";
+    QTest::newRow("model only") << "" << "DSC-RX10" << "DSC-RX10";
+    QTest::newRow("empty") << "" << "" << "";
+}
+
+void TestExif::prettyCameraNames()
+{
+    QFETCH(QString, make);
+    QFETCH(QString, model);
+    QFETCH(QString, expected);
+    QCOMPARE(prettyCameraName(make, model), expected);
+}
+
+void TestExif::focalTexts()
+{
+    QCOMPARE(focalText(300.0), QStringLiteral("300 mm"));
+    QCOMPARE(focalText(18.0), QStringLiteral("18 mm"));
+    QCOMPARE(focalText(4.53), QStringLiteral("4.5 mm"));
+    QCOMPARE(focalText(0), QString());
+}
 
 void TestExif::parsesDateAndMakeFromSegment()
 {

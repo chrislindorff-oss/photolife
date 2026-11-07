@@ -61,6 +61,18 @@ QList<qint64> subtreeLocalIds(QSqlDatabase &db, qint64 taxonInatId)
 
 } // namespace
 
+std::optional<qint64> TaxonomyStore::parentWithin(std::optional<qint64> parent, const QString &ancestry,
+                                                  const QSet<qint64> &present)
+{
+    if (!parent || present.contains(*parent))
+        return parent;
+    const QList<qint64> chain = pl::net::inat::ancestryIds(ancestry);
+    for (auto it = chain.crbegin(); it != chain.crend(); ++it)
+        if (present.contains(*it))
+            return *it;
+    return parent;   // nothing above it here: it stays a root, as before
+}
+
 bool TaxonomyStore::isLeafRank(const QString &rank)
 {
     static const QStringList leaf = {
@@ -1401,6 +1413,58 @@ bool TaxonomyStore::clearBuildCheckpoint(int projectId)
     return q.exec();
 }
 
+QList<qint64> TaxonomyStore::projectMissingAncestorIds(int projectId) const
+{
+    QSet<qint64> present;
+    QList<QPair<qint64, QString>> orphans;   // parent, ancestry
+    {
+        QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
+        q.setForwardOnly(true);
+        q.prepare(QStringLiteral("SELECT t.inat_id, t.parent_inat_id, t.ancestry FROM project_taxon pt "
+                                 "JOIN taxon t ON t.id = pt.taxon_id WHERE pt.project_id = ?"));
+        q.addBindValue(projectId);
+        if (!q.exec())
+            return {};
+        QList<QPair<qint64, QString>> all;
+        while (q.next()) {
+            present.insert(q.value(0).toLongLong());
+            if (!q.value(1).isNull())
+                all.append({q.value(1).toLongLong(), q.value(2).toString()});
+        }
+        for (const auto &row : all)
+            if (!present.contains(row.first))
+                orphans.append(row);
+    }
+    if (orphans.isEmpty())
+        return {};
+    const QList<qint64> excludedList = projectExcludedTaxonIds(projectId);
+    const QSet<qint64> excluded(excludedList.begin(), excludedList.end());
+    QSet<qint64> missing;
+    for (const auto &[parent, ancestry] : orphans) {
+        // Up from the taxon: everything until the first ancestor the tree has.
+        // Only a gap when the walk reaches the tree: the tree's own top taxon
+        // has a parent outside it too, and what's above that isn't wanted.
+        const QList<qint64> chain = pl::net::inat::ancestryIds(ancestry);
+        QList<qint64> between;
+        bool reached = false;
+        for (auto it = chain.crbegin(); it != chain.crend(); ++it) {
+            if (present.contains(*it)) {
+                reached = true;
+                break;
+            }
+            between << *it;
+        }
+        if (!reached)
+            continue;
+        // A pruned level means its branch was pruned on purpose: leave it be.
+        if (std::any_of(between.cbegin(), between.cend(), [&](qint64 id) { return excluded.contains(id); }))
+            continue;
+        for (qint64 id : between)
+            missing.insert(id);
+    }
+    return QList<qint64>(missing.begin(), missing.end());
+}
+
 QList<qint64> TaxonomyStore::projectSpeciesAncestorIds(int projectId) const
 {
     QSet<qint64> ids;
@@ -1726,7 +1790,7 @@ QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
     QSqlQuery q(QSqlDatabase::database(m_connectionName, false));
     q.prepare(QStringLiteral(
         "SELECT t.inat_id, t.parent_inat_id, t.rank, t.name, t.common_name, pt.in_region, "
-        "       pt.from_checklist "
+        "       pt.from_checklist, t.ancestry "
         "FROM project_taxon pt JOIN taxon t ON t.id = pt.taxon_id "
         "WHERE pt.project_id = ? "
         "ORDER BY COALESCE(t.rank_level, 0) DESC, t.name"));
@@ -1734,6 +1798,7 @@ QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
     if (!q.exec())
         return nodes;
 
+    QStringList ancestries;
     while (q.next()) {
         TreeNode n;
         n.inatId = q.value(0).toLongLong();
@@ -1746,7 +1811,14 @@ QList<TreeNode> TaxonomyStore::projectTree(int projectId) const
         n.fromChecklist = q.value(6).toInt() != 0;
         n.isLeafRank = TaxonomyStore::isLeafRank(n.rank);
         nodes.append(n);
+        ancestries.append(q.value(7).toString());
     }
+    // A parent missing from the tree: hang the taxon from its nearest ancestor that's here.
+    QSet<qint64> present;
+    for (const TreeNode &n : nodes)
+        present.insert(n.inatId);
+    for (int i = 0; i < nodes.size(); ++i)
+        nodes[i].parentInatId = parentWithin(nodes[i].parentInatId, ancestries.at(i), present);
     return nodes;
 }
 

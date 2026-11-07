@@ -1,8 +1,11 @@
 #include "scan/Exif.h"
 
+#include "raw/RawPreview.h"
+
 #include <algorithm>
 #include <cmath>
 
+#include <QBuffer>
 #include <QFile>
 #include <QRegularExpression>
 #include <QIODevice>
@@ -147,6 +150,14 @@ ExifData parseExifSegment(const QByteArray &tiff)
 
     if (exifIfd != 0 && exifIfd < quint32(tiff.size())) {
         reader.walk(exifIfd, [&](quint16 tag, quint16 type, quint32 count, int valuePos) {
+            if (tag == 0x920A && type == 5 && count == 1) {   // FocalLength, a RATIONAL
+                bool ok1 = true, ok2 = true;
+                const quint32 num = read<quint32>(tiff, valuePos, bigEndian, &ok1);
+                const quint32 den = read<quint32>(tiff, valuePos + 4, bigEndian, &ok2);
+                if (ok1 && ok2 && den != 0 && num != 0)
+                    out.focalLength = double(num) / double(den);
+                return;
+            }
             if ((tag == 0x9003 || tag == 0x0132) && type == 2 && !out.dateTimeOriginal.isValid()) {
                 const QDateTime dt = parseExifDateTime(reader.ascii(valuePos, int(count)));
                 if (dt.isValid())
@@ -330,6 +341,105 @@ ExifData readJpegExif(const QString &path)
     if (!file.open(QIODevice::ReadOnly))
         return {};
     return readJpegExif(file);
+}
+
+ExifData readPhotoExif(const QString &path)
+{
+    const auto said = [](const ExifData &e) {
+        return e.hasDate() || !e.cameraModel.isEmpty() || !e.cameraMake.isEmpty() || e.focalLength;
+    };
+    ExifData out = readJpegExif(path);
+    if (said(out))
+        return out;
+    // A RAW: cameras stamp the embedded preview with the shot's EXIF.
+    const QByteArray preview = raw::extractEmbeddedJpegBytes(path);
+    if (!preview.isEmpty()) {
+        QBuffer buffer;
+        buffer.setData(preview);
+        buffer.open(QIODevice::ReadOnly);
+        out = readJpegExif(buffer);
+        if (said(out))
+            return out;
+    }
+    return readTiffExif(path);
+}
+
+namespace {
+
+// Printable text only: some cameras pad the field with NULs or junk.
+QString cleaned(const QString &text)
+{
+    QString out;
+    for (const QChar c : text)
+        if (c.isPrint())
+            out += c;
+    return out.simplified();
+}
+
+QString prettyMake(const QString &make)
+{
+    const QString lower = make.toLower();
+    static const QList<QPair<QString, QString>> known = {
+        {QStringLiteral("nikon"), QStringLiteral("Nikon")},
+        {QStringLiteral("canon"), QStringLiteral("Canon")},
+        {QStringLiteral("sony"), QStringLiteral("Sony")},
+        {QStringLiteral("fujifilm"), QStringLiteral("Fujifilm")},
+        {QStringLiteral("olympus"), QStringLiteral("Olympus")},
+        {QStringLiteral("om digital"), QStringLiteral("OM System")},
+        {QStringLiteral("panasonic"), QStringLiteral("Panasonic")},
+        {QStringLiteral("pentax"), QStringLiteral("Pentax")},
+        {QStringLiteral("ricoh"), QStringLiteral("Ricoh")},
+        {QStringLiteral("samsung"), QStringLiteral("Samsung")},
+        {QStringLiteral("hewlett-packard"), QStringLiteral("HP")},
+        {QStringLiteral("leica"), QStringLiteral("Leica")},
+        {QStringLiteral("apple"), QStringLiteral("Apple")},
+        {QStringLiteral("google"), QStringLiteral("Google")},
+        {QStringLiteral("kodak"), QStringLiteral("Kodak")},
+        {QStringLiteral("minolta"), QStringLiteral("Minolta")},
+        {QStringLiteral("konica minolta"), QStringLiteral("Konica Minolta")},
+        {QStringLiteral("casio"), QStringLiteral("Casio")},
+    };
+    for (const auto &[prefix, name] : known)
+        if (lower.startsWith(prefix))
+            return name;
+    // Otherwise its first word: "XIAOMI" -> "Xiaomi", "HTC" kept.
+    QString first = make.section(QLatin1Char(' '), 0, 0);
+    if (first.size() > 3 && first == first.toUpper())
+        first = first.left(1) + first.mid(1).toLower();
+    return first;
+}
+
+} // namespace
+
+QString prettyCameraName(const QString &rawMake, const QString &rawModel)
+{
+    const QString make = prettyMake(cleaned(rawMake));
+    QString model = cleaned(rawModel);
+    // Nikon's Mark II and III bodies: "Z6_3" -> "Z6III".
+    static const QRegularExpression markTwo(QStringLiteral("(\\d)_2\\b"));
+    static const QRegularExpression markThree(QStringLiteral("(\\d)_3\\b"));
+    model.replace(markTwo, QStringLiteral("\\1II"));
+    model.replace(markThree, QStringLiteral("\\1III"));
+    // The model often repeats the maker ("NIKON D7000", "HP PhotoSmart 315").
+    if (!make.isEmpty()) {
+        for (const QString &prefix : {make, cleaned(rawMake).section(QLatin1Char(' '), 0, 0)}) {
+            if (!prefix.isEmpty() && model.startsWith(prefix + QLatin1Char(' '), Qt::CaseInsensitive)) {
+                model = model.mid(prefix.size() + 1);
+                break;
+            }
+        }
+    }
+    if (model.isEmpty())
+        return make;
+    return make.isEmpty() ? model : make + QLatin1Char(' ') + model;
+}
+
+QString focalText(double millimetres)
+{
+    if (millimetres <= 0)
+        return {};
+    return millimetres < 10 ? QStringLiteral("%1 mm").arg(millimetres, 0, 'f', 1)
+                            : QStringLiteral("%1 mm").arg(qRound(millimetres));
 }
 
 } // namespace pl::scan

@@ -65,6 +65,7 @@ struct ScanSummary;
 namespace taxonomy {
 class ProjectBuilder;
 class TreeChangeFinder;
+class TreeGapFiller;
 struct TreeChange;
 class OriginFetcher;
 class AlaStatusSync;
@@ -103,6 +104,7 @@ class GettingStartedPanel;
 struct GuideState;
 class InatToolsView;
 class OrganiseView;
+class TaxonColumnView;
 class MapView;
 class ReferencePhotoDialog;
 class ReviewPane;
@@ -239,6 +241,11 @@ private:
     void fetchInfraspecificTaxa();
     void startInfraspecificFetch(qint64 scopeInatId, const QString &scopeName);
     void showTreeContextMenu(const QPoint &pos);
+    // The tree's right-click menu for a taxon, from the tree or the Columns view.
+    void showTaxonContextMenu(const QModelIndex &index, const QPoint &globalPos);
+    // Tree or Columns in the Reference Trees panel; `resizePanel` widens the
+    // panel for columns (and puts it back), as when the user switches.
+    void setTreeColumnsMode(bool columns, bool resizePanel);
     void pruneTaxonFromTree(qint64 inatId, const QString &name);
     void importChecklist();
     void exportReferenceTree();
@@ -490,6 +497,16 @@ private:
     QLineEdit *m_lifeListSearch = nullptr;
     QCheckBox *m_lifeListInfra = nullptr;    // subspecies, varieties and hybrids as entries
     QCheckBox *m_lifeListThumbs = nullptr;   // each entry's first photo
+    QToolButton *m_lifeListColumnsButton = nullptr;   // Columns…: which columns show
+    QMenu *m_lifeListColumnsMenu = nullptr;
+    // Camera and Focal length: the first photos' EXIF, read a chunk at a time.
+    QList<QPair<int, QString>> m_cameraQueue;   // capture id, file
+    QSet<int> m_cameraRequested;                // queued this session (read or not)
+    bool m_cameraReading = false;
+    int m_cameraTotal = 0;
+    int m_cameraDone = 0;
+    void readLifeListCameras();
+    void readNextCameraChunk();
     QLabel *m_lifeListCounts = nullptr;
     QTreeView *m_lifeListView = nullptr;
     model::LifeListModel *m_lifeListModel = nullptr;
@@ -596,8 +613,19 @@ private:
     QList<qint64> m_treeSearchHits;   // current search matches, best first
     int m_treeSearchPos = 0;          // which hit is focused (Enter cycles)
     QCheckBox *m_photographedOnly = nullptr;
+    QCheckBox *m_showSeen = nullptr;      // the tree's Seen column
+    QLabel *m_seenTally = nullptr;        // ...and what it adds up to
+    void updateSeenTally();
     QComboBox *m_coverageFilterCombo = nullptr;   // all / fully covered / not fully covered
     QToolButton *m_rankFilterButton = nullptr;
+    QToolButton *m_expandAllButton = nullptr;   // keeps the whole tree open while on
+    // The Columns view of the tree, and the switch between them.
+    TaxonColumnView *m_columnView = nullptr;
+    QStackedWidget *m_treeStack = nullptr;
+    QToolButton *m_treeModeButton = nullptr;
+    QToolButton *m_columnsModeButton = nullptr;
+    bool m_syncingColumns = false;     // copying the current taxon between the two views
+    int m_treeWidthBeforeColumns = 0;  // the panel's width, to go back to
     QMenu *m_rankFilterMenu = nullptr;
     QHash<QString, QCheckBox *> m_rankCheckboxes;   // rank -> its "show this rank" checkbox
     QStringList m_rankFilterOrder;                  // ranks currently backing the menu
@@ -605,6 +633,10 @@ private:
     taxonomy::ProjectBuilder *m_builder = nullptr;
     // After a complete refresh: what's gone from the tree on iNaturalist.
     taxonomy::TreeChangeFinder *m_treeChanges = nullptr;
+    // Levels iNaturalist added since a tree was built, fetched when it's shown.
+    taxonomy::TreeGapFiller *m_treeGaps = nullptr;
+    QSet<int> m_treeGapsChecked;   // trees looked at this session
+    void fillTreeGaps(int projectId);
     bool m_builderIsNewTree = false;   // distinguishes New from Refresh in m_builder::finished
     taxonomy::InfraspecificFiller *m_infraFiller = nullptr;
     taxonomy::OriginFetcher *m_originFetcher = nullptr;

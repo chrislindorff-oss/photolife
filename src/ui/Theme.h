@@ -38,6 +38,9 @@ struct ThemeColors {
     QColor text;
     QColor mutedText;
     QColor selectedRow;
+    QColor indicatorBorder;          // checkbox / radio outline: white in dark mode, to stand out
+    QColor indicatorCheckedBorder;   // ...when ticked
+    QColor indicatorDisabledBorder;  // ...when it can't be changed
     int radius = 6;
 
     // Match-status semantics (CaptureDelegate status dot; same hues reused

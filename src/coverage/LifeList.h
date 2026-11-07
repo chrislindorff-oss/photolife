@@ -4,6 +4,8 @@
 #include <QList>
 #include <QString>
 
+#include <optional>
+
 namespace pl::coverage {
 
 // A reference tree's photographic life list: its taxa in the order they were
@@ -43,6 +45,11 @@ struct LifeListEntry
     QString previewPath;
     QString previewHash;
     QString locality;            // "Town, State, Country", or the place typed in the file name
+    // The first photo's camera, from its EXIF (capture_camera): read on
+    // demand, so cameraChecked is false until it has been.
+    QString camera;
+    std::optional<double> focalLength;   // millimetres
+    bool cameraChecked = false;
 };
 
 // True for a captured_on to date by: known, and not after `today` (a file

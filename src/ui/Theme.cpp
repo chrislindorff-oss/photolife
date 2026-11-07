@@ -1,9 +1,14 @@
 #include "ui/Theme.h"
 
 #include <QApplication>
+#include <algorithm>
 #include <QFile>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPalette>
+#include <QProxyStyle>
 #include <QStyleFactory>
+#include <QStyleOption>
 #include <QTextStream>
 
 namespace pl {
@@ -27,6 +32,9 @@ ThemeColors makeLightColors()
     c.text            = QColor(0x1F, 0x29, 0x37);
     c.mutedText       = QColor(0x6B, 0x72, 0x80);
     c.selectedRow     = QColor(0xDF, 0xEA, 0xFD);
+    c.indicatorBorder = c.border;
+    c.indicatorCheckedBorder = c.primaryAccent;
+    c.indicatorDisabledBorder = c.border;
     c.radius          = 6;
 
     c.statusAuto      = QColor(0x2E, 0x7D, 0x32);
@@ -56,6 +64,9 @@ ThemeColors makeDarkColors()
     c.text            = QColor(0xE6, 0xE9, 0xEC);
     c.mutedText       = QColor(0x8A, 0x93, 0xA0);
     c.selectedRow     = QColor(0x2C, 0x3B, 0x52);   // desaturated blue-gray
+    c.indicatorBorder = QColor(0xFF, 0xFF, 0xFF);   // checkboxes vanish on dark panels otherwise
+    c.indicatorCheckedBorder = c.indicatorBorder;
+    c.indicatorDisabledBorder = c.mutedText;
     c.radius          = 6;
 
     c.statusAuto      = QColor(0x4C, 0xAF, 0x50);
@@ -117,12 +128,63 @@ QString substituteTokens(QString qss, const ThemeColors &c)
         {QStringLiteral("@text@"), c.text.name()},
         {QStringLiteral("@mutedText@"), c.mutedText.name()},
         {QStringLiteral("@selectedRow@"), c.selectedRow.name()},
+        {QStringLiteral("@indicatorBorder@"), c.indicatorBorder.name()},
+        {QStringLiteral("@indicatorCheckedBorder@"), c.indicatorCheckedBorder.name()},
+        {QStringLiteral("@indicatorDisabledBorder@"), c.indicatorDisabledBorder.name()},
         {QStringLiteral("@radius@"), QString::number(c.radius)},
     };
     for (const auto &[token, value] : tokens)
         qss.replace(token, value);
     return qss;
 }
+
+// Checkboxes in lists and trees (and menus) are drawn by Fusion, whose
+// outline is the window colour darkened -- next to invisible on a dark panel,
+// where a style sheet can't reach it without losing the tick. In dark mode
+// they're drawn here instead: a white outline, the tick in white on the
+// accent colour, and grey when disabled (a tick that can't be changed).
+class IndicatorStyle : public QProxyStyle
+{
+public:
+    using QProxyStyle::QProxyStyle;
+
+    void drawPrimitive(PrimitiveElement pe, const QStyleOption *opt, QPainter *p, const QWidget *w) const override
+    {
+        if ((pe != PE_IndicatorItemViewItemCheck && pe != PE_IndicatorCheckBox)
+            || currentThemeVariant() != ThemeVariant::Dark) {
+            QProxyStyle::drawPrimitive(pe, opt, p, w);
+            return;
+        }
+        const ThemeColors &c = themeColors(ThemeVariant::Dark);
+        const bool enabled = opt->state & State_Enabled;
+        const bool on = opt->state & State_On;
+        const bool partly = opt->state & State_NoChange;
+        const int side = std::min(opt->rect.width(), opt->rect.height()) - 1;
+        const QRectF box(opt->rect.x() + (opt->rect.width() - side) / 2.0 + 0.5,
+                         opt->rect.y() + (opt->rect.height() - side) / 2.0 + 0.5, side - 1, side - 1);
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing);
+        const QColor outline = enabled ? c.indicatorBorder : c.indicatorDisabledBorder;
+        const QColor fill = (on || partly) ? (enabled ? c.primaryAccent : c.border) : c.panel;
+        p->setPen(QPen(outline, 1.2));
+        p->setBrush(fill);
+        p->drawRoundedRect(box, 3, 3);
+        p->setPen(QPen(enabled ? QColor(Qt::white) : c.mutedText, std::max(1.5, side / 7.0), Qt::SolidLine,
+                       Qt::RoundCap, Qt::RoundJoin));
+        p->setBrush(Qt::NoBrush);
+        if (on) {
+            QPainterPath tick;
+            tick.moveTo(box.left() + box.width() * 0.22, box.top() + box.height() * 0.52);
+            tick.lineTo(box.left() + box.width() * 0.42, box.top() + box.height() * 0.72);
+            tick.lineTo(box.left() + box.width() * 0.78, box.top() + box.height() * 0.30);
+            p->drawPath(tick);
+        } else if (partly) {
+            p->drawLine(QPointF(box.left() + box.width() * 0.25, box.center().y()),
+                        QPointF(box.right() - box.width() * 0.25, box.center().y()));
+        }
+        p->restore();
+    }
+};
 
 } // namespace
 
@@ -142,7 +204,7 @@ void applyTheme(QApplication &app, ThemeVariant variant)
 {
     currentVariantStorage() = variant;
 
-    app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    app.setStyle(new IndicatorStyle(QStyleFactory::create(QStringLiteral("Fusion"))));
 
     const ThemeColors &c = themeColors(variant);
     app.setPalette(paletteFor(c));

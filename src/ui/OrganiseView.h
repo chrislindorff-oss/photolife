@@ -83,6 +83,8 @@ private:
     void findPlacesThen(const QList<int> &rows, std::function<void()> then);
     void executePlan(const organise::OrganisePlan &plan, bool rename);
     void updatePreview();
+    // "Photo 12 of 340" above the preview (above the grid in grid mode).
+    void updatePosition();
     // A big folder comes a page at a time: the next page is read when the
     // view nears the end of those loaded; all of them before organising.
     void maybeLoadMore();
@@ -110,6 +112,7 @@ private:
     ImageViewer *m_viewer = nullptr;
     QLabel *m_preview = nullptr;          // the selected photo, large (filmstrip mode)
     QLabel *m_previewCaption = nullptr;
+    QLabel *m_position = nullptr;         // how far through the folder the selected photo is
     QString m_previewKey;                 // its thumbnail key, while loading
     bool m_filmstrip = true;
     bool m_loading = false;

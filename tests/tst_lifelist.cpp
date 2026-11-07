@@ -3,8 +3,12 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QTemporaryDir>
 
+#include "catalogue/CameraInfoStore.h"
 #include "coverage/LifeList.h"
+#include "model/LifeListModel.h"
+#include "thumb/ThumbnailCache.h"
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
 
@@ -60,6 +64,8 @@ private slots:
     void unusableDatesAreIgnored();
     void countsEachPhotoOnce();
     void loadsFromTheCatalogue();
+    void loadsCameraDetailsOnceRead();
+    void modelShowsCameraAndFocal();
 };
 
 void TestLifeList::numbersSpeciesByTheirFirstPhoto()
@@ -207,5 +213,96 @@ void TestLifeList::loadsFromTheCatalogue()
     QCOMPARE(shown[0].locality, QStringLiteral("Steiglitz"));
 }
 
-QTEST_GUILESS_MAIN(TestLifeList)
+void TestLifeList::loadsCameraDetailsOnceRead()
+{
+    Database database;
+    QVERIFY(database.open(QStringLiteral(":memory:")));
+    taxonomy::TaxonomyStore store(database.connectionName());
+    const int project = store.ensureProject(QStringLiteral("P"), 1, std::nullopt, QStringLiteral("inat"));
+    for (const LifeListNode &n : tree()) {
+        taxonomy::Taxon t;
+        t.inatId = n.inatId;
+        if (n.parentInatId > 0)
+            t.parentInatId = n.parentInatId;
+        t.rank = n.rank;
+        t.name = n.name;
+        store.upsertTaxon(t);
+        store.addProjectTaxon(project, n.inatId, true, false);
+    }
+    QSqlDatabase db = QSqlDatabase::database(database.connectionName(), false);
+    QSqlQuery f(db);
+    QVERIFY(f.exec(QStringLiteral("INSERT INTO folder (path, name, depth) VALUES ('/p', 'p', 0)")));
+    const int folder = f.lastInsertId().toInt();
+    QList<int> ids;
+    for (const auto &[name, taxon] : {std::pair{"flame", 20}, std::pair{"rose", 30}}) {
+        QSqlQuery c(db);
+        c.prepare(QStringLiteral("INSERT INTO capture (folder_id, base_name, captured_on) VALUES (?, ?, '2015-01-01')"));
+        c.addBindValue(folder);
+        c.addBindValue(QString::fromLatin1(name));
+        QVERIFY(c.exec());
+        const int id = c.lastInsertId().toInt();
+        ids << id;
+        QSqlQuery r(db);
+        r.prepare(QStringLiteral("INSERT INTO rendition (capture_id, path, kind, ext, content_hash, file_size, mtime) "
+                                 "VALUES (?, ?, 'jpeg', 'jpg', 'h', 1, 1)"));
+        r.addBindValue(id);
+        r.addBindValue(QStringLiteral("/p/%1.jpg").arg(QString::fromLatin1(name)));
+        QVERIFY(r.exec());
+        QSqlQuery m(db);
+        m.prepare(QStringLiteral("INSERT INTO capture_match (capture_id, taxon_id, method, confidence, status) "
+                                 "VALUES (?, (SELECT id FROM taxon WHERE inat_id = ?), 'file', 1.0, 'auto')"));
+        m.addBindValue(id);
+        m.addBindValue(taxon);
+        QVERIFY(m.exec());
+    }
+    catalogue::CameraInfoStore cameras(database.connectionName());
+    QVERIFY(cameras.save({{ids[0], QStringLiteral("Nikon D7000"), 300.0}}));
+    QVERIFY(cameras.save({{ids[0], QStringLiteral("Nikon D7000"), 400.0}}));   // read again: replaced
+
+    const auto shown = numberedLifeList(loadLifeList(database.connectionName(), project, kToday), false);
+    QCOMPARE(shown.size(), 2);
+    for (const LifeListEntry &e : shown) {
+        if (e.captureId == ids[0]) {
+            QVERIFY(e.cameraChecked);
+            QCOMPARE(e.camera, QStringLiteral("Nikon D7000"));
+            QCOMPARE(e.focalLength.value_or(0), 400.0);
+        } else {
+            QVERIFY(!e.cameraChecked);   // not read yet
+            QVERIFY(e.camera.isEmpty());
+        }
+    }
+}
+
+void TestLifeList::modelShowsCameraAndFocal()
+{
+    QTemporaryDir dir;
+    thumb::ThumbnailCache thumbs(dir.path());
+    model::LifeListModel model(thumbs);
+    LifeListEntry a;
+    a.number = 1;
+    a.captureId = 7;
+    a.name = QStringLiteral("Petroica phoenicea");
+    a.previewPath = QStringLiteral("/p/a.jpg");
+    LifeListEntry b = a;
+    b.number = 2;
+    b.captureId = 8;
+    model.setEntries({a, b});
+    const QModelIndex camera = model.index(0, model::LifeListModel::CameraColumn);
+    const QModelIndex focal = model.index(0, model::LifeListModel::FocalColumn);
+    QVERIFY(camera.data().toString().isEmpty());
+    QVERIFY(camera.data(Qt::ToolTipRole).toString().contains(QStringLiteral("Reading")));
+
+    QSignalSpy changed(&model, &QAbstractItemModel::dataChanged);
+    model.setCameraInfo(7, QStringLiteral("Nikon D70"), 4.53);
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(camera.data().toString(), QStringLiteral("Nikon D70"));
+    QCOMPARE(focal.data().toString(), QStringLiteral("4.5 mm"));
+    QVERIFY(model.index(1, model::LifeListModel::CameraColumn).data().toString().isEmpty());
+    // Unknown sorts after every camera; focal by number.
+    QVERIFY(model.index(0, model::LifeListModel::CameraColumn).data(model::LifeListModel::SortRole).toString()
+            < model.index(1, model::LifeListModel::CameraColumn).data(model::LifeListModel::SortRole).toString());
+    QCOMPARE(focal.data(model::LifeListModel::SortRole).toDouble(), 4.53);
+}
+
+QTEST_MAIN(TestLifeList)
 #include "tst_lifelist.moc"

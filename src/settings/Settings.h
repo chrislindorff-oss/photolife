@@ -157,6 +157,16 @@ public:
     // their own (off: species only); each entry's first photo as a thumbnail.
     bool lifeListShowsInfraspecific() const;
     void setLifeListShowsInfraspecific(bool show);
+    // The Reference Tree's Seen column (and its tally) shown.
+    bool treeShowsSeen() const;
+    void setTreeShowsSeen(bool show);
+    // The Reference Trees panel's view: "tree" or "columns".
+    QString treeViewMode() const;
+    void setTreeViewMode(const QString &mode);
+    // The life list's columns turned off with Columns… (keys: date, common,
+    // scientific, place, camera, focal, photos). Camera and focal start off.
+    QStringList lifeListHiddenColumns() const;
+    void setLifeListHiddenColumns(const QStringList &keys);
     bool lifeListThumbnails() const;
     void setLifeListThumbnails(bool show);
     bool treePanelShown(const QString &view) const;

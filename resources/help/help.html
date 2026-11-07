@@ -100,7 +100,7 @@ search or select a taxon while reviewing or browsing the whole library.</p>
 then choose <b>Organise &rarr; Open Download Folder&hellip;</b> (or <b>View &rarr;
 Organise New Photos</b>). The photos appear as a filmstrip in the order they were
 taken &mdash; RAW and JPEG of a shot together &mdash; with the selected photo large
-below it. The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
+below it, and above that how far through the folder you are (<i>Photo 12 of 340</i>). The mouse wheel scrolls the strip; <b>Grid</b> shows them all at once
 (<b>F11</b>, or <b>View &rarr; Full Screen</b>, for full screen, anywhere in PhotoLife).</p>
 <p>A big folder opens a page of 250 photos at a time, so you can start straight away:
 the next 250 are read as you scroll towards the end of those shown (the counts say
@@ -232,7 +232,11 @@ of the <b>Reference Trees</b> panel on the left. From the <b>Reference Tree</b>
 menu:</p>
 <ul>
   <li><b>Refresh Reference Tree</b> re-pulls the current one from iNaturalist: species
-      newly recorded in the place are added, and taxa you've pruned stay out. It then
+      newly recorded in the place are added, and taxa you've pruned stay out.
+      (Between refreshes, iNaturalist sometimes adds a level &mdash; a complex or a
+      section, say <i>Hedera helix</i> (complex) between <i>Hedera</i> and the species.
+      When a tree is shown, PhotoLife fetches any such missing level by itself, in a
+      few seconds; until then the species sits under its nearest group the tree has.) It then
       checks what has <i>gone</i>, and lists it in <b>Tree Changes on iNaturalist</b>:
       <ul>
         <li><b>Renamed</b> &mdash; iNaturalist now uses another name (a swap or merge).
@@ -320,7 +324,23 @@ step through the other matches. If the right pane is on <b>Photos of Tree Select
 it follows along, showing that taxon&rsquo;s photos. A match hidden by the
 &ldquo;photographed only&rdquo; filter un-hides it. The <b>Ranks&hellip;</b> button
 lets you hide ranks you don't care to see in the tree (e.g. collapse straight to
-species, skipping family/genus rows).</p>
+species, skipping family/genus rows). <b>Expand All</b> beside it opens every branch,
+and keeps the tree open as you change trees or filters until you turn it off again
+(which folds it back to the top levels, keeping the selected taxon in view).</p>
+<p><b>Columns</b>, at the right of that row, shows the tree another way: as columns,
+one step down per column. Click a taxon and what's beneath it opens in the next column
+&mdash; from Life (or the top rank you show) down through the families and genera to
+the species and their subspecies. Each entry shows its scientific name with the common
+name under it, its rank in grey, its coverage (&#10004;, or <i>photographed&nbsp;/&nbsp;total</i>),
+the Seen tick when the Seen column is on, and an arrow when there's more beneath it.
+iNaturalist doesn't give every taxon every rank, so a column can mix ranks (genera
+beside subfamilies, say); hide the in-between ranks with <b>Ranks&hellip;</b> to make
+the columns line up rank by rank. When a species or lower taxon is selected, a card
+beside the columns shows iNaturalist's photo of it, your own cover photo if you have
+one, its names and coverage, and <b>Show Photos</b> and <b>Open on iNaturalist</b>.
+Search, the filters, right-click and the photo tabs all work as they do in the tree;
+the panel widens for the columns, and <b>Tree</b> switches back (and narrows it
+again).</p>
 
 <h3 id="treefiles">Exporting and importing a tree</h3>
 <p><b>Reference Tree &rarr; Export Reference Tree&hellip;</b> saves the current tree
@@ -532,7 +552,11 @@ arrow keys then step through the list's first photos in order). Right-click also
 heading to sort by it; click <b>#</b> to return to the life list order. Dates come from
 each photo's EXIF data or its file name; a photo with no date, or one later than today
 (a misread file name, say), doesn't date an entry, and species with only such photos
-come last, unnumbered. Both ticks are remembered.</p>
+come last, unnumbered. Both ticks are remembered. <b>Columns&hellip;</b> (or a
+right-click on the column headings) chooses which columns show &mdash; including the
+<b>Camera</b> and <b>Focal length</b> of each entry's first photo, read from its EXIF the
+first time those columns are shown (in the background, a few seconds for a few hundred
+photos) and remembered after that. Photos only in the cloud aren't downloaded for it.</p>
 <p>The coverage box beside it filters to <b>Fully covered</b> taxa (Coverage
 <b>X&nbsp;/&nbsp;X</b>, or &#10004; for a species) or <b>Not fully covered</b> ones,
 among the ranks you've chosen to show with <b>Ranks&hellip;</b>. For example, show only
@@ -541,6 +565,17 @@ species from. Greyed rows aren't a match themselves; they're only there as the p
 to one (such as the incomplete family a complete genus belongs to). It combines with
 <b>Only taxa I&rsquo;ve photographed</b>: together with <b>Not fully covered</b> they
 show taxa you've photographed some, but not all, of.</p>
+<p>Tick <b>Seen column</b> to keep track of the species you've <i>seen</i> but haven't
+photographed yet. Each species, subspecies, variety and hybrid gets a checkbox: the
+ones you've photographed are ticked already (greyed &mdash; the tick comes from the
+photos), and you tick the others yourself, or right-click one and choose <b>Seen (Not
+Photographed)</b>. Ticking a subspecies counts its species as seen too (untick the
+subspecies to undo it). Genera, families and the ranks above show how many of their
+species are seen, as <b>seen&nbsp;/&nbsp;total</b>. Under the tree, a line adds them
+up &mdash; <i>Seen 340 of the 1,204 species shown &mdash; 312 photographed, 28 seen
+only</i> &mdash; counting only the taxa the filters leave showing. A tick belongs to the
+taxon, so it shows in every tree that has it; when you photograph a species later, its
+tick simply becomes a photographed one.</p>
 
 <h2 id="untreed">Photos not in any tree</h2>
 <p>The <b>Not in Any Tree</b> tab lists taxa your photos are matched to that are
@@ -879,7 +914,10 @@ embedded preview), with where and when it was taken if it knows, to be <i>scored
 nothing is posted to iNaturalist and nothing is decided for you. The suggestions come
 back best first, each with iNaturalist's score, and marked <b>seen nearby</b> (recorded
 near where it was taken) and <b>in your trees</b>; ones outside your trees are greyed,
-and <b>Only taxa in my trees</b> hides them. Where a suggestion names your photos (in
+and <b>Only taxa in my trees</b> hides them. To see what a suggestion looks like,
+right-click it (or press <b>Space</b> on it): iNaturalist's photo of that taxon pops up,
+with its names and the photographer's credit; a click anywhere, or <b>Esc</b>, closes it.
+Where a suggestion names your photos (in
 Organise), <b>Name with common names</b> chooses between its common name (<i>Flame
 Robin</i>) and its scientific name (<i>Petroica phoenicea</i>); a taxon without a common
 name gets its scientific name either way. When the suggestions disagree, the first row

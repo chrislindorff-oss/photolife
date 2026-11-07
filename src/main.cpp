@@ -9,6 +9,7 @@
 #include <QWidget>
 #include <QAction>
 #include <QTabWidget>
+#include <QListView>
 #include <QTreeView>
 
 #include <cstdio>
@@ -21,6 +22,7 @@
 
 #include "app/Application.h"
 #include "ui/MainWindow.h"
+#include "ui/OrganiseView.h"
 #include "checklist/ChecklistImporter.h"
 #include "checklist/ChecklistParser.h"
 #include "db/Database.h"
@@ -504,7 +506,8 @@ int main(int argc, char *argv[])
             //   0 Photos of Tree Selection, 1 All Library Photos, 2 Review Unmatched,
             //   3 Unphotographed Taxa, 4 Reference Photos, 5 My Best Shots, 6 Map,
             //   7 iNaturalist (Download My Observations), 8 Not in Any Tree,
-            //   9 Photographic Life List.
+            //   9 Photographic Life List, 10 Organise New Photos (the last folder
+            //   opened, its fifth photo selected).
             // Values are indices within the Reference Tree mode's QTabWidget.
             static const int kTreeTabIndex[] = {0, -1, -1, 3, 6, 2, 1, -1, 5, 4};
             for (QWidget *w : QApplication::topLevelWidgets()) {
@@ -522,6 +525,14 @@ int main(int argc, char *argv[])
                 } else if (tab == 7) {
                     if (inatAction)
                         inatAction->setChecked(true);
+                } else if (tab == 10) {
+                    if (auto *organiseAction = w->findChild<QAction *>(QStringLiteral("viewOrganiseAction")))
+                        organiseAction->setChecked(true);
+                    if (auto *organise = w->findChild<pl::OrganiseView *>()) {
+                        const QString folder = app.settings().organiseFolder();
+                        if (!folder.isEmpty())
+                            organise->openFolder(folder);
+                    }
                 } else {
                     if (treeAction)
                         treeAction->setChecked(true);
@@ -540,7 +551,17 @@ int main(int argc, char *argv[])
                     }
                 }
             }
-            QTimer::singleShot(700, [&] {
+            QTimer::singleShot(tab == 10 ? 2500 : 700, [&] {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    if (tab == 10) {
+                        if (auto *organise = w->findChild<pl::OrganiseView *>()) {
+                            if (auto *list = organise->findChild<QListView *>(); list && list->model()
+                                && list->model()->rowCount() > 4)
+                                list->setCurrentIndex(list->model()->index(4, 0));
+                        }
+                    }
+                }
+                QTimer::singleShot(tab == 10 ? 1500 : 0, [&] {
                 for (QWidget *w : QApplication::topLevelWidgets()) {
                     if (w->findChild<QTabWidget *>()) {
                         w->grab().save(out);
@@ -548,6 +569,7 @@ int main(int argc, char *argv[])
                     }
                 }
                 qtApp.quit();
+                });
             });
         });
         return QApplication::exec();
