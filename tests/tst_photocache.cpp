@@ -62,10 +62,11 @@ void TestPhotoCache::unreachableUrlStaysNullAndIsNotRetriedForever()
     PhotoCache cache(dir.path(), QByteArrayLiteral("test/1"));
     cache.setRetryBaseMs(20);
 
-    // A syntactically valid but unroutable URL: each try fails fast. It's
-    // tried a few times (a dropped connection can be passing), then marked
-    // failed -- one ready() for the lot -- so a second ask schedules nothing.
-    const QString url = QStringLiteral("http://127.0.0.1:9/nope.jpg");
+    // A URL that can't be fetched and fails at once on every platform (a
+    // closed local port takes ~2 s a try to refuse on Windows). It's tried a
+    // few times (a dropped connection can be passing), then marked failed --
+    // one ready() for the lot -- so a second ask schedules nothing.
+    const QString url = QUrl::fromLocalFile(dir.filePath(QStringLiteral("nope.jpg"))).toString();
     QSignalSpy spy(&cache, &PhotoCache::ready);
     QVERIFY(cache.photo(url).isNull());
     QVERIFY(!cache.hasFailed(url));   // queued, not failed yet
@@ -82,7 +83,7 @@ void TestPhotoCache::retryAsksAgainForAFailedUrl()
     QTemporaryDir dir;
     PhotoCache cache(dir.path(), QByteArrayLiteral("test/1"));
     cache.setRetryBaseMs(20);
-    const QString url = QStringLiteral("http://127.0.0.1:9/nope.jpg");
+    const QString url = QUrl::fromLocalFile(dir.filePath(QStringLiteral("nope.jpg"))).toString();   // see above
     QSignalSpy spy(&cache, &PhotoCache::ready);
     cache.photo(url);
     QVERIFY(spy.wait(5000));
