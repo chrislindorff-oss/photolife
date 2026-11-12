@@ -259,6 +259,10 @@ public:
     int geotagLastZoom() const;
     void setGeotagLastView(double latitude, double longitude, int zoom);
     bool geotagWriteIntoRaw() const;
+    // The most each set of map tiles (street, aerial) may take on disk, in
+    // megabytes; the oldest go when a set passes it. 0: no limit.
+    int tileCacheLimitMb() const;
+    void setTileCacheLimitMb(int megabytes);
     void setGeotagWriteIntoRaw(bool on);
     // Every map's base layer: aerial photos (Esri) rather than the street map.
     bool mapSatellite() const;

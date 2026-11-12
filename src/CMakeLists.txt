@@ -161,6 +161,7 @@ qt_add_library(photolife_core STATIC
     ui/ReviewPane.h         ui/ReviewPane.cpp
     ui/ServerBar.h          ui/ServerBar.cpp
     ui/ServerDialogs.h      ui/ServerDialogs.cpp
+    ui/StorageDialog.h      ui/StorageDialog.cpp
     ui/StaleMatchDialog.h   ui/StaleMatchDialog.cpp
     ui/TaxonColumnView.h ui/TaxonColumnView.cpp
     ui/TaxonConfirmDialog.h ui/TaxonConfirmDialog.cpp

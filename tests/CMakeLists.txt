@@ -11,6 +11,7 @@ endfunction()
 
 photolife_test(tst_database)
 photolife_test(tst_settings)
+photolife_test(tst_storagestats)
 photolife_test(tst_checklistparser)
 photolife_test(tst_checklistimporter)
 photolife_test(tst_treefile)

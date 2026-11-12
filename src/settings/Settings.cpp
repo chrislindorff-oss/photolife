@@ -780,6 +780,16 @@ QPointF Settings::geotagLastLocation() const
                    m_settings.value(QStringLiteral("geotag/lastLat")).toDouble());
 }
 
+int Settings::tileCacheLimitMb() const
+{
+    return std::max(0, m_settings.value(QStringLiteral("storage/tileCacheLimitMb"), 500).toInt());
+}
+
+void Settings::setTileCacheLimitMb(int megabytes)
+{
+    m_settings.setValue(QStringLiteral("storage/tileCacheLimitMb"), std::max(0, megabytes));
+}
+
 int Settings::geotagLastZoom() const
 {
     return m_settings.value(QStringLiteral("geotag/lastZoom"), 13).toInt();

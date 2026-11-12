@@ -1375,9 +1375,22 @@ void OrganiseView::setLocationOnMap()
 void OrganiseView::loadGpxTrack()
 {
     m_track = {};
-    if (!m_session.gpxPath().isEmpty())
-        m_track = geo::GpxTrack::load(m_session.gpxPath());
     updateGpxButton();
+    const QString path = m_session.gpxPath();
+    if (path.isEmpty())
+        return;
+    // Read off the GUI thread: a long trip's track can be many megabytes.
+    // A folder opened meanwhile drops this answer.
+    const int generation = m_loadGeneration;
+    auto *watcher = new QFutureWatcher<geo::GpxTrack>(this);
+    connect(watcher, &QFutureWatcher<geo::GpxTrack>::finished, this, [this, watcher, generation, path] {
+        watcher->deleteLater();
+        if (generation != m_loadGeneration || path != m_session.gpxPath())
+            return;
+        m_track = watcher->result();
+        updateGpxButton();
+    });
+    watcher->setFuture(QtConcurrent::run([path] { return geo::GpxTrack::load(path); }));
 }
 
 void OrganiseView::updateGpxButton()

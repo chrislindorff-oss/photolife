@@ -87,6 +87,7 @@
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/ServerDialogs.h"
+#include "ui/StorageDialog.h"
 #include "ui/StaleMatchDialog.h"
 #include "ui/TaxonConfirmDialog.h"
 #include "ui/TaxonPickerDialog.h"
@@ -6978,40 +6979,8 @@ void MainWindow::showAbout()
 
 void MainWindow::showStorageUsage()
 {
-    // A shared Postgres catalogue has no local file to size -- only local
-    // SQLite mode has a byte count worth reporting here.
-    const bool isLocalSqlite = m_app.settings().catalogueDescriptor().backend
-                                == CatalogueDescriptor::Backend::Sqlite;
-    qint64 dbBytes = 0;
-    if (isLocalSqlite) {
-        const QString dbPath = m_app.settings().databasePath();
-        dbBytes = QFileInfo(dbPath).size();
-        dbBytes += QFileInfo(dbPath + QStringLiteral("-wal")).size();
-        dbBytes += QFileInfo(dbPath + QStringLiteral("-shm")).size();
-    }
-
-    const qint64 thumbBytes = app::directoryBytes(m_app.thumbnails().cacheDir());
-    const qint64 photoBytes = app::directoryBytes(m_app.photoCache().cacheDir());
-    const qint64 tileBytes = app::directoryBytes(m_app.tileCache().cacheDir())
-                             + app::directoryBytes(m_app.satelliteTileCache().cacheDir());
-    const qint64 total = dbBytes + thumbBytes + photoBytes + tileBytes;
-
-    QLocale locale;
-    const QString dbSizeText =
-        isLocalSqlite ? locale.formattedDataSize(dbBytes) : tr("Shared (Postgres)");
-    const QString html =
-        tr("<table cellspacing='6'>"
-           "<tr><td>Catalogue database</td><td align='right'>%1</td></tr>"
-           "<tr><td>Photo thumbnails</td><td align='right'>%2</td></tr>"
-           "<tr><td>Reference photos (iNaturalist)</td><td align='right'>%3</td></tr>"
-           "<tr><td>Map tiles (street and satellite)</td><td align='right'>%4</td></tr>"
-           "<tr><td><b>Total</b></td><td align='right'><b>%5</b></td></tr>"
-           "</table>")
-            .arg(dbSizeText, locale.formattedDataSize(thumbBytes),
-                 locale.formattedDataSize(photoBytes), locale.formattedDataSize(tileBytes),
-                 locale.formattedDataSize(total));
-
-    QMessageBox::information(this, tr("Storage Usage"), html);
+    StorageDialog dialog(m_app, this);
+    dialog.exec();
 }
 
 void MainWindow::showCatalogueSettings()

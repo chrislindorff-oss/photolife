@@ -1,4 +1,6 @@
 #include "app/Application.h"
+#include "app/StorageStats.h"
+#include <QtConcurrent>
 
 #include "app/Logging.h"
 #include "collection/ExportService.h"
@@ -143,6 +145,18 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
     m_satelliteTileCache = std::make_unique<net::TileCache>(
         QDir(dataDir).filePath(QStringLiteral("tiles-satellite")), userAgent);
     m_satelliteTileCache->setUrlTemplate(QString::fromLatin1(kSatelliteTileUrl));
+    // Map tiles pile up for good otherwise: each set is brought back under
+    // its limit at start-up, oldest first, off the GUI thread.
+    if (const int limitMb = m_settings->tileCacheLimitMb(); limitMb > 0) {
+        const QStringList tileDirs{m_tileCache->cacheDir(), m_satelliteTileCache->cacheDir()};
+        (void)QtConcurrent::run([tileDirs, limitMb] {
+            for (const QString &dir : tileDirs) {
+                const app::Removed r = app::pruneToSize(dir, qint64(limitMb) * 1024 * 1024);
+                if (r.files > 0)
+                    qInfo().noquote() << "Map tiles: removed" << r.files << "old tiles from" << dir;
+            }
+        });
+    }
 
     m_inatPhotoDownloader = std::make_unique<inat::InatPhotoDownloader>(userAgent);
 
