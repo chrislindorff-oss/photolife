@@ -582,6 +582,14 @@ geo::GeotagWriter::Result OrganiseSession::clearLocation(int i, bool intoRaw)
     return result;
 }
 
+void OrganiseSession::useFoundGpx(const QString &path)
+{
+    if (m_gpxChosen || path.isEmpty())
+        return;
+    m_gpxPath = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    m_gpxOffsetSeconds = 0;
+}
+
 QStringList OrganiseSession::gpxFilesIn(const QString &folder)
 {
     QStringList out;

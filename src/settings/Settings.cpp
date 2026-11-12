@@ -780,6 +780,26 @@ QPointF Settings::geotagLastLocation() const
                    m_settings.value(QStringLiteral("geotag/lastLat")).toDouble());
 }
 
+QString Settings::cardImportFolder() const
+{
+    return m_settings.value(QStringLiteral("organise/cardImportFolder")).toString();
+}
+
+void Settings::setCardImportFolder(const QString &path)
+{
+    m_settings.setValue(QStringLiteral("organise/cardImportFolder"), path);
+}
+
+QString Settings::gpxTracksFolder() const
+{
+    return m_settings.value(QStringLiteral("organise/gpxTracksFolder")).toString();
+}
+
+void Settings::setGpxTracksFolder(const QString &path)
+{
+    m_settings.setValue(QStringLiteral("organise/gpxTracksFolder"), path);
+}
+
 int Settings::tileCacheLimitMb() const
 {
     return std::max(0, m_settings.value(QStringLiteral("storage/tileCacheLimitMb"), 500).toInt());

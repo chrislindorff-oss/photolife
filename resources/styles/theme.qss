@@ -240,7 +240,8 @@ QPushButton:default {
     background: @primaryAccent@;
     border-color: @primaryAccent@;
     color: #FFFFFF;
-    font-weight: 600;
+    /* Not bold: Qt sizes a button from its normal-weight text, so a bold
+       label is clipped ("Import 6 File(s"). The fill marks it well enough. */
 }
 
 QPushButton:default:hover {

@@ -150,6 +150,11 @@ public:
     QString gpxPath() const { return m_gpxPath; }   // absolute; empty when none
     int gpxOffsetSeconds() const { return m_gpxOffsetSeconds; }
     void setGpx(const QString &path, int offsetSeconds);   // an empty path removes it
+    // Whether the track is the user's choice (GPX Track…), not one found.
+    bool gpxChosen() const { return m_gpxChosen; }
+    // A track found for the folder elsewhere (the tracks folder): used, not
+    // kept -- it's looked for again next time. Ignored once one is chosen.
+    void useFoundGpx(const QString &path);
     // The .gpx files directly in `folder`, by name.
     static QStringList gpxFilesIn(const QString &folder);
 

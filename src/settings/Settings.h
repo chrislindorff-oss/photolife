@@ -243,6 +243,12 @@ public:
 
     // The download folder last opened in the Organise view.
     QString organiseFolder() const;
+    // Import from Card: where the day folders go; and a folder of GPS
+    // tracks Organise looks in for one that covers a folder's photos.
+    QString cardImportFolder() const;
+    void setCardImportFolder(const QString &path);
+    QString gpxTracksFolder() const;
+    void setGpxTracksFolder(const QString &path);
     void setOrganiseFolder(const QString &path);
     // Whether Organise shows each photo's place (looked up from its GPS).
     bool organiseShowPlaces() const;

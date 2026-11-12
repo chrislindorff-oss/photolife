@@ -10,6 +10,7 @@
 #include "thumb/ThumbnailCache.h"
 #include "ui/ImageViewer.h"
 #include "scan/FileScanner.h"
+#include "ui/CardImportDialog.h"
 #include "ui/GeotagDialog.h"
 #include "ui/IdentifyPanel.h"
 #include "ui/IdentifyRunsDialog.h"
@@ -19,6 +20,7 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QDirIterator>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFutureWatcher>
@@ -620,6 +622,11 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     m_folderLabel->setMinimumWidth(80);
     auto *open = new QPushButton(tr("Open Download Folder…"), this);
     connect(open, &QPushButton::clicked, this, &OrganiseView::chooseFolder);
+    auto *fromCard = new QPushButton(tr("Import from Card…"), this);
+    fromCard->setToolTip(tr("Copy the photos from a camera card into a folder for each day they were taken, "
+                            "each copy checked against the original, then sort them here. The card is "
+                            "never changed, and photos imported before are skipped."));
+    connect(fromCard, &QPushButton::clicked, this, &OrganiseView::importFromCard);
 
     m_filmstripButton = new QToolButton(this);
     m_filmstripButton->setText(tr("Filmstrip"));
@@ -664,6 +671,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     connect(m_identifyRunsButton, &QPushButton::clicked, this, &OrganiseView::identifyRuns);
 
     auto *bar = new QHBoxLayout;
+    bar->addWidget(fromCard);
     bar->addWidget(open);
     bar->addWidget(m_folderLabel, 1);
     bar->addWidget(m_counts);
@@ -749,6 +757,19 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     layout->addLayout(bar);
     layout->addWidget(m_scanProgress);
     layout->addWidget(m_hint);
+    m_arrivalBanner = new QLabel(this);
+    m_arrivalBanner->setObjectName(QStringLiteral("treeFilterBanner"));   // the same highlighted line
+    m_arrivalBanner->setTextFormat(Qt::RichText);
+    m_arrivalBanner->setWordWrap(true);
+    m_arrivalBanner->hide();
+    connect(m_arrivalBanner, &QLabel::linkActivated, this, [this](const QString &link) {
+        if (link == QLatin1String("geotag"))
+            geotagRows(rowsOnTrackWithoutLocation(), tr("Geotag from the GPS Track"));
+        else
+            m_arrivalDismissed.insert(m_session.folder());
+        updateArrivalBanner();
+    });
+    layout->addWidget(m_arrivalBanner);
     layout->addWidget(m_list);
     layout->addWidget(m_position);
     layout->addWidget(m_preview, 1);
@@ -905,6 +926,7 @@ void OrganiseView::loadMore(bool all)
         }
         m_loadingMore = false;
         updateCounts();
+        updateArrivalBanner();
         if (m_commitWhenLoaded) {
             if (m_session.pendingCount() > 0) {
                 loadMore(true);
@@ -1376,9 +1398,12 @@ void OrganiseView::loadGpxTrack()
 {
     m_track = {};
     updateGpxButton();
+    updateArrivalBanner();
     const QString path = m_session.gpxPath();
-    if (path.isEmpty())
+    if (path.isEmpty()) {
+        findTrackInTracksFolder();
         return;
+    }
     // Read off the GUI thread: a long trip's track can be many megabytes.
     // A folder opened meanwhile drops this answer.
     const int generation = m_loadGeneration;
@@ -1389,6 +1414,7 @@ void OrganiseView::loadGpxTrack()
             return;
         m_track = watcher->result();
         updateGpxButton();
+        updateArrivalBanner();
     });
     watcher->setFuture(QtConcurrent::run([path] { return geo::GpxTrack::load(path); }));
 }
@@ -1552,6 +1578,22 @@ void OrganiseView::chooseGpxTrack()
     form->addRow(tr("Camera clock:"), clock);
     form->addRow(QString(), clockNote);
     form->addRow(QString(), covered);
+    auto *tracksFolder = new QLineEdit(QDir::toNativeSeparators(m_app.settings().gpxTracksFolder()), &dialog);
+    tracksFolder->setPlaceholderText(tr("optional: where your phone's tracks are saved"));
+    tracksFolder->setToolTip(tr("When a folder of photos has no .gpx file of its own, PhotoLife looks here for a "
+                                "track recorded while they were taken, and offers to geotag them from it."));
+    auto *chooseTracks = new QPushButton(tr("Choose…"), &dialog);
+    chooseTracks->setAutoDefault(false);
+    connect(chooseTracks, &QPushButton::clicked, &dialog, [&dialog, tracksFolder] {
+        const QString dir = QFileDialog::getExistingDirectory(&dialog, tr("Folder of GPS Tracks"),
+                                                              QDir::fromNativeSeparators(tracksFolder->text()));
+        if (!dir.isEmpty())
+            tracksFolder->setText(QDir::toNativeSeparators(dir));
+    });
+    auto *tracksRow = new QHBoxLayout;
+    tracksRow->addWidget(tracksFolder, 1);
+    tracksRow->addWidget(chooseTracks);
+    form->addRow(tr("Tracks folder:"), tracksRow);
     auto *layout = new QVBoxLayout(&dialog);
     layout->addWidget(intro);
     layout->addLayout(form);
@@ -1566,8 +1608,10 @@ void OrganiseView::chooseGpxTrack()
     if (dialog.exec() != QDialog::Accepted)
         return;
     m_session.setGpx(path, track.hasTimes() ? offset() : 0);
+    m_app.settings().setGpxTracksFolder(QDir::fromNativeSeparators(tracksFolder->text().trimmed()));
     m_track = track;
     updateGpxButton();
+    updateArrivalBanner();
     if (path.isEmpty())
         emit statusMessage(tr("No GPX track for this folder."), 5000);
     else
@@ -1580,11 +1624,16 @@ void OrganiseView::geotagFromGpx()
     QList<int> rows;
     for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes())
         rows << i.row();
+    geotagRows(rows, tr("Create Geotag from GPX"));
+}
+
+void OrganiseView::geotagRows(QList<int> rows, const QString &title)
+{
     std::sort(rows.begin(), rows.end());
     if (rows.isEmpty())
         return;
     if (!m_track.hasTimes()) {
-        QMessageBox::information(this, tr("Create Geotag from GPX"),
+        QMessageBox::information(this, title,
                                  m_session.gpxPath().isEmpty()
                                      ? tr("Choose this folder's GPS track first, with GPX Track… above the photos.")
                                      : tr("%1 couldn't be read, or has no times in it. Choose another with GPX Track… above the photos.")
@@ -1617,7 +1666,7 @@ void OrganiseView::geotagFromGpx()
         const organise::Item &a = m_session.items().at(rows.first());
         const organise::Item &b = m_session.items().at(rows.last());
         QMessageBox::warning(
-            this, tr("Create Geotag from GPX"),
+            this, title,
             tr("No location was set: the track has no point within 5 minutes of %n selected photo(s).\n\n"
                "Photos: %1 to %2\nTrack: %3 to %4\n\n"
                "If these are the same outing, the camera's clock or time zone was different: set the "
@@ -1629,7 +1678,7 @@ void OrganiseView::geotagFromGpx()
     }
     bool replace = true;
     if (located > 0) {
-        QMessageBox box(QMessageBox::Question, tr("Create Geotag from GPX"),
+        QMessageBox box(QMessageBox::Question, title,
                         tr("%n of the selected photos already have a location.", nullptr, located),
                         QMessageBox::NoButton, this);
         box.setInformativeText(tr("Replace it with the position from the track, or keep theirs and set only the others?"));
@@ -1659,7 +1708,7 @@ void OrganiseView::geotagFromGpx()
     }
     QApplication::restoreOverrideCursor();
     if (!failures.isEmpty())
-        QMessageBox::warning(this, tr("Create Geotag from GPX"),
+        QMessageBox::warning(this, title,
                              tr("The location couldn't be written into %n file(s):\n\n%1", nullptr,
                                 int(failures.size()))
                                  .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
@@ -1714,6 +1763,116 @@ void OrganiseView::removeLocation()
     emit statusMessage(tr("Removed the location from %n photo(s).", nullptr, removed), 6000);
     updatePreview();
     m_placeScan->start();
+}
+
+QList<int> OrganiseView::rowsOnTrackWithoutLocation() const
+{
+    QList<int> rows;
+    if (!m_track.hasTimes())
+        return rows;
+    const int offset = m_session.gpxOffsetSeconds();
+    for (int i = 0; i < m_session.count(); ++i) {
+        const organise::Item &it = m_session.items().at(i);
+        if (!it.hasGps() && it.taken.isValid() && m_track.positionAt(it.taken.addSecs(offset).toUTC()))
+            rows << i;
+    }
+    return rows;
+}
+
+void OrganiseView::updateArrivalBanner()
+{
+    const QList<int> rows = rowsOnTrackWithoutLocation();
+    if (rows.isEmpty() || m_arrivalDismissed.contains(m_session.folder())) {
+        m_arrivalBanner->hide();
+        return;
+    }
+    const QString track = QFileInfo(m_session.gpxPath()).fileName().toHtmlEscaped();
+    m_arrivalBanner->setText(
+        tr("<b>%n photo(s)</b> without a location were taken while your GPS track (%1) was recording. "
+           "<a href=\"geotag\">Geotag them from it</a> · <a href=\"later\">Not now</a>",
+           nullptr, int(rows.size()))
+            .arg(m_session.gpxChosen() || QFileInfo(m_session.gpxPath()).absolutePath() == m_session.folder()
+                     ? track
+                     : tr("%1, from your tracks folder").arg(track)));
+    m_arrivalBanner->setToolTip(tr("Each gets the position the track recorded at the time it was taken, written as "
+                                   "Create Geotag from GPX writes it. Photos more than 5 minutes from any track "
+                                   "point aren't counted."));
+    m_arrivalBanner->show();
+}
+
+void OrganiseView::findTrackInTracksFolder()
+{
+    const QString tracksFolder = m_app.settings().gpxTracksFolder();
+    if (tracksFolder.isEmpty() || m_session.gpxChosen() || m_session.count() == 0)
+        return;
+    // The photos' times, then every track there read on a worker; the one
+    // that covers the most of them wins.
+    QList<QDateTime> times;
+    const int offset = m_session.gpxOffsetSeconds();
+    for (const organise::Item &it : m_session.items()) {
+        if (it.taken.isValid())
+            times << it.taken.addSecs(offset).toUTC();
+    }
+    if (times.isEmpty())
+        return;
+    const int generation = m_loadGeneration;
+    struct Best
+    {
+        QString path;
+        geo::GpxTrack track;
+    };
+    auto *watcher = new QFutureWatcher<Best>(this);
+    connect(watcher, &QFutureWatcher<Best>::finished, this, [this, watcher, generation] {
+        watcher->deleteLater();
+        if (generation != m_loadGeneration || m_session.gpxChosen() || !m_session.gpxPath().isEmpty())
+            return;
+        Best best = watcher->result();
+        if (best.path.isEmpty())
+            return;
+        m_session.useFoundGpx(best.path);
+        m_track = best.track;
+        updateGpxButton();
+        updateArrivalBanner();
+    });
+    watcher->setFuture(QtConcurrent::run([tracksFolder, times] {
+        Best best;
+        int bestCount = 0;
+        const QDateTime first = *std::min_element(times.cbegin(), times.cend());
+        const QDateTime last = *std::max_element(times.cbegin(), times.cend());
+        QDirIterator it(tracksFolder, {QStringLiteral("*.gpx"), QStringLiteral("*.GPX")}, QDir::Files,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            geo::GpxTrack track = geo::GpxTrack::load(path);
+            if (!track.hasTimes() || track.end().addSecs(geo::GpxTrack::kMaxGapSeconds) < first
+                || track.start().addSecs(-geo::GpxTrack::kMaxGapSeconds) > last)
+                continue;
+            int count = 0;
+            for (const QDateTime &t : times)
+                count += track.positionAt(t) ? 1 : 0;
+            if (count > bestCount) {
+                bestCount = count;
+                best = Best{path, std::move(track)};
+            }
+        }
+        return best;
+    }));
+}
+
+void OrganiseView::importFromCard()
+{
+    CardImportDialog dialog(m_app, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const QStringList folders = dialog.importedFolders();
+    if (folders.isEmpty())
+        return;
+    openFolder(folders.first());
+    if (folders.size() > 1)
+        emit statusMessage(tr("Imported into %n folder(s), one per day; opened the first. The others are beside it "
+                              "in %1.", nullptr, int(folders.size()))
+                               .arg(QDir::toNativeSeparators(QFileInfo(folders.first()).absolutePath())),
+                           12000);
 }
 
 void OrganiseView::showFullSize(int row)
