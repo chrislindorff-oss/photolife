@@ -76,6 +76,8 @@ signals:
     void photoSent(int key, int captureId, qint64 photoId, int sent, int total);
     // `error` is empty when every photo got there.
     void jobFinished(int key, const QString &error, int status);
+    // The observation and its photos are there, but not all its annotations.
+    void annotationsFailed(int key, const QString &error);
     // All done, or stopped -- `tokenExpired` when a 401 stopped it.
     void finished(bool tokenExpired);
 
@@ -85,6 +87,8 @@ private:
     void lookUp(const QString &failedError, int failedStatus);
     void made(qint64 observationId);
     void sendNextPhoto();
+    // Once the photos are there: the observation's annotations, one at a time.
+    void sendAnnotations(QList<QPair<int, int>> remaining, QStringList failures);
     void fail(const QString &error, int status);
     bool stamp(const QList<int> &captureIds, qint64 observationId, qint64 photoId = 0);
 

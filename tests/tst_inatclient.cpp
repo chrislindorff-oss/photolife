@@ -5,6 +5,7 @@
 
 #include "FakeTransport.h"
 #include "net/HttpClient.h"
+#include "inat/IdentificationCheck.h"
 #include "net/INatClient.h"
 
 using namespace pl;
@@ -39,6 +40,8 @@ private slots:
     void createObservationSaysWhatIsWrong();
     void findObservationByUuidTellsWhetherItExists();
     void addObservationPhotoPostsTheFile();
+    void fetchObservationsReadsTheCommunitysView();
+    void identificationsAreComparedThroughTheTree();
 
 private:
     FakeTransport *m_transport = nullptr;
@@ -518,6 +521,62 @@ void TestINatClient::createObservationSaysWhatIsWrong()
     QTRY_VERIFY(done);
     QCOMPARE(got.status, 502);
     QCOMPARE(m_transport->received.size(), 1);
+}
+
+void TestINatClient::fetchObservationsReadsTheCommunitysView()
+{
+    QString query;
+    wire([&](const Transport::Request &req, int) {
+        query = req.url.query(QUrl::FullyDecoded);
+        return FakeTransport::ok(R"({"total_results": 2, "results": [
+            {"id": 11, "quality_grade": "research", "community_taxon_id": 58669,
+             "identifications_count": 4, "num_identification_agreements": 3, "num_identification_disagreements": 1,
+             "taxon": {"id": 58669, "name": "Leotia lubrica", "rank": "species", "preferred_common_name": "Ochre Jelly Club",
+                       "ancestor_ids": [48460, 47170, 58673, 58669]}},
+            {"id": 12, "quality_grade": "needs_id", "identifications_count": 1}]})");
+    });
+    Outcome<QList<taxonomy::Observation>> got;
+    bool done = false;
+    m_inat->fetchObservations({11, 12}, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY2(got.ok(), qPrintable(got.error));
+    QVERIFY(query.contains(QStringLiteral("id=11,12")));
+    QCOMPARE(got.value.size(), 2);
+    const taxonomy::Observation &a = got.value.at(0);
+    QCOMPARE(a.qualityGrade, QStringLiteral("research"));
+    QCOMPARE(a.communityTaxonId, qint64(58669));
+    QCOMPARE(a.identificationsCount, 4);
+    QCOMPARE(a.agreements, 3);
+    QCOMPARE(a.disagreements, 1);
+    QCOMPARE(a.taxonAncestorIds, (QList<qint64>{48460, 47170, 58673}));
+    QCOMPARE(got.value.at(1).taxonInatId, qint64(0));
+    QCOMPARE(got.value.at(1).communityTaxonId, qint64(0));
+}
+
+void TestINatClient::identificationsAreComparedThroughTheTree()
+{
+    using inat::IdVerdict;
+    inat::LinkedObservation mine;
+    mine.mineInatId = 58672;                        // Leotia (genus)
+    mine.mineAncestry = {48460, 47170, 58673};
+    taxonomy::Observation theirs;
+    theirs.taxonInatId = 58672;
+    QCOMPARE(inat::compareIds(mine, theirs), IdVerdict::Same);
+    theirs.taxonInatId = 58669;                     // Leotia lubrica, within it
+    theirs.taxonAncestorIds = {48460, 47170, 58673, 58672};
+    QCOMPARE(inat::compareIds(mine, theirs), IdVerdict::Finer);
+    theirs.taxonInatId = 58673;                     // the family above it
+    theirs.taxonAncestorIds = {48460, 47170};
+    QCOMPARE(inat::compareIds(mine, theirs), IdVerdict::Coarser);
+    theirs.taxonInatId = 12716;                     // a bird
+    theirs.taxonAncestorIds = {48460, 1, 3};
+    QCOMPARE(inat::compareIds(mine, theirs), IdVerdict::Different);
+    theirs.taxonInatId = 0;
+    QCOMPARE(inat::compareIds(mine, theirs), IdVerdict::NoName);
+    mine.mineInatId = 0;
+    theirs.taxonInatId = 12716;
+    QCOMPARE(inat::compareIds(mine, theirs), IdVerdict::YouHadNone);
+    QVERIFY(!inat::verdictText(IdVerdict::Finer).isEmpty());
 }
 
 void TestINatClient::findObservationByUuidTellsWhetherItExists()

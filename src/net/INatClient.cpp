@@ -188,6 +188,50 @@ void INatClient::createObservation(const NewObservation &observation, std::funct
                 m_accessToken, m_priority, HttpClient::Retry::OnlyIfRefused);
 }
 
+void INatClient::addAnnotation(qint64 observationId, int attributeId, int valueId,
+                               std::function<void(Outcome<bool>)> done)
+{
+    const QJsonObject a{{QStringLiteral("resource_type"), QStringLiteral("Observation")},
+                        {QStringLiteral("resource_id"), observationId},
+                        {QStringLiteral("controlled_attribute_id"), attributeId},
+                        {QStringLiteral("controlled_value_id"), valueId}};
+    const QByteArray body = QJsonDocument(QJsonObject{{QStringLiteral("annotation"), a}}).toJson(QJsonDocument::Compact);
+    m_http.post(QUrl(m_baseUrl + QStringLiteral("/annotations")), body, "application/json",
+                [done = std::move(done)](HttpResponse resp) {
+                    Outcome<bool> out;
+                    out.status = resp.status;
+                    postedObject(resp, &out.error);
+                    out.value = out.ok();
+                    done(out);
+                },
+                m_accessToken, m_priority, HttpClient::Retry::OnlyIfRefused);
+}
+
+void INatClient::fetchObservations(const QList<qint64> &ids,
+                                   std::function<void(Outcome<QList<pl::taxonomy::Observation>>)> done)
+{
+    QStringList list;
+    for (qint64 id : ids.mid(0, kMaxObservationsPerCall))
+        list << QString::number(id);
+    QUrl url(m_baseUrl + QStringLiteral("/observations"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("id"), list.join(QLatin1Char(',')));
+    q.addQueryItem(QStringLiteral("per_page"), QString::number(kMaxObservationsPerCall));
+    url.setQuery(q);
+    request(url,
+            [done = std::move(done)](HttpResponse resp) {
+                Outcome<QList<pl::taxonomy::Observation>> out;
+                out.status = resp.status;
+                const QJsonArray results = resultsArray(resp, &out.error);
+                if (out.ok()) {
+                    for (const QJsonValue &v : results)
+                        out.value.append(inat::parseObservation(v.toObject()));
+                }
+                done(out);
+            },
+            m_accessToken);
+}
+
 void INatClient::findObservationByUuid(const QString &uuid,
                                        std::function<void(Outcome<std::optional<qint64>>)> done)
 {

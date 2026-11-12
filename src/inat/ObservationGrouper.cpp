@@ -89,12 +89,28 @@ int sentCount(const ProposedObservation &g)
     return n;
 }
 
+// A photo's notes for its observation: annotations, and the free text as the
+// note, unless the observation has its own already.
+void absorbNotes(ProposedObservation &g, const UploadPhoto &photo)
+{
+    if (g.annotations.isEmpty()) {
+        for (const char *key : {"sex", "lifeStage", "alive", "flowers"}) {
+            const QString value = photo.notes.value(QLatin1String(key));
+            if (!value.isEmpty())
+                g.annotations.insert(QLatin1String(key), value);
+        }
+    }
+    if (g.note.isEmpty())
+        g.note = photo.notes.value(QStringLiteral("notes"));
+}
+
 ProposedObservation startWith(const UploadPhoto &photo)
 {
     ProposedObservation g;
     g.photos << photo;
     g.taxon = photo.taxon;
     g.observationId = photo.observationId;
+    absorbNotes(g, photo);
     return g;
 }
 
@@ -123,6 +139,7 @@ QList<ProposedObservation> group(QList<UploadPhoto> photos, int gapSeconds, doub
             const auto it = byObservation.constFind(p.observationId);
             if (it != byObservation.constEnd()) {
                 groups[*it].photos << p;
+                absorbNotes(groups[*it], p);
             } else {
                 byObservation.insert(p.observationId, int(groups.size()));
                 groups << startWith(p);
@@ -136,6 +153,7 @@ QList<ProposedObservation> group(QList<UploadPhoto> photos, int gapSeconds, doub
                 const int gap = p.taxon.inatId > 0 ? gapSeconds : kNoSpeciesGapSeconds;
                 if (g.photos.constLast().taken.secsTo(p.taken) <= gap && closeEnough(g, p, maxKm)) {
                     g.photos << p;
+                    absorbNotes(g, p);
                     continue;
                 }
             }
@@ -192,6 +210,8 @@ ProposedObservation merge(const QList<ProposedObservation> &groups, const taxono
             merged.when = g.when;
         if (!g.note.isEmpty() && !notes.contains(g.note))
             notes << g.note;
+        if (merged.annotations.isEmpty())
+            merged.annotations = g.annotations;
         if (g.taxon.inatId == taxon.inatId && g.taxonFromVision)
             merged.taxonFromVision = true;
     }
@@ -252,5 +272,44 @@ bool movePhoto(QList<ProposedObservation> &groups, int fromGroup, int from, int 
 }
 
 } // namespace ObservationGrouper
+
+QList<QPair<int, int>> annotationIds(const QHash<QString, QString> &annotations)
+{
+    // iNaturalist's controlled terms (GET /v1/controlled_terms).
+    static const QHash<QString, QPair<int, QHash<QString, int>>> terms = {
+        {QStringLiteral("lifeStage"),
+         {1, {{QStringLiteral("Adult"), 2}, {QStringLiteral("Teneral"), 3}, {QStringLiteral("Pupa"), 4},
+              {QStringLiteral("Nymph"), 5}, {QStringLiteral("Larva"), 6}, {QStringLiteral("Egg"), 7},
+              {QStringLiteral("Juvenile"), 8}, {QStringLiteral("Subimago"), 16}}}},
+        {QStringLiteral("sex"),
+         {9, {{QStringLiteral("Female"), 10}, {QStringLiteral("Male"), 11}, {QStringLiteral("Cannot Be Determined"), 20}}}},
+        {QStringLiteral("flowers"),
+         {12, {{QStringLiteral("Flowers"), 13}, {QStringLiteral("Fruits or Seeds"), 14}, {QStringLiteral("Flower Buds"), 15},
+               {QStringLiteral("No Flowers or Fruits"), 21}}}},
+        {QStringLiteral("alive"),
+         {17, {{QStringLiteral("Alive"), 18}, {QStringLiteral("Dead"), 19}, {QStringLiteral("Cannot Be Determined"), 20}}}},
+    };
+    QList<QPair<int, int>> out;
+    for (const char *key : {"lifeStage", "sex", "alive", "flowers"}) {
+        const auto term = terms.constFind(QLatin1String(key));
+        const QString value = annotations.value(QLatin1String(key));
+        if (term == terms.cend() || value.isEmpty())
+            continue;
+        if (const auto v = term->second.constFind(value); v != term->second.cend())
+            out.append({term->first, *v});
+    }
+    return out;
+}
+
+QString annotationsText(const QHash<QString, QString> &annotations)
+{
+    QStringList parts;
+    for (const char *key : {"sex", "lifeStage", "alive", "flowers"}) {
+        const QString value = annotations.value(QLatin1String(key));
+        if (!value.isEmpty())
+            parts << value;
+    }
+    return parts.join(QStringLiteral(" · "));
+}
 
 } // namespace pl::inat

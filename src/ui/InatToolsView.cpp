@@ -6,6 +6,7 @@
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
 #include "ui/InatTokenGetter.h"
+#include "ui/InatCheckIdsPage.h"
 #include "ui/InatUploadPage.h"
 #include "ui/Theme.h"
 
@@ -104,6 +105,8 @@ InatToolsView::InatToolsView(Application &app, QWidget *parent)
     m_tabs->addTab(m_downloadPage, tr("Download My Observations"));
     m_tabs->addTab(m_comparePage, tr("Compare Species"));
     m_tabs->addTab(m_uploadPage, tr("Upload Observations"));
+    m_checkIdsPage = new InatCheckIdsPage(app, *m_account, this);
+    m_tabs->addTab(m_checkIdsPage, tr("Check Identifications"));
 
     // In a scroll area, so the view never asks for more width than the main
     // window has beside its docked panels: Qt 6.4 crashes laying out the

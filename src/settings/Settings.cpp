@@ -780,6 +780,16 @@ QPointF Settings::geotagLastLocation() const
                    m_settings.value(QStringLiteral("geotag/lastLat")).toDouble());
 }
 
+QStringList Settings::inatKeptIdentifications() const
+{
+    return m_settings.value(QStringLiteral("inat/keptIdentifications")).toStringList();
+}
+
+void Settings::setInatKeptIdentifications(const QStringList &kept)
+{
+    m_settings.setValue(QStringLiteral("inat/keptIdentifications"), kept);
+}
+
 QString Settings::cardImportFolder() const
 {
     return m_settings.value(QStringLiteral("organise/cardImportFolder")).toString();

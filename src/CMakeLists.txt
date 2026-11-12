@@ -32,6 +32,7 @@ qt_add_library(photolife_core STATIC
     geo/GpxTrack.h          geo/GpxTrack.cpp
     geo/PinClusterer.h      geo/PinClusterer.cpp
     geo/WebMercator.h       geo/WebMercator.cpp
+    inat/IdentificationCheck.h inat/IdentificationCheck.cpp
     inat/ExifWriter.h        inat/ExifWriter.cpp
     inat/InatDownloadModel.h inat/InatDownloadModel.cpp
     inat/InatImportService.h inat/InatImportService.cpp
@@ -126,6 +127,7 @@ qt_add_library(photolife_core STATIC
     ui/AliasEditorDialog.h  ui/AliasEditorDialog.cpp
     ui/CatalogueConnectDialog.h ui/CatalogueConnectDialog.cpp
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
+    ui/AnnotationsDialog.h  ui/AnnotationsDialog.cpp
     ui/CardImportDialog.h   ui/CardImportDialog.cpp
     ui/CompareViewer.h      ui/CompareViewer.cpp
     ui/DuplicatesDialog.h   ui/DuplicatesDialog.cpp
@@ -142,6 +144,7 @@ qt_add_library(photolife_core STATIC
     ui/PhotoOfTheDayDialog.h ui/PhotoOfTheDayDialog.cpp
     ui/UploadDuplicateDialog.h ui/UploadDuplicateDialog.cpp
     ui/UploadPhotoPicker.h ui/UploadPhotoPicker.cpp
+    ui/InatCheckIdsPage.h   ui/InatCheckIdsPage.cpp
     ui/InatComparePage.h    ui/InatComparePage.cpp
     ui/InatDownloadPage.h   ui/InatDownloadPage.cpp
     ui/InatScopeWidgets.h   ui/InatScopeWidgets.cpp

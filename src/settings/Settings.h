@@ -278,6 +278,10 @@ public:
     // Identify with iNaturalist: list only suggestions in a reference tree;
     // and, where a suggestion names photos (Organise), with its common name
     // (else its scientific name).
+    // Check Identifications: "observation:taxon" pairs whose iNaturalist name
+    // the user chose not to take (shown again if that name changes).
+    QStringList inatKeptIdentifications() const;
+    void setInatKeptIdentifications(const QStringList &kept);
     bool inatIdentifyTreesOnly() const;
     void setInatIdentifyTreesOnly(bool on);
     bool inatIdentifyCommonName() const;

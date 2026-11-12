@@ -34,6 +34,8 @@ private slots:
     void addingToAnObservationOnlySendsPhotos();
     void photosGoInTheOrderGiven();
     void resetForgetsWhatIsntThereAnyMore();
+    void annotationsGoOnceThePhotosAreThere();
+    void aFailedAnnotationDoesntFailTheObservation();
 
 private:
     std::unique_ptr<QTemporaryDir> m_dir;
@@ -159,6 +161,70 @@ void TestObservationUploader::sendsTheObservationAndEveryPhoto()
     const QByteArray body = m_transport->received.at(1).body;
     QVERIFY(body.contains("filename=\"IMG_1.jpg\""));
     QVERIFY(body.contains("\xFF\xD8"));
+}
+
+void TestObservationUploader::annotationsGoOnceThePhotosAreThere()
+{
+    int photoId = 4400;
+    wire([&photoId](const Transport::Request &req, int) {
+        if (req.url.path().endsWith(QStringLiteral("/observations")))
+            return FakeTransport::ok(R"({"id": 901})");
+        if (req.url.path().endsWith(QStringLiteral("/annotations")))
+            return FakeTransport::ok(R"({"uuid": "a"})");
+        return FakeTransport::ok(QStringLiteral(R"({"photo": {"id": %1}})").arg(++photoId).toUtf8());
+    });
+    ObservationUploader::Job j = job(2);
+    j.observation.annotations = {{QStringLiteral("sex"), QStringLiteral("Male")},
+                                 {QStringLiteral("lifeStage"), QStringLiteral("Adult")},
+                                 {QStringLiteral("flowers"), QStringLiteral("not a term")}};   // left out
+    QSignalSpy finished(m_uploader.get(), &ObservationUploader::jobFinished);
+    QSignalSpy failed(m_uploader.get(), &ObservationUploader::annotationsFailed);
+    QSignalSpy all(m_uploader.get(), &ObservationUploader::finished);
+    m_uploader->start({j});
+    QTRY_COMPARE(all.size(), 1);
+    QCOMPARE(finished.at(0).at(1).toString(), QString());
+    QCOMPARE(failed.size(), 0);
+    QCOMPARE(posts(QStringLiteral("/annotations")), 2);
+    // After the photos, life stage first, with iNaturalist's ids.
+    const QList<Transport::Request> &r = m_transport->received;
+    QVERIFY(r.at(1).url.path().endsWith(QStringLiteral("/observation_photos")));
+    QVERIFY(r.at(2).url.path().endsWith(QStringLiteral("/observation_photos")));
+    const QJsonObject a = QJsonDocument::fromJson(r.at(3).body).object().value(QStringLiteral("annotation")).toObject();
+    QCOMPARE(a.value(QStringLiteral("resource_type")).toString(), QStringLiteral("Observation"));
+    QCOMPARE(a.value(QStringLiteral("resource_id")).toInteger(), 901);
+    QCOMPARE(a.value(QStringLiteral("controlled_attribute_id")).toInt(), 1);   // Life Stage
+    QCOMPARE(a.value(QStringLiteral("controlled_value_id")).toInt(), 2);       // Adult
+    const QJsonObject b = QJsonDocument::fromJson(r.at(4).body).object().value(QStringLiteral("annotation")).toObject();
+    QCOMPARE(b.value(QStringLiteral("controlled_attribute_id")).toInt(), 9);   // Sex
+    QCOMPARE(b.value(QStringLiteral("controlled_value_id")).toInt(), 11);      // Male
+}
+
+void TestObservationUploader::aFailedAnnotationDoesntFailTheObservation()
+{
+    int photoId = 4400;
+    wire([&photoId](const Transport::Request &req, int) {
+        if (req.url.path().endsWith(QStringLiteral("/observations")))
+            return FakeTransport::ok(R"({"id": 901})");
+        if (req.url.path().endsWith(QStringLiteral("/annotations"))) {
+            const QJsonObject a = QJsonDocument::fromJson(req.body).object().value(QStringLiteral("annotation")).toObject();
+            // Sex is refused; alive is already there (a retry): that's fine.
+            if (a.value(QStringLiteral("controlled_attribute_id")).toInt() == 9)
+                return FakeTransport::httpStatus(400, R"({"error": "not allowed for this taxon"})");
+            return FakeTransport::httpStatus(422, R"({"error": "already annotated"})");
+        }
+        return FakeTransport::ok(QStringLiteral(R"({"photo": {"id": %1}})").arg(++photoId).toUtf8());
+    });
+    ObservationUploader::Job j = job(1);
+    j.observation.annotations = {{QStringLiteral("sex"), QStringLiteral("Female")}, {QStringLiteral("alive"), QStringLiteral("Dead")}};
+    QSignalSpy finished(m_uploader.get(), &ObservationUploader::jobFinished);
+    QSignalSpy failed(m_uploader.get(), &ObservationUploader::annotationsFailed);
+    QSignalSpy all(m_uploader.get(), &ObservationUploader::finished);
+    m_uploader->start({j});
+    QTRY_COMPARE(all.size(), 1);
+    QCOMPARE(finished.at(0).at(1).toString(), QString());   // the observation and photo are there
+    QCOMPARE(failed.size(), 1);
+    QVERIFY(failed.at(0).at(1).toString().contains(QStringLiteral("not allowed")));
+    QCOMPARE(stamped().first(), (std::pair<qint64, qint64>{901, 4401}));
 }
 
 void TestObservationUploader::aFailedPhotoIsTheOnlyOneSentAgain()

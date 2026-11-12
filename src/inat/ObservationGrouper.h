@@ -3,6 +3,8 @@
 #include "taxonomy/TaxonomyTypes.h"
 
 #include <QDateTime>
+#include <QHash>
+#include <QPair>
 #include <QList>
 #include <QPointF>
 #include <QString>
@@ -31,6 +33,9 @@ struct UploadPhoto
     // (`copyOf` names that one; nothing is stored).
     bool linked = false;
     QString copyOf;
+    // Notes on the subject written into the photo when it was organised
+    // (scan::readXmpNotes): "sex", "lifeStage", "alive", "flowers", "notes".
+    QHash<QString, QString> notes;
 
     bool done() const { return photoId > 0 || linked; }   // nothing to send
 };
@@ -47,6 +52,9 @@ struct ProposedObservation
     bool taxonFromVision = false;   // picked from iNaturalist's suggestions
     std::optional<QDateTime> when;  // set by hand, when no photo has a date
     QString note;                   // sent as its description
+    // Annotations, by name -- "sex", "lifeStage", "alive", "flowers" -- in
+    // iNaturalist's terms ("Male", "Adult"...); sent once it's made.
+    QHash<QString, QString> annotations;
     qint64 observationId = 0;       // made on iNaturalist already (some or all photos sent)
     QString uuid;                   // the one it's made with, kept so a retry can look it up
     bool uuidSent = false;          // a create was tried with `uuid`, so look before making another
@@ -62,6 +70,13 @@ struct ProposedObservation
     int remaining() const;  // photos still to send
     bool uploaded() const { return observationId > 0 && remaining() == 0; }
 };
+
+// iNaturalist's ids for annotations given by name (see
+// ProposedObservation::annotations): (controlled attribute, value) pairs,
+// those it doesn't know left out.
+QList<QPair<int, int>> annotationIds(const QHash<QString, QString> &annotations);
+// "Male · Adult · Alive": for showing.
+QString annotationsText(const QHash<QString, QString> &annotations);
 
 // Proposes observations from photos, and lets the user change them. No
 // network or catalogue: everything it needs is in the photos.

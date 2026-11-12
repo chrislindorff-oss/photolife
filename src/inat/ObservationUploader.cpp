@@ -1,7 +1,10 @@
 #include "inat/ObservationUploader.h"
 
+#include "scan/Exif.h"
+
 #include "inat/PhotoIdentifier.h"
 
+#include <QDir>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QHash>
@@ -74,6 +77,16 @@ QList<UploadPhoto> ObservationUploader::loadPhotos(const QString &connectionName
             p.path = q.value(6).toString();
             p.contentHash = q.value(7).toString();
             p.label = QFileInfo(p.path).fileName();
+            // Notes Organise wrote: in a JPEG's own XMP, or a RAW's sidecar.
+            p.notes = scan::readXmpNotes(p.path);
+            if (p.notes.isEmpty()) {
+                const QFileInfo info(p.path);
+                for (const QString &sidecar : {info.absoluteDir().filePath(info.completeBaseName() + QStringLiteral(".xmp")),
+                                               p.path + QStringLiteral(".xmp")}) {
+                    if (p.notes.isEmpty() && QFileInfo::exists(sidecar))
+                        p.notes = scan::readXmpNotes(sidecar);
+                }
+            }
             p.taxon.inatId = q.value(8).toLongLong();
             p.taxon.name = q.value(9).toString();
             p.taxon.commonName = q.value(10).toString();
@@ -306,8 +319,7 @@ void ObservationUploader::sendNextPhoto()
             break;
         }
     if (index < 0) {
-        emit jobFinished(m_job.key, {}, 200);
-        next();
+        sendAnnotations(annotationIds(obs.annotations), {});
         return;
     }
     if (m_stop) {
@@ -352,6 +364,34 @@ void ObservationUploader::sendNextPhoto()
     watcher->setFuture(QtConcurrent::run([request] {
         return PhotoIdentifier::renderJpeg(request, kLongestEdge, 90);
     }));
+}
+
+void ObservationUploader::sendAnnotations(QList<QPair<int, int>> remaining, QStringList failures)
+{
+    if (remaining.isEmpty()) {
+        // Only once: a retry after this doesn't send them again.
+        m_job.observation.annotations.clear();
+        emit jobFinished(m_job.key, {}, 200);
+        if (!failures.isEmpty())
+            emit annotationsFailed(m_job.key, failures.join(QStringLiteral("; ")));
+        next();
+        return;
+    }
+    const QPair<int, int> annotation = remaining.takeFirst();
+    QPointer<ObservationUploader> self(this);
+    m_inat.addAnnotation(m_job.observation.observationId, annotation.first, annotation.second,
+                         [self, remaining, failures](net::Outcome<bool> out) mutable {
+        if (!self)
+            return;
+        // Already there (a retry) is as good as added.
+        if (!out.ok() && out.status != 422)
+            failures << out.error;
+        if (out.status == 401) {
+            self->fail(out.error, 401);
+            return;
+        }
+        self->sendAnnotations(remaining, failures);
+    });
 }
 
 void ObservationUploader::fail(const QString &error, int status)

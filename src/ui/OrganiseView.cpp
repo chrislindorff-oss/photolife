@@ -11,6 +11,7 @@
 #include "ui/ImageViewer.h"
 #include "scan/FileScanner.h"
 #include "organise/Sharpness.h"
+#include "ui/AnnotationsDialog.h"
 #include "ui/CardImportDialog.h"
 #include "ui/CompareViewer.h"
 #include "ui/GeotagDialog.h"
@@ -2011,57 +2012,19 @@ void OrganiseView::editNotes(int row)
         return;
     }
     organise::RunNotes notes = m_session.notesAt(row);
-    QDialog dialog(this);
-    dialog.setWindowTitle(tr("Notes for \u201c%1\u201d").arg(m_session.runName(row)));
-    // iNaturalist's own terms, so an upload can carry them across as annotations.
-    auto combo = [&dialog](const QStringList &values, const QString &current) {
-        auto *box = new QComboBox(&dialog);
-        box->addItem(tr("—"), QString());
-        for (const QString &v : values)
-            box->addItem(QCoreApplication::translate("pl::OrganiseView", v.toUtf8().constData()), v);
-        box->setCurrentIndex(std::max(0, box->findData(current)));
-        return box;
-    };
-    QComboBox *sex = combo({QStringLiteral("Female"), QStringLiteral("Male"), QStringLiteral("Cannot Be Determined")},
-                           notes.sex);
-    QComboBox *stage = combo({QStringLiteral("Adult"), QStringLiteral("Juvenile"), QStringLiteral("Subimago"),
-                              QStringLiteral("Teneral"), QStringLiteral("Nymph"), QStringLiteral("Pupa"),
-                              QStringLiteral("Larva"), QStringLiteral("Egg")},
-                             notes.lifeStage);
-    QComboBox *alive = combo({QStringLiteral("Alive"), QStringLiteral("Dead"), QStringLiteral("Cannot Be Determined")},
-                             notes.alive);
-    QComboBox *flowers = combo({QStringLiteral("Flowers"), QStringLiteral("Flower Buds"), QStringLiteral("Fruits or Seeds"),
-                                QStringLiteral("No Flowers or Fruits")},
-                               notes.flowers);
-    auto *text = new QPlainTextEdit(notes.text, &dialog);
-    text->setPlaceholderText(tr("Anything else: behaviour, habitat, what it was on…"));
-    text->setTabChangesFocus(true);
-    text->setMaximumHeight(90);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    auto *form = new QFormLayout;
-    form->addRow(tr("Sex:"), sex);
-    form->addRow(tr("Life stage:"), stage);
-    form->addRow(tr("Alive or dead:"), alive);
-    form->addRow(tr("Flowers and fruits:"), flowers);
-    form->addRow(tr("Notes:"), text);
-    auto *intro = new QLabel(tr("For every photo of this run. Written into the photos when they're organised, and "
-                                "offered as annotations when they're uploaded to iNaturalist."),
-                             &dialog);
-    intro->setWordWrap(true);
-    auto *layout = new QVBoxLayout(&dialog);
-    layout->addWidget(intro);
-    layout->addLayout(form);
-    layout->addWidget(buttons);
-    dialog.resize(460, dialog.sizeHint().height());
-    if (dialog.exec() != QDialog::Accepted)
+    QHash<QString, QString> values{{QStringLiteral("sex"), notes.sex},
+                                   {QStringLiteral("lifeStage"), notes.lifeStage},
+                                   {QStringLiteral("alive"), notes.alive},
+                                   {QStringLiteral("flowers"), notes.flowers}};
+    if (!editAnnotations(this, tr("Notes for \u201c%1\u201d").arg(m_session.runName(row)),
+                         tr("For every photo of this run. Written into the photos when they're organised, and "
+                            "offered as annotations when they're uploaded to iNaturalist."),
+                         values, &notes.text))
         return;
-    notes.sex = sex->currentData().toString();
-    notes.lifeStage = stage->currentData().toString();
-    notes.alive = alive->currentData().toString();
-    notes.flowers = flowers->currentData().toString();
-    notes.text = text->toPlainText().trimmed();
+    notes.sex = values.value(QStringLiteral("sex"));
+    notes.lifeStage = values.value(QStringLiteral("lifeStage"));
+    notes.alive = values.value(QStringLiteral("alive"));
+    notes.flowers = values.value(QStringLiteral("flowers"));
     m_session.setNotes(row, notes);
     changed(m_session.runStart(row));
 }

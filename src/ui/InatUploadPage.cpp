@@ -1,5 +1,7 @@
 #include "ui/InatUploadPage.h"
 
+#include "ui/AnnotationsDialog.h"
+
 #include "app/Application.h"
 #include "db/Database.h"
 #include "inat/InatDuplicateCheck.h"
@@ -430,6 +432,12 @@ InatUploadPage::InatUploadPage(Application &app, InatAccountBar &account, QWidge
         }
         refreshRow(r);
     });
+    connect(m_uploader, &inat::ObservationUploader::annotationsFailed, this, [this](int r, const QString &error) {
+        if (r < 0 || r >= m_rows.size())
+            return;
+        m_rows[r].status = tr("Made, but its annotations couldn't be added (%1): add them on iNaturalist").arg(error);
+        refreshRow(r);
+    });
     connect(m_uploader, &inat::ObservationUploader::finished, this, &InatUploadPage::uploadFinished);
 
     connect(&m_app, &Application::inatApiTokenChanged, this, [this] { showWho(); });
@@ -597,7 +605,9 @@ void InatUploadPage::refreshRow(int r)
     top->setText(PhotosColumn, QString::number(obs.photos.size()));
     // The first line; the whole note in the tooltip.
     const QString firstLine = obs.note.section(QLatin1Char('\n'), 0, 0);
-    top->setText(NoteColumn, firstLine + (obs.note.contains(QLatin1Char('\n')) ? QStringLiteral(" …") : QString()));
+    const QString marked = inat::annotationsText(obs.annotations);
+    top->setText(NoteColumn, (marked.isEmpty() ? QString() : QStringLiteral("[%1] ").arg(marked)) + firstLine
+                                 + (obs.note.contains(QLatin1Char('\n')) ? QStringLiteral(" …") : QString()));
     top->setToolTip(NoteColumn, obs.observationId > 0 ? obs.note
                                 : obs.note.isEmpty()
                                     ? tr("Double-click to write a note, sent as the observation's description.")
@@ -1165,6 +1175,22 @@ void InatUploadPage::contextMenuAt(const QPoint &pos)
     QAction *note = menu.addAction(tr("Note…"));
     note->setEnabled(!busy && obs.observationId <= 0);
     connect(note, &QAction::triggered, this, [this, r] { editNote(r); });
+    const QString marked = inat::annotationsText(obs.annotations);
+    QAction *annotate = menu.addAction(marked.isEmpty() ? tr("Annotations…") : tr("Annotations (%1)…").arg(marked));
+    annotate->setToolTip(tr("Sex, life stage, alive or dead, flowers and fruits: added to the observation once it's made."));
+    annotate->setEnabled(!busy && obs.observationId <= 0);
+    connect(annotate, &QAction::triggered, this, [this, r] {
+        if (r < 0 || r >= m_rows.size())
+            return;
+        QHash<QString, QString> values = m_rows.at(r).obs.annotations;
+        if (!editAnnotations(this, tr("Annotations"),
+                             tr("Annotations for <b>%1</b>, added on iNaturalist once the observation is made:")
+                                 .arg(speciesText(m_rows.at(r).obs.taxon).toHtmlEscaped()),
+                             values))
+            return;
+        m_rows[r].obs.annotations = values;
+        refreshRow(r);
+    });
     QAction *open = menu.addAction(tr("Open on iNaturalist"));
     open->setEnabled(obs.observationId > 0);
     connect(open, &QAction::triggered, this, &InatUploadPage::openOnInat);

@@ -144,6 +144,18 @@ public:
     // Not retried after a network error or 5xx -- see findObservationByUuid().
     void createObservation(const NewObservation &observation, std::function<void(Outcome<qint64>)> done);
 
+    // POST /v1/annotations: marks one of the user's observations with an
+    // annotation (controlled attribute and value ids, as in
+    // inat::annotationIds()). Answers with nothing but whether it worked.
+    void addAnnotation(qint64 observationId, int attributeId, int valueId, std::function<void(Outcome<bool>)> done);
+
+    // GET /v1/observations?id=1,2,...: these observations (up to 200 a call;
+    // the caller batches), with their taxon and how the community sees it.
+    // Read-only; sent with the token when there is one.
+    void fetchObservations(const QList<qint64> &ids,
+                           std::function<void(Outcome<QList<pl::taxonomy::Observation>>)> done);
+    static constexpr int kMaxObservationsPerCall = 200;
+
     // GET /v1/observations?uuid=: the id of the observation with this uuid,
     // or nullopt when there's none -- whether a create that failed was made.
     void findObservationByUuid(const QString &uuid, std::function<void(Outcome<std::optional<qint64>>)> done);

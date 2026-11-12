@@ -76,6 +76,7 @@
 #include "ui/InatObservationMatchDialog.h"
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
+#include "ui/InatCheckIdsPage.h"
 #include "ui/InatToolsView.h"
 #include "ui/InatUploadPage.h"
 #include "ui/OrganiseView.h"
@@ -4541,6 +4542,8 @@ void MainWindow::withTaxonKnown(qint64 taxonInatId, const QString &name, const Q
 
 void MainWindow::reloadAfterMatching()
 {
+    if (m_inatView && m_inatView->checkIdsPage())
+        m_inatView->checkIdsPage()->refreshLocal();
     m_taxonModel->reload();
     m_model->reload();
     m_bestShotModel->reload();
@@ -4896,6 +4899,12 @@ void MainWindow::buildCentralWidget()
 
     m_inatView = new InatToolsView(m_app, this);
     m_inatView->uploadPage()->setEditGuard([this] { return ensureCanEdit(); });
+    connect(m_inatView->checkIdsPage(), &InatCheckIdsPage::useInaturalistName, this,
+            [this](const QList<int> &captureIds, const taxonomy::Observation &observation) {
+                if (!ensureCanEdit())
+                    return;
+                applyInatSpecies(geotagTargets(captureIds), observation, 0, QString(), QString());
+            });
     m_inatView->uploadPage()->setLocationSetter([this](const QList<int> &ids) { return setLocationOnMap(ids); });
     m_inatView->uploadPage()->setLocationPaster([this](const QList<int> &ids) { return pasteLocation(ids); });
     m_inatView->uploadPage()->setFolderAdder([this](const QString &folder, std::function<void()> done) {

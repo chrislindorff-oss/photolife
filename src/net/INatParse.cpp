@@ -173,6 +173,11 @@ pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
         at.isValid())
         o.timeObserved = QDateTime(at.date(), at.time(), QTimeZone::utc());   // "UTC": no zone rules
     o.placeGuess = obj.value(QStringLiteral("place_guess")).toString();
+    o.qualityGrade = obj.value(QStringLiteral("quality_grade")).toString();
+    o.communityTaxonId = optId(obj.value(QStringLiteral("community_taxon_id"))).value_or(0);
+    o.identificationsCount = obj.value(QStringLiteral("identifications_count")).toInt();
+    o.agreements = obj.value(QStringLiteral("num_identification_agreements")).toInt();
+    o.disagreements = obj.value(QStringLiteral("num_identification_disagreements")).toInt();
 
     const QJsonObject taxon = obj.value(QStringLiteral("taxon")).toObject();
     if (!taxon.isEmpty()) {

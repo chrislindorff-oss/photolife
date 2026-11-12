@@ -60,6 +60,7 @@ private slots:
     void photosCanBeReorderedAndMoved();
     void linkedPhotosAreDone();
     void photosFarApartCanBeSplit();
+    void notesBecomeAnnotationsAndTheNote();
 };
 
 void TestObservationGrouper::photosOfASpeciesWithinTheGapAreOneObservation()
@@ -255,6 +256,30 @@ void TestObservationGrouper::photosFarApartCanBeSplit()
     QCOMPARE(ids(split.at(0)), (QList<int>{1}));
     QCOMPARE(ids(split.at(1)), (QList<int>{2, 3}));   // no location: joins by time
     QCOMPARE(ids(split.at(2)), (QList<int>{4, 5}));   // a burst, close together
+}
+
+void TestObservationGrouper::notesBecomeAnnotationsAndTheNote()
+{
+    taxonomy::Taxon robin;
+    robin.inatId = 12716;
+    robin.name = QStringLiteral("Petroica phoenicea");
+    UploadPhoto a = photo(1, robin, QStringLiteral("2025-10-18T08:00:00"));
+    UploadPhoto b = photo(2, robin, QStringLiteral("2025-10-18T08:01:00"));
+    b.notes = {{QStringLiteral("sex"), QStringLiteral("Male")},
+               {QStringLiteral("lifeStage"), QStringLiteral("Adult")},
+               {QStringLiteral("notes"), QStringLiteral("on a fence post")}};
+    const QList<ProposedObservation> groups = ObservationGrouper::group({a, b}, 1800);
+    QCOMPARE(groups.size(), 1);
+    QCOMPARE(groups.first().annotations.value(QStringLiteral("sex")), QStringLiteral("Male"));
+    QCOMPARE(groups.first().annotations.value(QStringLiteral("lifeStage")), QStringLiteral("Adult"));
+    QVERIFY(!groups.first().annotations.contains(QStringLiteral("notes")));
+    QCOMPARE(groups.first().note, QStringLiteral("on a fence post"));
+    QCOMPARE(annotationsText(groups.first().annotations), QStringLiteral("Male · Adult"));
+    QCOMPARE(annotationIds(groups.first().annotations), (QList<QPair<int, int>>{{1, 2}, {9, 11}}));
+    QVERIFY(annotationIds({{QStringLiteral("sex"), QStringLiteral("Hermaphrodite")}}).isEmpty());
+    QCOMPARE(annotationIds({{QStringLiteral("flowers"), QStringLiteral("Flower Buds")},
+                            {QStringLiteral("alive"), QStringLiteral("Cannot Be Determined")}}),
+             (QList<QPair<int, int>>{{17, 20}, {12, 15}}));
 }
 
 QTEST_GUILESS_MAIN(TestObservationGrouper)

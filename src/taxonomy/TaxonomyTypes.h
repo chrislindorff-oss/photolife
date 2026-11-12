@@ -133,6 +133,12 @@ struct Observation
     std::optional<double> longitude;
     QString placeGuess;               // iNat's own free-text place description, may be empty
     QList<ObservationPhoto> photos;
+    // How the community sees it (when the reply carried these).
+    QString qualityGrade;             // "research", "needs_id", "casual"
+    qint64 communityTaxonId = 0;      // 0 when there's no community taxon yet
+    int identificationsCount = 0;
+    int agreements = 0;               // identifications agreeing with the observation's taxon
+    int disagreements = 0;
 };
 
 } // namespace pl::taxonomy
