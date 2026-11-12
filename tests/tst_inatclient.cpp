@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QJsonDocument>
+#include <QUrlQuery>
 #include <QJsonObject>
 
 #include "FakeTransport.h"
@@ -42,6 +43,7 @@ private slots:
     void addObservationPhotoPostsTheFile();
     void fetchObservationsReadsTheCommunitysView();
     void identificationsAreComparedThroughTheTree();
+    void speciesNearAPlaceAsksByRadiusAndMonth();
 
 private:
     FakeTransport *m_transport = nullptr;
@@ -551,6 +553,35 @@ void TestINatClient::fetchObservationsReadsTheCommunitysView()
     QCOMPARE(a.taxonAncestorIds, (QList<qint64>{48460, 47170, 58673}));
     QCOMPARE(got.value.at(1).taxonInatId, qint64(0));
     QCOMPARE(got.value.at(1).communityTaxonId, qint64(0));
+}
+
+void TestINatClient::speciesNearAPlaceAsksByRadiusAndMonth()
+{
+    QUrlQuery query;
+    wire([&](const Transport::Request &req, int) {
+        query = QUrlQuery(req.url);
+        return FakeTransport::ok(R"({"total_results": 1, "page": 1, "per_page": 500, "results": [
+            {"count": 42, "taxon": {"id": 12716, "name": "Petroica phoenicea", "rank": "species",
+                                     "preferred_common_name": "Flame Robin", "ancestry": "48460/1/3"}}]})");
+    });
+    Outcome<SpeciesCountsPage> got;
+    bool done = false;
+    m_inat->speciesCountsNear(3, -37.9027, 144.2233, 25, 9, 1, 500, [&](auto o) { got = o; done = true; });
+    QTRY_VERIFY(done);
+    QVERIFY2(got.ok(), qPrintable(got.error));
+    QCOMPARE(query.queryItemValue(QStringLiteral("taxon_id")), QStringLiteral("3"));
+    QCOMPARE(query.queryItemValue(QStringLiteral("lat")), QStringLiteral("-37.90270"));
+    QCOMPARE(query.queryItemValue(QStringLiteral("lng")), QStringLiteral("144.22330"));
+    QCOMPARE(query.queryItemValue(QStringLiteral("radius")), QStringLiteral("25.0"));
+    QCOMPARE(query.queryItemValue(QStringLiteral("month")), QStringLiteral("9"));
+    QCOMPARE(query.queryItemValue(QStringLiteral("verifiable")), QStringLiteral("true"));
+    QCOMPARE(got.value.results.size(), 1);
+    QCOMPARE(got.value.results.first().count, 42);
+    // Any month: none asked for.
+    m_inat->speciesCountsNear(3, -37.9, 144.2, 10, 0, 1, 500, [&](auto o) { got = o; done = true; });
+    done = false;
+    QTRY_VERIFY(done);
+    QVERIFY(!query.hasQueryItem(QStringLiteral("month")));
 }
 
 void TestINatClient::identificationsAreComparedThroughTheTree()

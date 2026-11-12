@@ -780,6 +780,16 @@ QPointF Settings::geotagLastLocation() const
                    m_settings.value(QStringLiteral("geotag/lastLat")).toDouble());
 }
 
+QStringList Settings::lifeListTrips() const
+{
+    return m_settings.value(QStringLiteral("ui/lifeListTrips")).toStringList();
+}
+
+void Settings::setLifeListTrips(const QStringList &trips)
+{
+    m_settings.setValue(QStringLiteral("ui/lifeListTrips"), trips);
+}
+
 QStringList Settings::inatKeptIdentifications() const
 {
     return m_settings.value(QStringLiteral("inat/keptIdentifications")).toStringList();

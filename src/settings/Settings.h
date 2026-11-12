@@ -171,6 +171,9 @@ public:
     void setTreeViewMode(const QString &mode);
     // The life list's columns turned off with Columns… (keys: date, common,
     // scientific, place, camera, focal, photos). Camera and focal start off.
+    // Life list trips: each "name\tfrom\tto\tplace words" (ISO dates).
+    QStringList lifeListTrips() const;
+    void setLifeListTrips(const QStringList &trips);
     QStringList lifeListHiddenColumns() const;
     void setLifeListHiddenColumns(const QStringList &keys);
     bool lifeListThumbnails() const;

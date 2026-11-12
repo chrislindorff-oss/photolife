@@ -8,6 +8,7 @@
 #include "catalogue/CameraInfoStore.h"
 #include "coverage/LifeList.h"
 #include "model/LifeListModel.h"
+#include "ui/LifeListPage.h"
 #include "thumb/ThumbnailCache.h"
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -66,6 +67,7 @@ private slots:
     void loadsFromTheCatalogue();
     void loadsCameraDetailsOnceRead();
     void modelShowsCameraAndFocal();
+    void sharesAsAWebPage();
 };
 
 void TestLifeList::numbersSpeciesByTheirFirstPhoto()
@@ -211,6 +213,34 @@ void TestLifeList::loadsFromTheCatalogue()
     QCOMPARE(shown[0].previewPath, QStringLiteral("/photos/flame.jpg"));
     QCOMPARE(shown[0].previewHash, QStringLiteral("hash-flame"));
     QCOMPARE(shown[0].locality, QStringLiteral("Steiglitz"));
+
+    // A year list: only 2016's photos count.
+    LifeListFilter year2016{QDate(2016, 1, 1), QDate(2016, 12, 31), QString()};
+    QCOMPARE(idsOf(numberedLifeList(loadLifeList(database.connectionName(), project, kToday, year2016), false)),
+             (QList<qint64>{10}));
+    // Flame Robin again in 2016, somewhere else: in 2016's list, first photographed then.
+    QSqlQuery more(db);
+    const int again = capture("flame2", "2016-03-03", 20, "auto");
+    QVERIFY(more.exec(QStringLiteral("UPDATE capture SET locality_text = 'Anakie, Victoria' WHERE id = %1").arg(again)));
+    const auto y2016 = numberedLifeList(loadLifeList(database.connectionName(), project, kToday, year2016), false);
+    QCOMPARE(idsOf(y2016), (QList<qint64>{10, 20}));
+    QCOMPARE(y2016[1].firstOn, QStringLiteral("2016-03-03"));
+    // A trip: a date range and the place's words.
+    LifeListFilter trip{QDate(2016, 1, 1), QDate(2016, 12, 31), QStringLiteral("anakie")};
+    QCOMPARE(idsOf(numberedLifeList(loadLifeList(database.connectionName(), project, kToday, trip), false)),
+             (QList<qint64>{20}));
+    LifeListFilter anywhereInSteiglitz{{}, {}, QStringLiteral("STEIGLITZ")};
+    QCOMPARE(idsOf(numberedLifeList(loadLifeList(database.connectionName(), project, kToday, anywhereInSteiglitz), false)),
+             (QList<qint64>{20, 10}));
+    QVERIFY(loadLifeList(database.connectionName(), project, kToday, {QDate(1990, 1, 1), QDate(1990, 12, 31), {}}).isEmpty());
+
+    // Statistics: species a month -- February has both, March one (Flame Robin
+    // in February and March counts once in each).
+    const QList<int> months = speciesByMonth(database.connectionName(), project);
+    QCOMPARE(months.size(), 12);
+    QCOMPARE(months.at(1), 2);
+    QCOMPARE(months.at(2), 1);
+    QCOMPARE(months.at(0), 0);   // the January photo is only pending
 }
 
 void TestLifeList::loadsCameraDetailsOnceRead()
@@ -302,6 +332,32 @@ void TestLifeList::modelShowsCameraAndFocal()
     QVERIFY(model.index(0, model::LifeListModel::CameraColumn).data(model::LifeListModel::SortRole).toString()
             < model.index(1, model::LifeListModel::CameraColumn).data(model::LifeListModel::SortRole).toString());
     QCOMPARE(focal.data(model::LifeListModel::SortRole).toDouble(), 4.53);
+}
+
+void TestLifeList::sharesAsAWebPage()
+{
+    LifeListEntry robin;
+    robin.number = 1;
+    robin.name = QStringLiteral("Petroica phoenicea");
+    robin.commonName = QStringLiteral("Flame Robin");
+    robin.firstOn = QStringLiteral("2025-10-18");
+    robin.locality = QStringLiteral("Anakie & <Steiglitz>");
+    LifeListEntry undated;
+    undated.name = QStringLiteral("Petroica rosea");
+    QImage photo(40, 30, QImage::Format_RGB32);
+    photo.fill(Qt::red);
+    const QString html = pl::lifeListWebPage({robin, undated}, {photo, QImage()}, QStringLiteral("Birds <of> Victoria"),
+                                             QStringLiteral("Photographed in 2025"));
+    QVERIFY(html.startsWith(QStringLiteral("<!doctype html>")));
+    QVERIFY(html.contains(QStringLiteral("<title>Birds &lt;of&gt; Victoria</title>")));
+    QVERIFY(html.contains(QStringLiteral("Flame Robin")));
+    QVERIFY(html.contains(QStringLiteral("Petroica phoenicea")));
+    QVERIFY(html.contains(QStringLiteral("Anakie &amp; &lt;Steiglitz&gt;")));   // escaped
+    QVERIFY(html.contains(QStringLiteral("data:image/jpeg;base64,")));          // the photo inside it
+    QCOMPARE(html.count(QStringLiteral("data:image/jpeg;base64,")), 1);         // the second has none
+    QVERIFY(html.contains(QStringLiteral("undated")));
+    QVERIFY(html.contains(QStringLiteral("2 species")));
+    QVERIFY(html.contains(QStringLiteral("prefers-color-scheme:dark")));
 }
 
 QTEST_MAIN(TestLifeList)

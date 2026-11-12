@@ -66,9 +66,25 @@ QList<LifeListEntry> buildLifeList(const QList<LifeListNode> &nodes, const QList
 // (the undated keep 0).
 QList<LifeListEntry> numberedLifeList(const QList<LifeListEntry> &all, bool includeBelow);
 
+// Only photos taken in a period (a year, a trip) count -- and, with `place`,
+// only those whose place has every one of its words in it. Undated photos
+// never fall in a period.
+struct LifeListFilter
+{
+    QDate from;     // invalid: no period
+    QDate to;
+    QString place;  // words; empty: anywhere
+    bool isEmpty() const { return !from.isValid() && place.trimmed().isEmpty(); }
+};
+
 // buildLifeList() over a project's tree and its auto/confirmed matches, with
-// each entry's first photo's preview and place filled in. Read-only.
+// each entry's first photo's preview and place filled in. Read-only. With a
+// `filter`, only its photos count: a year list or a trip list.
 QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId,
-                                  const QDate &today = QDate::currentDate());
+                                  const QDate &today = QDate::currentDate(), const LifeListFilter &filter = {});
+
+// For Statistics: how many of the tree's species were photographed in each
+// calendar month (1-12, any year), a species counting once a month.
+QList<int> speciesByMonth(const QString &connectionName, int projectId);
 
 } // namespace pl::coverage

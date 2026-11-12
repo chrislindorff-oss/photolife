@@ -404,6 +404,25 @@ void INatClient::speciesCounts(qint64 taxonId, qint64 placeId, int page, int per
     getSpeciesCountsPage(url, std::move(done));
 }
 
+void INatClient::speciesCountsNear(qint64 taxonId, double latitude, double longitude, double radiusKm, int month,
+                                   int page, int perPage, std::function<void(Outcome<SpeciesCountsPage>)> done)
+{
+    QUrl url(m_baseUrl + QStringLiteral("/observations/species_counts"));
+    QUrlQuery q;
+    if (taxonId > 0)
+        q.addQueryItem(QStringLiteral("taxon_id"), QString::number(taxonId));
+    q.addQueryItem(QStringLiteral("lat"), QString::number(latitude, 'f', 5));
+    q.addQueryItem(QStringLiteral("lng"), QString::number(longitude, 'f', 5));
+    q.addQueryItem(QStringLiteral("radius"), QString::number(radiusKm, 'f', 1));
+    if (month >= 1 && month <= 12)
+        q.addQueryItem(QStringLiteral("month"), QString::number(month));
+    q.addQueryItem(QStringLiteral("verifiable"), QStringLiteral("true"));
+    q.addQueryItem(QStringLiteral("page"), QString::number(page));
+    q.addQueryItem(QStringLiteral("per_page"), QString::number(perPage));
+    url.setQuery(q);
+    getSpeciesCountsPage(url, std::move(done));
+}
+
 void INatClient::userSpeciesCounts(const QString &userLogin, qint64 taxonId, qint64 placeId,
                                    ObservationQuality quality, int page, int perPage,
                                    std::function<void(Outcome<SpeciesCountsPage>)> done)

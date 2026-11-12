@@ -140,7 +140,19 @@ QList<LifeListEntry> numberedLifeList(const QList<LifeListEntry> &all, bool incl
     return shown;
 }
 
-QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, const QDate &today)
+namespace {
+bool matchesPlace(const QString &place, const QStringList &words)
+{
+    for (const QString &w : words) {
+        if (!place.contains(w, Qt::CaseInsensitive))
+            return false;
+    }
+    return true;
+}
+} // namespace
+
+QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, const QDate &today,
+                                  const LifeListFilter &filter)
 {
     QSqlDatabase db = QSqlDatabase::database(connectionName, false);
     if (!db.isOpen() || projectId <= 0)
@@ -182,17 +194,35 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
     {
         QSqlQuery q(db);
         q.setForwardOnly(true);
+        const bool byPlace = !filter.place.trimmed().isEmpty();
         q.prepare(QStringLiteral(
-            "SELECT t.inat_id, m.capture_id, c.captured_on "
-            "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
-            "JOIN taxon t ON t.id = m.taxon_id "
-            "JOIN project_taxon pt ON pt.taxon_id = m.taxon_id AND pt.project_id = ? "
-            "WHERE m.status IN ('auto', 'confirmed')"));
+                      "SELECT t.inat_id, m.capture_id, c.captured_on%1 "
+                      "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
+                      "JOIN taxon t ON t.id = m.taxon_id "
+                      "JOIN project_taxon pt ON pt.taxon_id = m.taxon_id AND pt.project_id = ? %2"
+                      "WHERE m.status IN ('auto', 'confirmed')")
+                      .arg(byPlace ? QStringLiteral(", COALESCE(g.locality, ''), COALESCE(c.locality_text, '')") : QString(),
+                           byPlace ? QStringLiteral("LEFT JOIN geocode_cache g ON g.lat_round = ROUND(CAST(c.latitude AS NUMERIC), 3) "
+                                                    "AND g.lon_round = ROUND(CAST(c.longitude AS NUMERIC), 3) ")
+                                   : QString()));
         q.addBindValue(projectId);
         if (!q.exec())
             return {};
-        while (q.next())
-            sightings.append({q.value(0).toLongLong(), q.value(1).toInt(), q.value(2).toString()});
+        const QStringList words = filter.place.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        while (q.next()) {
+            const QString on = q.value(2).toString();
+            if (filter.from.isValid()) {
+                // In the period, by its date (an unusable one never is).
+                if (!isUsableLifeListDate(on, today))
+                    continue;
+                const QDate day = QDate::fromString(on.left(10), Qt::ISODate);
+                if (!day.isValid() || day < filter.from || (filter.to.isValid() && day > filter.to))
+                    continue;
+            }
+            if (byPlace && !matchesPlace(q.value(3).toString() + QLatin1Char(' ') + q.value(4).toString(), words))
+                continue;
+            sightings.append({q.value(0).toLongLong(), q.value(1).toInt(), on});
+        }
     }
 
     QList<LifeListEntry> entries = buildLifeList(nodes, sightings, today);
@@ -240,6 +270,32 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
         }
     }
     return entries;
+}
+
+QList<int> speciesByMonth(const QString &connectionName, int projectId)
+{
+    QList<int> months(12, 0);
+    QSqlQuery q(QSqlDatabase::database(connectionName, false));
+    q.setForwardOnly(true);
+    // A subspecies counts for its species: its parent, when that's a species.
+    q.prepare(QStringLiteral(
+        "SELECT DISTINCT CASE WHEN t.rank = 'species' THEN t.inat_id ELSE COALESCE(p.inat_id, t.inat_id) END, "
+        "       SUBSTR(c.captured_on, 6, 2) "
+        "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
+        "JOIN taxon t ON t.id = m.taxon_id "
+        "JOIN project_taxon pt ON pt.taxon_id = m.taxon_id AND pt.project_id = ? "
+        "LEFT JOIN taxon p ON p.inat_id = t.parent_inat_id AND p.rank = 'species' "
+        "WHERE m.status IN ('auto', 'confirmed') AND LENGTH(c.captured_on) >= 7 "
+        "  AND t.rank IN ('species', 'subspecies', 'variety', 'form', 'hybrid')"));
+    q.addBindValue(projectId);
+    if (!q.exec())
+        return months;
+    while (q.next()) {
+        const int m = q.value(1).toString().toInt();
+        if (m >= 1 && m <= 12)
+            ++months[m - 1];
+    }
+    return months;
 }
 
 } // namespace pl::coverage

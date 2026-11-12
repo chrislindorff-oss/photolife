@@ -187,6 +187,12 @@ public:
                    std::function<void(Outcome<QList<pl::taxonomy::Taxon>>)> done,
                    bool allNames = false);
 
+    // GET /v1/observations/species_counts?taxon_id=&lat=&lng=&radius=&month=&verifiable=true:
+    // what's been recorded within `radiusKm` of a spot, in a month (1-12; 0
+    // any), most observed first -- Targets.
+    void speciesCountsNear(qint64 taxonId, double latitude, double longitude, double radiusKm, int month, int page,
+                           int perPage, std::function<void(Outcome<SpeciesCountsPage>)> done);
+
     // GET /v1/observations/species_counts?taxon_id=&place_id=&verifiable=true&page=
     void speciesCounts(qint64 taxonId, qint64 placeId, int page, int perPage,
                        std::function<void(Outcome<SpeciesCountsPage>)> done);

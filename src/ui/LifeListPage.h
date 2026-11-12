@@ -3,6 +3,7 @@
 #include "coverage/LifeList.h"
 #include "ui/ImageViewer.h"
 
+#include <QImage>
 #include <QList>
 #include <QPair>
 #include <QSet>
@@ -11,6 +12,7 @@
 #include <functional>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QMenu;
@@ -48,8 +50,9 @@ public:
 
     LifeListPage(Application &app, Hooks hooks, QWidget *parent = nullptr);
 
-    // Reads the life list of the tree `projectId` (0: none) from the catalogue again.
-    void reload(int projectId);
+    // Reads the life list of the tree `projectId` (0: none) from the catalogue
+    // again; `treeName` titles what's shared.
+    void reload(int projectId, const QString &treeName = QString());
 
 signals:
     void statusMessage(const QString &text, int timeoutMs);   // empty text: clear it
@@ -58,6 +61,13 @@ signals:
 
 private:
     void showEntries();   // numbers what reload() read and lists it (the subspecies toggle)
+    // The period shown: all time, a year, or a trip.
+    void fillPeriods();
+    coverage::LifeListFilter periodFilter() const;
+    QString periodLabel() const;
+    void editTrips();
+    // Share: the entries listed, as a web page or a PDF.
+    void share(bool pdf);
     void openPhoto(const QModelIndex &proxyIndex);
     void readCameras();
     void readNextCameraChunk();
@@ -65,7 +75,13 @@ private:
     Application &m_app;
     Hooks m_hooks;
     int m_projectId = 0;
-    QList<coverage::LifeListEntry> m_all;   // reload()'s, species and below
+    QList<coverage::LifeListEntry> m_all;       // reload()'s, all time, species and below
+    QList<coverage::LifeListEntry> m_entries;   // what's listed: m_all, or the period's
+    QString m_treeName;
+    QComboBox *m_period = nullptr;
+    QCheckBox *m_onlyNew = nullptr;   // in a period: only species first photographed in it
+    QToolButton *m_tripsButton = nullptr;
+    QToolButton *m_shareButton = nullptr;
     QLineEdit *m_search = nullptr;
     QCheckBox *m_infra = nullptr;     // subspecies, varieties and hybrids as entries
     QCheckBox *m_thumbs = nullptr;    // each entry's first photo
@@ -82,5 +98,10 @@ private:
     model::LifeListModel *m_model = nullptr;
     QSortFilterProxyModel *m_proxy = nullptr;
 };
+
+// A list as a self-contained web page (photos inside it, as `images`, one per
+// entry; a null one is left blank): what Share > Save as a Web Page writes.
+QString lifeListWebPage(const QList<coverage::LifeListEntry> &entries, const QList<QImage> &images,
+                        const QString &title, const QString &subtitle);
 
 } // namespace pl

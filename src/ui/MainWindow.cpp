@@ -92,7 +92,9 @@
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/ServerDialogs.h"
+#include "ui/StatisticsPage.h"
 #include "ui/StorageDialog.h"
+#include "ui/TargetsPage.h"
 #include "ui/StaleMatchDialog.h"
 #include "ui/TaxonConfirmDialog.h"
 #include "ui/TaxonPickerDialog.h"
@@ -4950,6 +4952,11 @@ void MainWindow::buildCentralWidget()
     m_tabs->addTab(buildBestShotsPage(), tr("My Best Shots"));
     m_tabs->addTab(buildMissingPage(), tr("Unphotographed Taxa"));
     m_tabs->addTab(buildLifeListPage(), tr("Photographic Life List"));
+    m_statisticsPage = new StatisticsPage(m_app, this);
+    m_tabs->addTab(m_statisticsPage, tr("Statistics"));
+    m_targetsPage = new TargetsPage(m_app, this);
+    connect(m_targetsPage, &TargetsPage::showTaxon, this, [this](qint64 inatId) { selectTaxonInTree(inatId); });
+    m_tabs->addTab(m_targetsPage, tr("Targets"));
     m_tabs->addTab(buildUntreedPage(), tr("Not in Any Tree"));
     m_tabs->addTab(buildReferencePhotosPage(), tr("Reference Photos"));
 
@@ -5004,6 +5011,10 @@ void MainWindow::buildCentralWidget()
         // Cheap (a few ms), and catches anything that changed it unannounced.
         if (m_lifeListPage && m_tabs->widget(i) == m_lifeListPage)
             reloadLifeList();
+        if (m_statisticsPage && m_tabs->widget(i) == m_statisticsPage)
+            m_statisticsPage->reload(currentProjectId());
+        if (m_targetsPage && m_tabs->widget(i) == m_targetsPage)
+            m_targetsPage->setProject(currentProjectId());
     });
 
     m_statusLabel = new QLabel(this);
@@ -5247,7 +5258,12 @@ QWidget *MainWindow::buildLifeListPage()
 void MainWindow::reloadLifeList()
 {
     if (m_lifeListPage)
-        m_lifeListPage->reload(currentProjectId());
+        m_lifeListPage->reload(currentProjectId(), m_projectCombo ? m_projectCombo->currentText() : QString());
+    // The other pages that follow the life list, when they're what's shown.
+    if (m_statisticsPage && m_tabs && m_tabs->currentWidget() == m_statisticsPage)
+        m_statisticsPage->reload(currentProjectId());
+    if (m_targetsPage)
+        m_targetsPage->setProject(currentProjectId());
 }
 
 namespace {

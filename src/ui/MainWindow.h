@@ -46,6 +46,8 @@ class QProgressDialog;
 namespace pl {
 
 class LifeListPage;
+class StatisticsPage;
+class TargetsPage;
 
 class ActivityLogDialog;
 class ReviewChangesDialog;
@@ -496,6 +498,8 @@ private:
     QWidget *m_missingPage = nullptr;
 
     LifeListPage *m_lifeListPage = nullptr;
+    StatisticsPage *m_statisticsPage = nullptr;
+    TargetsPage *m_targetsPage = nullptr;
 
     QList<catalogue::UntreedTaxon> m_untreedTaxa;   // last reloadUntreedTaxa() result
     QTreeWidget *m_untreedList = nullptr;
