@@ -4,6 +4,8 @@
 #include "organise/OrganiseSession.h"
 #include "ui/ImageViewer.h"
 
+#include <QHash>
+#include <QPointer>
 #include <QSet>
 #include <QWidget>
 
@@ -93,6 +95,20 @@ private:
     void findTrackInTracksFolder();
     QList<int> rowsOnTrackWithoutLocation() const;
     void removeLocation();     // the selected photos' locations, taken out of their files
+    // Compare: 2-4 photos side by side (the selection, or the burst of the
+    // one selected).
+    void compare();
+    void compareRows(const QList<int> &rows);
+    QList<int> compareCandidates() const;
+    // Bursts: worked out again as photos load; the sharpest of each found
+    // in the background.
+    void updateBursts();
+    void scoreSharpness();
+    void rejectRestOfBurst(int row);
+    // Not sure of a run's name (U), the next one (Shift+U), and a run's notes (T).
+    void toggleUnsure(int row);
+    void goToNextUnsure();
+    void editNotes(int row);
     // How many of the photos read so far the track covers, with `offsetSeconds`.
     int photosOnTrack(const geo::GpxTrack &track, int offsetSeconds) const;
     void showFullSize(int row);
@@ -127,6 +143,10 @@ private:
     QToolButton *m_placesButton = nullptr;
     QToolButton *m_gpxButton = nullptr;
     QLabel *m_arrivalBanner = nullptr;
+    QList<organise::Burst> m_bursts;
+    QHash<QString, double> m_sharpness;   // preview path -> sharpness, this session
+    bool m_scoring = false;
+    QPointer<class CompareViewer> m_compare;
     QSet<QString> m_arrivalDismissed;     // folders whose banner was turned down this session
     geo::GpxTrack m_track;                // the folder's GPS track, when one is chosen
     QTimer *m_placeScan = nullptr;        // debounces lookups after scrolling

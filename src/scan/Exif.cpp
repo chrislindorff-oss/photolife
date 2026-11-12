@@ -268,6 +268,33 @@ std::optional<int> readXmpRating(const QString &path)
     return m.captured(1).toInt();
 }
 
+QHash<QString, QString> readXmpNotes(const QString &path)
+{
+    QHash<QString, QString> out;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return out;
+    const QByteArray head = file.read(kMaxScanBytes * 4);
+    if (!head.contains("photolife:"))
+        return out;
+    // photolife:sex="Male" (an attribute) or <photolife:sex>Male</photolife:sex>.
+    static const QRegularExpression field(QStringLiteral(
+        "photolife:(sex|lifeStage|alive|flowers|notes)\\s*(?:=\\s*\"([^\"]*)\"|>([^<]*)</photolife:\\1>)"));
+    const QString text = QString::fromUtf8(head);
+    for (auto it = field.globalMatch(text); it.hasNext();) {
+        const QRegularExpressionMatch m = it.next();
+        QString value = m.captured(2).isNull() ? m.captured(3) : m.captured(2);
+        value.replace(QStringLiteral("&amp;"), QStringLiteral("&"))
+            .replace(QStringLiteral("&lt;"), QStringLiteral("<"))
+            .replace(QStringLiteral("&gt;"), QStringLiteral(">"))
+            .replace(QStringLiteral("&quot;"), QStringLiteral("\""))
+            .replace(QStringLiteral("&apos;"), QStringLiteral("'"));
+        if (!value.trimmed().isEmpty())
+            out.insert(m.captured(1), value.trimmed());
+    }
+    return out;
+}
+
 std::optional<double> parseXmpCoordinate(const QString &text)
 {
     static const QRegularExpression form(

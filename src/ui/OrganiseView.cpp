@@ -10,7 +10,9 @@
 #include "thumb/ThumbnailCache.h"
 #include "ui/ImageViewer.h"
 #include "scan/FileScanner.h"
+#include "organise/Sharpness.h"
 #include "ui/CardImportDialog.h"
+#include "ui/CompareViewer.h"
 #include "ui/GeotagDialog.h"
 #include "ui/IdentifyPanel.h"
 #include "ui/IdentifyRunsDialog.h"
@@ -35,6 +37,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPointer>
+#include <QPlainTextEdit>
 #include <QCheckBox>
 #include <QProgressBar>
 #include <QProgressDialog>
@@ -72,7 +75,12 @@ enum Role {
     BestRole,
     PlaceRole,      // the place's name; empty without GPS or while places are off
     PlaceStateRole, // a PlaceState
+    BurstRole,      // a BurstPosition
+    SharpestRole,   // the sharpest of its burst
+    UnsureRole,     // its name is marked not sure
 };
+
+enum BurstPosition { NotInBurst, BurstFirst, BurstMiddle, BurstLast };
 
 enum PlaceState { NoPlace, PlaceFinding, PlaceKnown, PlaceUnavailable };
 
@@ -137,6 +145,9 @@ public:
     bool showPlaces = false;
     QHash<QString, QString> places;   // placeKey -> "Town, State, Country" ("" = none there)
     QSet<QString> unavailable;        // lookups that failed this session
+    // Bursts: each photo's place in one, and the sharpest of each.
+    QHash<int, int> burstPosition;    // row -> BurstPosition
+    QSet<int> sharpest;
 
     PlaceState placeState(const organise::Item &item) const
     {
@@ -222,6 +233,12 @@ public:
             return showPlaces ? places.value(placeKey(item)) : QString();
         case PlaceStateRole:
             return showPlaces ? placeState(item) : NoPlace;
+        case BurstRole:
+            return burstPosition.value(row, NotInBurst);
+        case SharpestRole:
+            return sharpest.contains(row);
+        case UnsureRole:
+            return m_session.isUnsure(row);
         default:
             return {};
         }
@@ -293,7 +310,8 @@ public:
         p->drawRoundedRect(frame, t.radius, t.radius);
 
         // The run: its colour alternates so neighbouring runs stand apart.
-        const QString run = index.data(RunNameRole).toString();
+        const QString run = index.data(RunNameRole).toString()
+                            + (index.data(UnsureRole).toBool() ? QObject::tr("  (not sure)") : QString());
         const int runNumber = index.data(RunNumberRole).toInt();
         if (!run.isEmpty()) {
             const QColor colour = runNumber % 2 == 0 ? t.primaryAccent : t.secondaryAccent;
@@ -331,6 +349,8 @@ public:
             p->drawPixmap(target, px);
             if (index.data(HasGpsRole).toBool())
                 drawGeoPill(p, t, target, option.font);
+            if (index.data(SharpestRole).toBool())
+                drawPill(p, t, QPoint(target.left() + 5, target.top() + 5), option.font, QObject::tr("SHARPEST"));
             // A best shot: a gold star at the top right.
             if (index.data(BestRole).toBool()) {
                 p->setPen(QPen(QColor(0, 0, 0, 120), 1.2));
@@ -350,6 +370,18 @@ public:
             const QPoint c = img.center();
             p->drawLine(c + QPoint(-s, -s), c + QPoint(s, s));
             p->drawLine(c + QPoint(-s, s), c + QPoint(s, -s));
+        }
+
+        // A burst: a bar along the foot of each of its photos, joined up
+        // between them (rounded at its ends).
+        if (const int burst = index.data(BurstRole).toInt(); burst != NotInBurst) {
+            const int left = burst == BurstFirst ? frame.left() + 10 : option.rect.left();
+            const int right = burst == BurstLast ? frame.right() - 10 : option.rect.right();
+            QColor bar = t.secondaryAccent;
+            bar.setAlpha(200);
+            p->setPen(Qt::NoPen);
+            p->setBrush(bar);
+            p->drawRoundedRect(QRect(left, option.rect.bottom() - 3, right - left, 4), 2, 2);
         }
 
         // Full-size button.
@@ -402,6 +434,25 @@ public:
     }
 
 private:
+    // A small label at `at` (top-left), styled like the library grid's badges.
+    static void drawPill(QPainter *p, const ThemeColors &t, QPoint at, const QFont &base, const QString &text)
+    {
+        QFont font = base;
+        font.setPointSize(7);
+        font.setBold(true);
+        const QFontMetrics fm(font);
+        constexpr int padH = 6, pillH = 16;
+        const QRect pill(at.x(), at.y(), fm.horizontalAdvance(text) + 2 * padH, pillH);
+        p->save();
+        p->setFont(font);
+        p->setPen(Qt::NoPen);
+        p->setBrush(t.badgeBackground);
+        p->drawRoundedRect(pill, pillH / 2.0, pillH / 2.0);
+        p->setPen(t.badgeText);
+        p->drawText(pill, Qt::AlignCenter, text);
+        p->restore();
+    }
+
     // "GEO" at the picture's bottom-left (⤢ has the right), styled like the
     // library grid's badges.
     static void drawGeoPill(QPainter *p, const ThemeColors &t, const QRect &picture, const QFont &base)
@@ -686,7 +737,7 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addWidget(m_commitButton);
 
     m_hint = new QLabel(tr("Click a photo to focus and preview it. N names it · R marks it as a "
-                           "reject · B marks it as a best shot · I identifies it with iNaturalist · G sets its location on a map (Shift+G from the folder's GPX track) · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
+                           "reject · B marks it as a best shot · I identifies it with iNaturalist · G sets its location on a map (Shift+G from the folder's GPX track) · E marks it as the last photo of its taxon · C compares the selected photos (or a burst) side by side · U marks a name not sure (Shift+U goes to the next) · T notes sex, life stage and more for the run · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
                            "right-click for actions. The photos after a named one go with it, "
                            "up to the next name or end. The wheel scrolls · F11 full screen."),
                         this);
@@ -850,6 +901,7 @@ void OrganiseView::openFolder(const QString &folder)
         m_session.loadProgress();
         loadGpxTrack();
         m_model->reset();
+        updateBursts();
         updateCellSize();
         updateCounts();
         if (m_session.count() > 0) {
@@ -927,6 +979,7 @@ void OrganiseView::loadMore(bool all)
         m_loadingMore = false;
         updateCounts();
         updateArrivalBanner();
+        updateBursts();
         if (m_commitWhenLoaded) {
             if (m_session.pendingCount() > 0) {
                 loadMore(true);
@@ -1130,7 +1183,12 @@ void OrganiseView::updatePreview()
             .arg(item.baseName.toHtmlEscaped(), item.kinds.join(QLatin1Char('+')),
                  QLocale().toString(item.taken, QLocale::LongFormat).toHtmlEscaped(),
                  place.isEmpty() ? QString() : QStringLiteral(" · ") + place.toHtmlEscaped(),
-                 run.isEmpty() ? tr(" · not named yet") : QStringLiteral(" · <b>%1</b>").arg(run.toHtmlEscaped()),
+                 run.isEmpty() ? tr(" · not named yet")
+                               : QStringLiteral(" · <b>%1</b>").arg(run.toHtmlEscaped())
+                                     + (m_session.isUnsure(row) ? tr(" (not sure)") : QString())
+                                     + (m_session.notesAt(row).isEmpty()
+                                            ? QString()
+                                            : QStringLiteral(" · <i>%1</i>").arg(m_session.notesAt(row).summary().toHtmlEscaped())),
                  m_session.isRejected(row) ? tr(" · <span style='color:#c33'>reject</span>")
                  : m_session.isBest(row)   ? tr(" · ★ best shot")
                                            : QString()));
@@ -1168,6 +1226,9 @@ void OrganiseView::updateCounts()
                       + tr("%Ln taxa", nullptr, int(plan.folders.size())) + QStringLiteral(" · ")
                       + tr("%Ln reject(s)", nullptr, int(plan.rejects.size())) + QStringLiteral(" · ")
                       + tr("%Ln unnamed", nullptr, plan.unnamed)
+                      + (m_session.unsureCount() > 0
+                             ? QStringLiteral(" · ") + tr("%Ln not sure", nullptr, m_session.unsureCount())
+                             : QString())
                       + (m_session.bestShots().isEmpty()
                              ? QString()
                              : QStringLiteral(" · ") + tr("%Ln best", nullptr, int(m_session.bestShots().size()))));
@@ -1314,6 +1375,8 @@ ImageViewer::Item OrganiseView::viewerItem(int row) const
                 + QStringLiteral(" · ") + QLocale().toString(it.taken, QLocale::ShortFormat)
                 + (place.isEmpty() ? QString() : QStringLiteral(" · ") + place)
                 + (run.isEmpty() ? QString() : QStringLiteral("\n") + run)
+                + (m_session.isUnsure(row) ? tr(" (not sure)") : QString())
+                + (m_session.notesAt(row).isEmpty() ? QString() : QStringLiteral(" · ") + m_session.notesAt(row).summary())
                 + (m_session.isBest(row) ? tr(" · ★ best shot") : QString());
     v.canReject = true;
     v.rejected = m_session.isRejected(row);
@@ -1765,6 +1828,244 @@ void OrganiseView::removeLocation()
     m_placeScan->start();
 }
 
+void OrganiseView::updateBursts()
+{
+    m_bursts = m_session.bursts();
+    m_model->burstPosition.clear();
+    for (const organise::Burst &b : std::as_const(m_bursts)) {
+        for (int i = b.first; i <= b.last; ++i)
+            m_model->burstPosition.insert(i, i == b.first ? BurstFirst : i == b.last ? BurstLast : BurstMiddle);
+    }
+    // The sharpest of each burst whose photos are all scored.
+    m_model->sharpest.clear();
+    for (const organise::Burst &b : std::as_const(m_bursts)) {
+        int best = -1;
+        double bestScore = -1;
+        bool all = true;
+        for (int i = b.first; i <= b.last; ++i) {
+            const auto it = m_sharpness.constFind(m_session.items().at(i).previewPath);
+            if (it == m_sharpness.cend()) {
+                all = false;
+                break;
+            }
+            if (*it > bestScore) {
+                bestScore = *it;
+                best = i;
+            }
+        }
+        if (all && best >= 0 && bestScore > 0)
+            m_model->sharpest.insert(best);
+    }
+    m_model->allChanged();
+    scoreSharpness();
+}
+
+void OrganiseView::scoreSharpness()
+{
+    if (m_scoring)
+        return;
+    QStringList paths;
+    for (const organise::Burst &b : std::as_const(m_bursts)) {
+        for (int i = b.first; i <= b.last; ++i) {
+            const QString &path = m_session.items().at(i).previewPath;
+            if (!m_sharpness.contains(path) && !paths.contains(path))
+                paths << path;
+        }
+    }
+    if (paths.isEmpty())
+        return;
+    // A chunk at a time, so a big folder's first bursts are marked soon.
+    paths = paths.mid(0, 24);
+    m_scoring = true;
+    const int generation = m_loadGeneration;
+    auto *watcher = new QFutureWatcher<QList<QPair<QString, double>>>(this);
+    connect(watcher, &QFutureWatcher<QList<QPair<QString, double>>>::finished, this, [this, watcher, generation] {
+        watcher->deleteLater();
+        m_scoring = false;
+        for (const auto &[path, score] : watcher->result())
+            m_sharpness.insert(path, score);
+        if (generation == m_loadGeneration)
+            updateBursts();   // marks the sharpest, and scores the next chunk
+    });
+    watcher->setFuture(QtConcurrent::run([paths] {
+        QList<QPair<QString, double>> out;
+        for (const QString &path : paths)
+            out.append({path, organise::sharpnessOfFile(path).value_or(0.0)});   // unreadable: never the sharpest
+        return out;
+    }));
+}
+
+QList<int> OrganiseView::compareCandidates() const
+{
+    QList<int> rows;
+    for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes())
+        rows << i.row();
+    std::sort(rows.begin(), rows.end());
+    if (rows.size() >= 2)
+        return rows.mid(0, 4);
+    // One photo: its burst, up to four round it.
+    const int row = rows.isEmpty() ? m_list->currentIndex().row() : rows.first();
+    for (const organise::Burst &b : m_bursts) {
+        if (!b.contains(row))
+            continue;
+        const int first = std::clamp(row - 1, b.first, std::max(b.first, b.last - 3));
+        QList<int> out;
+        for (int i = first; i <= std::min(b.last, first + 3); ++i)
+            out << i;
+        return out;
+    }
+    return {};
+}
+
+void OrganiseView::compare()
+{
+    const QList<int> rows = compareCandidates();
+    if (rows.size() < 2) {
+        emit statusMessage(tr("Select two to four photos to compare (or one in a burst)."), 5000);
+        return;
+    }
+    compareRows(rows);
+}
+
+void OrganiseView::compareRows(const QList<int> &rows)
+{
+    if (m_compare)
+        m_compare->close();
+    QVector<ImageViewer::Item> items;
+    for (int r : rows)
+        items << viewerItem(r);
+    auto *viewer = new CompareViewer(items, rows, window());
+    m_compare = viewer;
+    auto refresh = [this, viewer](int row) {
+        viewer->updateItem(row, viewerItem(row), m_model->sharpest.contains(row) ? tr("sharpest of the burst") : QString());
+    };
+    for (int r : rows)
+        refresh(r);
+    connect(viewer, &CompareViewer::rejectToggleRequested, this, [this, refresh](int row, bool reject) {
+        if (row < 0 || row >= m_session.count())
+            return;
+        m_session.setRejected(row, reject);
+        changed(row);
+        refresh(row);
+    });
+    connect(viewer, &CompareViewer::bestToggleRequested, this, [this, refresh](int row, bool best) {
+        if (row < 0 || row >= m_session.count())
+            return;
+        m_session.setBest(row, best);
+        changed(row);
+        refresh(row);
+    });
+    connect(viewer, &CompareViewer::nameRequested, this, [this, viewer, refresh](int row) {
+        if (nameAt(row, false, viewer))
+            refresh(row);
+    });
+    viewer->show();
+    viewer->raise();
+    viewer->activateWindow();
+}
+
+void OrganiseView::rejectRestOfBurst(int row)
+{
+    for (const organise::Burst &b : std::as_const(m_bursts)) {
+        if (!b.contains(row))
+            continue;
+        int rejected = 0;
+        for (int i = b.first; i <= b.last; ++i) {
+            if (i == row || m_session.isRejected(i))
+                continue;
+            m_session.setRejected(i, true);
+            ++rejected;
+        }
+        m_session.setRejected(row, false);
+        changed(b.first);
+        emit statusMessage(tr("Kept %1; rejected %n other photo(s) of the burst.", nullptr, rejected)
+                               .arg(m_session.items().at(row).baseName),
+                           5000);
+        return;
+    }
+}
+
+void OrganiseView::toggleUnsure(int row)
+{
+    if (row < 0 || row >= m_session.count() || m_session.runName(row).isEmpty())
+        return;
+    m_session.setUnsure(row, !m_session.isUnsure(row));
+    changed(m_session.runStart(row));
+}
+
+void OrganiseView::goToNextUnsure()
+{
+    const int next = m_session.nextUnsure(m_list->currentIndex().row());
+    if (next < 0) {
+        emit statusMessage(tr("No names are marked not sure."), 4000);
+        return;
+    }
+    m_list->setCurrentIndex(m_model->index(next));
+    m_list->scrollTo(m_model->index(next), QAbstractItemView::PositionAtCenter);
+}
+
+void OrganiseView::editNotes(int row)
+{
+    if (row < 0 || row >= m_session.count() || m_session.runName(row).isEmpty()) {
+        emit statusMessage(tr("Name the photo first: notes go with its run."), 4000);
+        return;
+    }
+    organise::RunNotes notes = m_session.notesAt(row);
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Notes for \u201c%1\u201d").arg(m_session.runName(row)));
+    // iNaturalist's own terms, so an upload can carry them across as annotations.
+    auto combo = [&dialog](const QStringList &values, const QString &current) {
+        auto *box = new QComboBox(&dialog);
+        box->addItem(tr("—"), QString());
+        for (const QString &v : values)
+            box->addItem(QCoreApplication::translate("pl::OrganiseView", v.toUtf8().constData()), v);
+        box->setCurrentIndex(std::max(0, box->findData(current)));
+        return box;
+    };
+    QComboBox *sex = combo({QStringLiteral("Female"), QStringLiteral("Male"), QStringLiteral("Cannot Be Determined")},
+                           notes.sex);
+    QComboBox *stage = combo({QStringLiteral("Adult"), QStringLiteral("Juvenile"), QStringLiteral("Subimago"),
+                              QStringLiteral("Teneral"), QStringLiteral("Nymph"), QStringLiteral("Pupa"),
+                              QStringLiteral("Larva"), QStringLiteral("Egg")},
+                             notes.lifeStage);
+    QComboBox *alive = combo({QStringLiteral("Alive"), QStringLiteral("Dead"), QStringLiteral("Cannot Be Determined")},
+                             notes.alive);
+    QComboBox *flowers = combo({QStringLiteral("Flowers"), QStringLiteral("Flower Buds"), QStringLiteral("Fruits or Seeds"),
+                                QStringLiteral("No Flowers or Fruits")},
+                               notes.flowers);
+    auto *text = new QPlainTextEdit(notes.text, &dialog);
+    text->setPlaceholderText(tr("Anything else: behaviour, habitat, what it was on…"));
+    text->setTabChangesFocus(true);
+    text->setMaximumHeight(90);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    auto *form = new QFormLayout;
+    form->addRow(tr("Sex:"), sex);
+    form->addRow(tr("Life stage:"), stage);
+    form->addRow(tr("Alive or dead:"), alive);
+    form->addRow(tr("Flowers and fruits:"), flowers);
+    form->addRow(tr("Notes:"), text);
+    auto *intro = new QLabel(tr("For every photo of this run. Written into the photos when they're organised, and "
+                                "offered as annotations when they're uploaded to iNaturalist."),
+                             &dialog);
+    intro->setWordWrap(true);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(intro);
+    layout->addLayout(form);
+    layout->addWidget(buttons);
+    dialog.resize(460, dialog.sizeHint().height());
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    notes.sex = sex->currentData().toString();
+    notes.lifeStage = stage->currentData().toString();
+    notes.alive = alive->currentData().toString();
+    notes.flowers = flowers->currentData().toString();
+    notes.text = text->toPlainText().trimmed();
+    m_session.setNotes(row, notes);
+    changed(m_session.runStart(row));
+}
+
 QList<int> OrganiseView::rowsOnTrackWithoutLocation() const
 {
     QList<int> rows;
@@ -1979,6 +2280,40 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
     last->setShortcut(Qt::Key_E);
     last->setToolTip(tr("This photo keeps the name; the photos after it are left unnamed until "
                         "you name the next taxon."));
+    if (!taxon.isEmpty()) {
+        QAction *unsure = menu.addAction(tr("Not Sure of \u201c%1\u201d").arg(taxon), this, [this, row] { toggleUnsure(row); });
+        unsure->setCheckable(true);
+        unsure->setChecked(m_session.isUnsure(row));
+        unsure->setShortcut(Qt::Key_U);
+        unsure->setToolTip(tr("Mark the name as uncertain, to come back to (Shift+U goes to the next one). When "
+                              "organising, such runs can go into \u201ccf.\u201d folders."));
+        QAction *notes = menu.addAction(m_session.notesAt(row).isEmpty() ? tr("Notes for This Run…")
+                                                                         : tr("Notes for This Run (%1)…")
+                                                                               .arg(m_session.notesAt(row).summary()),
+                                        this, [this, row] { editNotes(row); });
+        notes->setShortcut(Qt::Key_T);
+        notes->setToolTip(tr("Sex, life stage, alive or dead, flowers or fruit, and anything else: written into "
+                             "the photos when they're organised, and offered when uploading to iNaturalist."));
+    }
+    if (m_session.unsureCount() > 0) {
+        QAction *next = menu.addAction(tr("Go to the Next Not Sure"), this, [this] { goToNextUnsure(); });
+        next->setShortcut(Qt::SHIFT | Qt::Key_U);
+    }
+    menu.addSeparator();
+    const QList<int> comparing = compareCandidates();
+    QAction *compareAction = menu.addAction(m_list->selectionModel()->selectedIndexes().size() > 1
+                                                ? tr("Compare Side by Side")
+                                                : tr("Compare Its Burst Side by Side"),
+                                            this, [this] { compare(); });
+    compareAction->setShortcut(Qt::Key_C);
+    compareAction->setEnabled(comparing.size() >= 2);
+    compareAction->setToolTip(tr("Two to four photos at once, zoomed and panned together, to choose the sharpest."));
+    const auto inBurst = std::find_if(m_bursts.cbegin(), m_bursts.cend(),
+                                      [row](const organise::Burst &b) { return b.contains(row); });
+    if (inBurst != m_bursts.cend())
+        menu.addAction(tr("Keep This, Reject the Rest of the Burst (%n more)", nullptr, inBurst->size() - 1), this,
+                       [this, row] { rejectRestOfBurst(row); });
+    menu.addSeparator();
     QAction *locate = menu.addAction(tr("Set Location on Map…"), this, [this] { setLocationOnMap(); });
     locate->setShortcut(Qt::Key_G);
     locate->setToolTip(tr("Put a pin on a map where the selected photos were taken, or move it: "
@@ -2036,6 +2371,18 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
         case Qt::Key_B:
             toggleBest();
             return true;
+        case Qt::Key_C:
+            compare();
+            return true;
+        case Qt::Key_U:
+            if (key->modifiers() & Qt::ShiftModifier)
+                goToNextUnsure();
+            else
+                toggleUnsure(row);
+            return true;
+        case Qt::Key_T:
+            editNotes(row);
+            return true;
         case Qt::Key_G:
             if (key->modifiers() & Qt::ShiftModifier)
                 geotagFromGpx();
@@ -2067,7 +2414,25 @@ void OrganiseView::commit()
         loadMore(true);
         return;
     }
-    const organise::OrganisePlan plan = m_session.plan();
+    // Names marked not sure: into "cf." folders, or as they are?
+    bool markUnsure = false;
+    if (m_session.unsureCount() > 0) {
+        QMessageBox ask(QMessageBox::Question, tr("Organise into Folders"),
+                        tr("%n name(s) are marked not sure.", nullptr, m_session.unsureCount()), QMessageBox::NoButton,
+                        this);
+        ask.setInformativeText(tr("Put their photos in \u201ccf.\u201d folders (\u201cPterostylis cf. nana\u201d, "
+                                  "\u201ccf. Scarlet Robin\u201d), apart from any you're sure of? Or in the "
+                                  "folders of the names as given?"));
+        QPushButton *cf = ask.addButton(tr("Use cf. Folders"), QMessageBox::AcceptRole);
+        QPushButton *asGiven = ask.addButton(tr("Use the Names as Given"), QMessageBox::NoRole);
+        ask.addButton(QMessageBox::Cancel);
+        ask.setDefaultButton(cf);
+        ask.exec();
+        if (ask.clickedButton() != cf && ask.clickedButton() != asGiven)
+            return;
+        markUnsure = ask.clickedButton() == cf;
+    }
+    const organise::OrganisePlan plan = m_session.plan(markUnsure);
     if (plan.folders.isEmpty() && plan.rejects.isEmpty())
         return;
     QStringList lines;
@@ -2254,9 +2619,31 @@ void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename)
             sidecars.insert(i, created);
         m_session.refreshFileStats(i);   // still recognised after an undo
     }
+    // Notes: into every photo of a run that has them, going into a folder.
+    QStringList noteFailures;
+    bool notesWritten = false;
+    for (const organise::FolderMove &f : plan.folders) {
+        for (int i : f.items) {
+            const organise::RunNotes notes = m_session.notesAt(i);
+            if (notes.isEmpty())
+                continue;
+            QString created, error;
+            if (!organise::OrganiseSession::writeNotes(m_session.items().at(i), notes, &created, &error))
+                noteFailures << QStringLiteral("%1: %2").arg(m_session.items().at(i).baseName, error);
+            if (!created.isEmpty() && !sidecars.contains(i))
+                sidecars.insert(i, created);
+            m_session.refreshFileStats(i);
+            notesWritten = true;
+        }
+    }
     QApplication::restoreOverrideCursor();
-    if (!m_session.bestShots().isEmpty())
+    if (!m_session.bestShots().isEmpty() || notesWritten)
         m_session.saveProgress();
+    if (!noteFailures.isEmpty())
+        QMessageBox::warning(this, tr("Organise into Folders"),
+                             tr("The notes couldn't be written into %Ln photo(s); they're organised anyway:\n\n%1",
+                                nullptr, int(noteFailures.size()))
+                                 .arg(noteFailures.mid(0, 10).join(QLatin1Char('\n'))));
     if (!ratingFailures.isEmpty())
         QMessageBox::warning(this, tr("Organise into Folders"),
                              tr("%Ln best shot(s) couldn't be rated, so the library won't know them "

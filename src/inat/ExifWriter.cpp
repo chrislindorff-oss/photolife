@@ -41,6 +41,37 @@ Exiv2::URationalValue toGpsRational(double absDecimalDegrees)
 
 } // namespace
 
+namespace {
+
+// Registers PhotoLife's XMP namespace with exiv2, once.
+void registerPhotoLifeNs()
+{
+    static const bool done = [] {
+        try {
+            Exiv2::XmpProperties::registerNs(kPhotoLifeXmpNs, "photolife");
+        } catch (const Exiv2::Error &) {
+        }
+        return true;
+    }();
+    (void)done;
+}
+
+void setNotes(Exiv2::XmpData &xmp, const QHash<QString, QString> &photolife, const QString &description)
+{
+    registerPhotoLifeNs();
+    for (auto it = photolife.constBegin(); it != photolife.constEnd(); ++it) {
+        const std::string key = "Xmp.photolife." + it.key().toStdString();
+        for (auto x = xmp.findKey(Exiv2::XmpKey(key)); x != xmp.end(); x = xmp.findKey(Exiv2::XmpKey(key)))
+            xmp.erase(x);
+        if (!it.value().trimmed().isEmpty())
+            xmp[key] = it.value().trimmed().toStdString();
+    }
+    if (!description.trimmed().isEmpty())
+        xmp["Xmp.dc.description"] = "lang=\"x-default\" " + description.trimmed().toStdString();
+}
+
+} // namespace
+
 bool writeExif(const QString &path, const ExifFields &fields, QString *error)
 {
     try {
@@ -96,6 +127,9 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
             exif["Exif.Photo.UserComment"] =
                 QStringLiteral("charset=Ascii %1").arg(fields.taxonName).toStdString();
         }
+
+        if (!fields.photolife.isEmpty() || !fields.description.isEmpty())
+            setNotes(image->xmpData(), fields.photolife, fields.description);
 
         if (fields.rating) {
             // Both where photo programs look: XMP (Lightroom, darktable,
@@ -194,6 +228,12 @@ bool writeSidecarGps(const QString &path, double latitude, double longitude, QSt
         xmp["Xmp.exif.GPSLatitude"] = xmpCoordinate(latitude, true).toStdString();
         xmp["Xmp.exif.GPSLongitude"] = xmpCoordinate(longitude, false).toStdString();
     }, error);
+}
+
+bool writeSidecarNotes(const QString &path, const QHash<QString, QString> &photolife, const QString &description,
+                       QString *error)
+{
+    return updateSidecar(path, [&](Exiv2::XmpData &xmp) { setNotes(xmp, photolife, description); }, error);
 }
 
 bool removeSidecarGps(const QString &path, QString *error)

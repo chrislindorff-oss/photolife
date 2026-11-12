@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
 #include <QString>
 
 #include <optional>
@@ -33,6 +34,10 @@ ExifData readJpegExif(const QString &path);
 // The star rating (0-5) in a JPEG's XMP or in an XMP sidecar file, as photo
 // programs write it (xmp:Rating); nullopt when there's none.
 std::optional<int> readXmpRating(const QString &path);
+// Notes PhotoLife wrote into a JPEG's XMP or an XMP sidecar (Organise's run
+// notes): "sex", "lifeStage", "alive", "flowers", "notes" -> value; empty
+// when there are none.
+QHash<QString, QString> readXmpNotes(const QString &path);
 // The GPS position in an XMP sidecar (exif:GPSLatitude/GPSLongitude, in XMP's
 // "DDD,MM.mmmmk" or "DDD,MM,SSk" form), as Lightroom, darktable and
 // PhotoLife's Set Location write it; empty when there's none.

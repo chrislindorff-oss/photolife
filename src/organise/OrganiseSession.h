@@ -32,11 +32,39 @@ struct Item
     qint64 mtime = 0;
 };
 
+// What was noted about a run's subject (Notes for This Run…), in
+// iNaturalist's own annotation terms so an upload can carry them across;
+// empty fields mean "not noted".
+struct RunNotes
+{
+    QString sex;          // "Female", "Male", "Cannot Be Determined"
+    QString lifeStage;    // "Adult", "Juvenile", "Egg", "Larva", "Pupa", "Nymph", "Teneral", "Subimago"
+    QString alive;        // "Alive", "Dead", "Cannot Be Determined"
+    QString flowers;      // "Flowers", "Fruits or Seeds", "Flower Buds", "No Flowers or Fruits"
+    QString text;         // anything else
+    bool isEmpty() const
+    {
+        return sex.isEmpty() && lifeStage.isEmpty() && alive.isEmpty() && flowers.isEmpty() && text.trimmed().isEmpty();
+    }
+    // "Female · Adult · Alive · on a fence post": for captions and descriptions.
+    QString summary() const;
+    bool operator==(const RunNotes &o) const = default;
+};
+
 // A run of photos going into one folder.
 struct FolderMove
 {
     QString folderName;      // as it will be created (sanitised)
     QList<int> items;        // indexes into OrganiseSession::items()
+};
+
+// A burst: photos taken in quick succession, first and last index.
+struct Burst
+{
+    int first = 0;
+    int last = 0;
+    int size() const { return last - first + 1; }
+    bool contains(int i) const { return i >= first && i <= last; }
 };
 
 // What committing would do.
@@ -107,6 +135,23 @@ public:
     // are never split.
     QList<int> proposedRunStarts(int gapSeconds) const;
 
+    // "Not sure" of the name: kept on the run's named photo. Organising can
+    // mark such folders "cf." (see uncertainName()).
+    bool isUnsure(int i) const { return m_unsure.contains(runStart(i)); }
+    void setUnsure(int i, bool unsure);   // the run photo `i` is in; nothing before the first name
+    int unsureCount() const { return int(m_unsure.size()); }
+    // The next named photo marked not sure after `i` (wrapping), -1 if none.
+    int nextUnsure(int i) const;
+
+    // Notes on a run's subject, kept on its named photo.
+    RunNotes notesAt(int i) const { return m_notes.value(runStart(i)); }
+    void setNotes(int i, const RunNotes &notes);   // the run photo `i` is in
+
+    // Bursts: runs of photos each taken within `gapSeconds` of the one
+    // before, two or more long, in order.
+    QList<Burst> bursts(int gapSeconds = kBurstGapSeconds) const;
+    static constexpr int kBurstGapSeconds = 2;
+
     bool isRejected(int i) const { return m_rejected.contains(i); }
     void setRejected(int i, bool rejected);   // a reject isn't a best shot
 
@@ -133,7 +178,8 @@ public:
     // The names given so far, each once, most recent first.
     QStringList recentNames() const;
 
-    OrganisePlan plan() const;
+    // `markUnsure`: runs marked not sure go into "cf." folders (uncertainName()).
+    OrganisePlan plan(bool markUnsure = false) const;
 
     // Names, rejects and naming ends, kept in kProgressFile in the folder so
     // a session can be picked up again; a shot is recognised by its name,
@@ -158,12 +204,20 @@ public:
     // The .gpx files directly in `folder`, by name.
     static QStringList gpxFilesIn(const QString &folder);
 
+    // A name marked uncertain: "Pterostylis cf. nana" for a binomial,
+    // "cf. Scarlet Robin" otherwise.
+    static QString uncertainName(const QString &name);
+
     // The folder name for a given name: sanitised for the file system.
     static QString folderNameFor(const QString &name);
     // Rates the shot 5 stars, as a best shot: in its JPEG's metadata, and in
     // an XMP sidecar for a RAW (the RAW itself is never written to; a new
     // sidecar's path is put in `createdSidecar`). Files keep their dates.
     static bool rateFiveStars(const Item &item, QString *createdSidecar = nullptr, QString *error = nullptr);
+    // Writes a run's notes into a shot's files as rateFiveStars() writes the
+    // rating: in a JPEG's XMP, and an XMP sidecar for a RAW (never the RAW).
+    static bool writeNotes(const Item &item, const RunNotes &notes, QString *createdSidecar = nullptr,
+                           QString *error = nullptr);
     // A photo's new base name when organising renames them:
     // "Scarlet Robin - Anakie, Victoria, 2025-10-18", or without the place
     // when there isn't one. Safe for the file system.
@@ -179,6 +233,8 @@ private:
     QSet<int> m_rejected;
     QSet<int> m_best;
     QSet<int> m_namingEnds;
+    QSet<int> m_unsure;              // named photos whose name is uncertain
+    QHash<int, RunNotes> m_notes;    // by named photo
     QStringList m_nameOrder;   // names in the order given (for recentNames())
     QString m_gpxPath;
     int m_gpxOffsetSeconds = 0;

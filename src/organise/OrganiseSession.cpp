@@ -8,6 +8,7 @@
 #include "util/PathSanitize.h"
 
 #include <QDir>
+#include <QRegularExpression>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -209,6 +210,8 @@ void OrganiseSession::setItems(const QString &folder, QList<Item> items, QList<I
     m_rejected.clear();
     m_best.clear();
     m_namingEnds.clear();
+    m_unsure.clear();
+    m_notes.clear();
     m_nameOrder.clear();
     m_gpxPath.clear();
     m_gpxOffsetSeconds = 0;
@@ -235,6 +238,8 @@ void OrganiseSession::setName(int i, const QString &name)
     const QString trimmed = name.simplified();
     if (trimmed.isEmpty()) {
         m_names.remove(i);
+        m_unsure.remove(i);
+        m_notes.remove(i);
         return;
     }
     m_names.insert(i, trimmed);
@@ -294,6 +299,79 @@ int OrganiseSession::runNumber(int i) const
             ++n;
     }
     return n;
+}
+
+QString RunNotes::summary() const
+{
+    QStringList parts;
+    for (const QString &p : {sex, lifeStage, alive, flowers}) {
+        if (!p.isEmpty())
+            parts << p;
+    }
+    if (!text.trimmed().isEmpty())
+        parts << text.simplified();
+    return parts.join(QStringLiteral(" · "));
+}
+
+void OrganiseSession::setUnsure(int i, bool unsure)
+{
+    const int start = runStart(i);
+    if (start < 0)
+        return;
+    if (unsure)
+        m_unsure.insert(start);
+    else
+        m_unsure.remove(start);
+}
+
+int OrganiseSession::nextUnsure(int i) const
+{
+    if (m_unsure.isEmpty())
+        return -1;
+    QList<int> marked(m_unsure.cbegin(), m_unsure.cend());
+    std::sort(marked.begin(), marked.end());
+    for (int m : std::as_const(marked)) {
+        if (m > i)
+            return m;
+    }
+    return marked.first();
+}
+
+void OrganiseSession::setNotes(int i, const RunNotes &notes)
+{
+    const int start = runStart(i);
+    if (start < 0)
+        return;
+    if (notes.isEmpty())
+        m_notes.remove(start);
+    else
+        m_notes.insert(start, notes);
+}
+
+QList<Burst> OrganiseSession::bursts(int gapSeconds) const
+{
+    QList<Burst> out;
+    int first = 0;
+    for (int i = 1; i <= count(); ++i) {
+        const bool continues = i < count() && m_items.at(i).taken.isValid() && m_items.at(i - 1).taken.isValid()
+                               && m_items.at(i - 1).taken.secsTo(m_items.at(i).taken) <= gapSeconds
+                               && m_items.at(i - 1).taken.secsTo(m_items.at(i).taken) >= 0;
+        if (continues)
+            continue;
+        if (i - 1 > first)
+            out.append({first, i - 1});
+        first = i;
+    }
+    return out;
+}
+
+QString OrganiseSession::uncertainName(const QString &name)
+{
+    static const QRegularExpression binomial(QStringLiteral("^([A-Z][a-z-]+) ([a-z].*)$"));
+    const QRegularExpressionMatch m = binomial.match(name.simplified());
+    if (m.hasMatch())
+        return QStringLiteral("%1 cf. %2").arg(m.captured(1), m.captured(2));
+    return QStringLiteral("cf. ") + name.simplified();
 }
 
 void OrganiseSession::setRejected(int i, bool rejected)
@@ -430,6 +508,45 @@ bool OrganiseSession::rateFiveStars(const Item &item, QString *createdSidecar, Q
     return inat::writeSidecarRating(sidecar, 5, error);
 }
 
+bool OrganiseSession::writeNotes(const Item &item, const RunNotes &notes, QString *createdSidecar, QString *error)
+{
+    const QHash<QString, QString> fields{{QStringLiteral("sex"), notes.sex},
+                                         {QStringLiteral("lifeStage"), notes.lifeStage},
+                                         {QStringLiteral("alive"), notes.alive},
+                                         {QStringLiteral("flowers"), notes.flowers},
+                                         {QStringLiteral("notes"), notes.text.simplified()}};
+    const QString description = notes.summary();
+    QString sidecar;
+    bool needsSidecar = false;
+    for (const QString &path : item.files) {
+        const QString ext = QFileInfo(path).suffix().toLower();
+        if (ext == QLatin1String("xmp")) {
+            if (sidecar.isEmpty())
+                sidecar = path;
+        } else if (ext == QLatin1String("jpg") || ext == QLatin1String("jpeg")) {
+            const QDateTime modified = QFileInfo(path).lastModified();
+            inat::ExifFields exif;
+            exif.photolife = fields;
+            exif.description = description;
+            if (!inat::writeExifSafely(path, exif, error))
+                return false;
+            QFile file(path);
+            if (file.open(QIODevice::ReadWrite))
+                file.setFileTime(modified, QFileDevice::FileModificationTime);
+        } else if (item.kinds.contains(QFileInfo(path).suffix().toUpper())) {
+            needsSidecar = true;
+        }
+    }
+    if (!needsSidecar)
+        return true;
+    if (sidecar.isEmpty()) {
+        sidecar = QFileInfo(item.files.first()).absoluteDir().filePath(item.baseName + QStringLiteral(".xmp"));
+        if (createdSidecar && !QFileInfo::exists(sidecar))
+            *createdSidecar = sidecar;
+    }
+    return inat::writeSidecarNotes(sidecar, fields, description, error);
+}
+
 QString OrganiseSession::renamedBase(const QString &folderName, const QString &place,
                                      const QDateTime &taken)
 {
@@ -447,7 +564,7 @@ QString OrganiseSession::renamedBase(const QString &folderName, const QString &p
     return folderNameFor(out);
 }
 
-OrganisePlan OrganiseSession::plan() const
+OrganisePlan OrganiseSession::plan(bool markUnsure) const
 {
     OrganisePlan plan;
     QHash<QString, int> folderIndex;   // folded name -> plan.folders index
@@ -456,11 +573,13 @@ OrganisePlan OrganiseSession::plan() const
             plan.rejects << i;
             continue;
         }
-        const QString name = runName(i);
+        QString name = runName(i);
         if (name.isEmpty()) {
             ++plan.unnamed;
             continue;
         }
+        if (markUnsure && isUnsure(i))
+            name = uncertainName(name);
         const QString key = folded(name);
         auto it = folderIndex.find(key);
         if (it == folderIndex.end()) {
@@ -489,7 +608,7 @@ bool OrganiseSession::saveProgress() const
     }
     for (int i = 0; i < count(); ++i) {
         if (!m_names.contains(i) && !m_rejected.contains(i) && !m_namingEnds.contains(i) && !m_best.contains(i))
-            continue;
+            continue;   // (unsure and notes live on named photos)
         const Item &item = m_items.at(i);
         QJsonObject o{{QStringLiteral("size"), double(item.size)},
                       {QStringLiteral("mtime"), double(item.mtime)}};
@@ -501,6 +620,19 @@ bool OrganiseSession::saveProgress() const
             o.insert(QStringLiteral("namingEnd"), true);
         if (m_best.contains(i))
             o.insert(QStringLiteral("best"), true);
+        if (m_unsure.contains(i))
+            o.insert(QStringLiteral("unsure"), true);
+        if (const auto n = m_notes.constFind(i); n != m_notes.cend()) {
+            QJsonObject notes;
+            const QList<QPair<const char *, QString>> fields{{"sex", n->sex}, {"lifeStage", n->lifeStage},
+                                                             {"alive", n->alive}, {"flowers", n->flowers},
+                                                             {"text", n->text}};
+            for (const auto &[key, value] : fields) {
+                if (!value.isEmpty())
+                    notes.insert(QLatin1String(key), value);
+            }
+            o.insert(QStringLiteral("notes"), notes);
+        }
         shots.insert(item.baseName, o);
     }
     // The GPS track chosen for the folder: by name when it's in the folder
@@ -623,6 +755,19 @@ QJsonObject OrganiseSession::applyProgress(int from)
             m_namingEnds.insert(i);
         if (o.value(QStringLiteral("best")).toBool())
             m_best.insert(i);
+        if (!name.isEmpty() && o.value(QStringLiteral("unsure")).toBool())
+            m_unsure.insert(i);
+        if (!name.isEmpty() && o.contains(QStringLiteral("notes"))) {
+            const QJsonObject n = o.value(QStringLiteral("notes")).toObject();
+            RunNotes notes;
+            notes.sex = n.value(QStringLiteral("sex")).toString();
+            notes.lifeStage = n.value(QStringLiteral("lifeStage")).toString();
+            notes.alive = n.value(QStringLiteral("alive")).toString();
+            notes.flowers = n.value(QStringLiteral("flowers")).toString();
+            notes.text = n.value(QStringLiteral("text")).toString();
+            if (!notes.isEmpty())
+                m_notes.insert(i, notes);
+        }
     }
     return root;
 }
@@ -633,6 +778,8 @@ void OrganiseSession::clearProgress()
     m_rejected.clear();
     m_best.clear();
     m_namingEnds.clear();
+    m_unsure.clear();
+    m_notes.clear();
     m_nameOrder.clear();
     QFile::remove(QDir(m_folder).filePath(QLatin1String(kProgressFile)));
     saveProgress();   // the folder's GPS track isn't naming progress: it stays

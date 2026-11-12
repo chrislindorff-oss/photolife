@@ -17,6 +17,7 @@
 #include "scan/Exif.h"
 #include "scan/FileScanner.h"
 #include "organise/OrganiseSession.h"
+#include "organise/Sharpness.h"
 
 using namespace pl;
 using namespace pl::organise;
@@ -86,6 +87,11 @@ private slots:
     void fiveStarPhotosArriveAsBestShots();
     void locationIsWrittenAndKeptWithTheShot();
     void locationCanBeRemovedAgain();
+    void burstsAreShotsInQuickSuccession();
+    void unsureAndNotesAreKeptOnTheRun();
+    void unsureRunsCanGoIntoCfFolders();
+    void sharperScoresHigher();
+    void notesAreWrittenIntoThePhotos();
     void gpxTrackChoiceIsKeptWithTheFolder();
     void organiseRenamesShotsTogetherAndUndoPutsNamesBack();
     void neverOverwrites();
@@ -541,6 +547,159 @@ void TestOrganise::renamedBaseNames()
     const QString longName = OrganiseSession::renamedBase(QString(300, QLatin1Char('x')), QStringLiteral("Anakie"), taken);
     QVERIFY(longName.size() <= 200);
     QVERIFY(longName.endsWith(QStringLiteral(" - Anakie, 2025-10-18")));
+}
+
+void TestOrganise::burstsAreShotsInQuickSuccession()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    // 1000, 1001, 1002 (a burst), 1010 (alone), 1020, 1022 (a burst), 1030.
+    int n = 0;
+    for (qint64 t : {1000, 1001, 1002, 1010, 1020, 1022, 1030})
+        writeShot(dir, QStringLiteral("DSC_%1.jpg").arg(n++, 4, 10, QLatin1Char('0')), t);
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    const QList<Burst> b = s.bursts();
+    QCOMPARE(b.size(), 2);
+    QCOMPARE(b.at(0).first, 0);
+    QCOMPARE(b.at(0).last, 2);
+    QCOMPARE(b.at(0).size(), 3);
+    QCOMPARE(b.at(1).first, 4);
+    QCOMPARE(b.at(1).last, 5);
+    QVERIFY(b.at(1).contains(5) && !b.at(1).contains(6));
+    QCOMPARE(s.bursts(0).size(), 0);    // nothing in the same second
+    QCOMPARE(s.bursts(10).size(), 1);   // everything within 10 s: one long burst
+}
+
+void TestOrganise::unsureAndNotesAreKeptOnTheRun()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    for (int i = 0; i < 6; ++i)
+        writeShot(dir, QStringLiteral("DSC_%1.jpg").arg(i), 1000 + i * 100);
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    s.setUnsure(0, true);                     // before any name: nothing to mark
+    QCOMPARE(s.unsureCount(), 0);
+    s.setName(1, QStringLiteral("Pterostylis nana"));
+    s.setName(4, QStringLiteral("Scarlet Robin"));
+    s.setUnsure(3, true);                     // photo 3 is in photo 1's run
+    QVERIFY(s.isUnsure(1) && s.isUnsure(2) && s.isUnsure(3));
+    QVERIFY(!s.isUnsure(4));
+    QCOMPARE(s.nextUnsure(1), 1);             // wraps round to the only one
+    RunNotes notes;
+    notes.sex = QStringLiteral("Male");
+    notes.lifeStage = QStringLiteral("Adult");
+    notes.text = QStringLiteral("  on a fence post ");
+    s.setNotes(5, notes);                     // photo 5 is in photo 4's run
+    QCOMPARE(s.notesAt(4), notes);
+    QCOMPARE(s.notesAt(4).summary(), QStringLiteral("Male · Adult · on a fence post"));
+    QVERIFY(s.notesAt(2).isEmpty());
+    QVERIFY(s.saveProgress());
+
+    OrganiseSession again;
+    again.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    again.loadProgress();
+    QVERIFY(again.isUnsure(2));
+    QVERIFY(!again.isUnsure(5));
+    QCOMPARE(again.notesAt(5), notes);
+    // Taking the name away takes its mark and notes too.
+    again.setName(4, QString());
+    QVERIFY(again.notesAt(4).isEmpty());
+    again.setNotes(1, RunNotes{});            // empty notes are none
+    again.setUnsure(1, false);
+    QCOMPARE(again.unsureCount(), 0);
+    QCOMPARE(again.nextUnsure(0), -1);
+}
+
+void TestOrganise::unsureRunsCanGoIntoCfFolders()
+{
+    QCOMPARE(OrganiseSession::uncertainName(QStringLiteral("Pterostylis nana")), QStringLiteral("Pterostylis cf. nana"));
+    QCOMPARE(OrganiseSession::uncertainName(QStringLiteral("Caladenia carnea var. minor")),
+             QStringLiteral("Caladenia cf. carnea var. minor"));
+    QCOMPARE(OrganiseSession::uncertainName(QStringLiteral("Scarlet Robin")), QStringLiteral("cf. Scarlet Robin"));
+    QCOMPARE(OrganiseSession::uncertainName(QStringLiteral("Pterostylis")), QStringLiteral("cf. Pterostylis"));
+
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    for (int i = 0; i < 4; ++i)
+        writeShot(dir, QStringLiteral("DSC_%1.jpg").arg(i), 1000 + i * 100);
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    s.setName(0, QStringLiteral("Pterostylis nana"));
+    s.setName(2, QStringLiteral("Pterostylis nana"));
+    s.setUnsure(2, true);
+    // Off: one folder, as before.
+    QCOMPARE(s.plan().folders.size(), 1);
+    // On: the sure run and the unsure one go apart.
+    const OrganisePlan plan = s.plan(true);
+    QCOMPARE(plan.folders.size(), 2);
+    QCOMPARE(plan.folders.at(0).folderName, QStringLiteral("Pterostylis nana"));
+    QCOMPARE(plan.folders.at(1).folderName, QStringLiteral("Pterostylis cf. nana"));
+    QCOMPARE(plan.folders.at(1).items, (QList<int>{2, 3}));
+}
+
+void TestOrganise::sharperScoresHigher()
+{
+    // Fine detail, and the same blurred.
+    QImage sharp(600, 400, QImage::Format_RGB32);
+    for (int y = 0; y < sharp.height(); ++y)
+        for (int x = 0; x < sharp.width(); ++x)
+            sharp.setPixel(x, y, ((x / 3 + y / 3) % 2) ? qRgb(230, 220, 200) : qRgb(30, 40, 20));
+    const QImage soft = sharp.scaled(150, 100, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)
+                            .scaled(600, 400, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    QVERIFY(sharpness(sharp) > sharpness(soft) * 5);
+    QImage flat(600, 400, QImage::Format_RGB32);
+    flat.fill(Qt::gray);
+    QCOMPARE(sharpness(flat), 0.0);
+    QCOMPARE(sharpness(QImage()), 0.0);
+    // From a file.
+    QTemporaryDir tmp;
+    const QString path = QDir(tmp.path()).filePath(QStringLiteral("sharp.png"));
+    QVERIFY(sharp.save(path));
+    const std::optional<double> fromFile = sharpnessOfFile(path);
+    QVERIFY(fromFile.has_value());
+    QVERIFY(*fromFile > sharpness(soft));
+    QVERIFY(!sharpnessOfFile(QDir(tmp.path()).filePath(QStringLiteral("missing.jpg"))).has_value());
+}
+
+void TestOrganise::notesAreWrittenIntoThePhotos()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.jpg"), 1000);   // a JPEG
+    writeShot(dir, QStringLiteral("DSC_0002.NEF"), 2000);   // a RAW alone
+    writeShot(dir, QStringLiteral("DSC_0003.NEF"), 3000);   // a RAW with a rated sidecar
+    QVERIFY(inat::writeSidecarRating(dir.filePath(QStringLiteral("DSC_0003.xmp")), 3));
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    QCOMPARE(s.count(), 3);
+    RunNotes notes;
+    notes.sex = QStringLiteral("Female");
+    notes.alive = QStringLiteral("Alive");
+    notes.text = QStringLiteral("feeding on <Banksia> & calling");
+    QFile raw(dir.filePath(QStringLiteral("DSC_0002.NEF")));
+    QVERIFY(raw.open(QIODevice::ReadOnly));
+    const QByteArray rawBefore = raw.readAll();
+    raw.close();
+    const QDateTime jpegDate = QFileInfo(dir.filePath(QStringLiteral("DSC_0001.jpg"))).lastModified();
+
+    for (int i = 0; i < 3; ++i) {
+        QString created, error;
+        QVERIFY2(OrganiseSession::writeNotes(s.items().at(i), notes, &created, &error), qPrintable(error));
+        QCOMPARE(created.isEmpty(), i != 1);   // only the lone RAW needed a new sidecar
+    }
+    const QHash<QString, QString> expected{{QStringLiteral("sex"), QStringLiteral("Female")},
+                                           {QStringLiteral("alive"), QStringLiteral("Alive")},
+                                           {QStringLiteral("notes"), QStringLiteral("feeding on <Banksia> & calling")}};
+    QCOMPARE(scan::readXmpNotes(dir.filePath(QStringLiteral("DSC_0001.jpg"))), expected);
+    QCOMPARE(scan::readXmpNotes(dir.filePath(QStringLiteral("DSC_0002.xmp"))), expected);
+    QCOMPARE(scan::readXmpNotes(dir.filePath(QStringLiteral("DSC_0003.xmp"))), expected);
+    QCOMPARE(scan::readXmpRating(dir.filePath(QStringLiteral("DSC_0003.xmp"))).value_or(-1), 3);   // kept
+    QCOMPARE(QFileInfo(dir.filePath(QStringLiteral("DSC_0001.jpg"))).lastModified(), jpegDate);
+    QVERIFY(raw.open(QIODevice::ReadOnly));
+    QCOMPARE(raw.readAll(), rawBefore);   // the RAW untouched
+    QVERIFY(scan::readXmpNotes(dir.filePath(QStringLiteral("nothing.xmp"))).isEmpty());
 }
 
 void TestOrganise::locationCanBeRemovedAgain()

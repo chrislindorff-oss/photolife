@@ -63,6 +63,7 @@ qt_add_library(photolife_core STATIC
     lightroom/LightroomImporter.h lightroom/LightroomImporter.cpp
     match/CandidateFinder.h match/CandidateFinder.cpp
     organise/CardImporter.h organise/CardImporter.cpp
+    organise/Sharpness.h    organise/Sharpness.cpp
     organise/OrganiseMover.h organise/OrganiseMover.cpp
     organise/OrganiseSession.h organise/OrganiseSession.cpp
     match/MatchEngine.h     match/MatchEngine.cpp
@@ -125,6 +126,7 @@ qt_add_library(photolife_core STATIC
     ui/CatalogueConnectDialog.h ui/CatalogueConnectDialog.cpp
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
     ui/CardImportDialog.h   ui/CardImportDialog.cpp
+    ui/CompareViewer.h      ui/CompareViewer.cpp
     ui/CaptureDelegate.h    ui/CaptureDelegate.cpp
     ui/ContactSheetDialog.h ui/ContactSheetDialog.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp

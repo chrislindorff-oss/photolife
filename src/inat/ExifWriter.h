@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QString>
 
 #include <optional>
@@ -18,6 +19,12 @@ struct ExifFields
     QString taxonName;                  // -> UserComment
     std::optional<int> rating;          // 0-5 stars -> Xmp.xmp.Rating and Exif.Image.Rating
     bool removeGps = false;             // takes the whole GPS block out (latitude/longitude then ignored)
+    // Notes on the subject (Organise's run notes): `photolife` holds them by
+    // name ("sex", "lifeStage", "alive", "flowers", "notes") in PhotoLife's own
+    // XMP namespace; `description` goes in dc:description, which other
+    // programs show. Empty values are left out.
+    QHash<QString, QString> photolife;
+    QString description;
 };
 
 // Writes `fields` into the JPEG at `path`, in place, via exiv2. Returns false
@@ -42,6 +49,13 @@ bool writeSidecarRating(const QString &path, int rating, QString *error = nullpt
 // Sets the GPS position (exif:GPSLatitude/GPSLongitude) in the XMP sidecar at
 // `path`, the same way: an existing sidecar keeps everything else in it.
 bool writeSidecarGps(const QString &path, double latitude, double longitude, QString *error = nullptr);
+// Writes notes (see ExifFields::photolife / description) into the XMP sidecar
+// at `path`, created if there isn't one; everything else in it stays.
+bool writeSidecarNotes(const QString &path, const QHash<QString, QString> &photolife, const QString &description,
+                       QString *error = nullptr);
+// PhotoLife's XMP namespace, for the notes.
+inline constexpr const char *kPhotoLifeXmpNs = "https://photolife-nature.web.app/ns/1.0/";
+
 // Takes the GPS position out of the XMP sidecar at `path`, keeping everything
 // else in it. True when there's no sidecar: nothing to remove.
 bool removeSidecarGps(const QString &path, QString *error = nullptr);
