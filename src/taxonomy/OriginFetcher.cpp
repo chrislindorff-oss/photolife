@@ -2,6 +2,7 @@
 
 #include "net/INatClient.h"
 #include "taxonomy/TaxonomyStore.h"
+#include <QPointer>
 
 namespace pl::taxonomy {
 
@@ -46,7 +47,9 @@ void OriginFetcher::startNext()
 void OriginFetcher::fetchPage()
 {
     m_inat.introducedSpeciesCounts(
-        m_rootTaxon, m_place, m_page, kPerPage, [this](net::Outcome<net::SpeciesCountsPage> out) {
+        m_rootTaxon, m_place, m_page, kPerPage, [this, self = QPointer<OriginFetcher>(this)](net::Outcome<net::SpeciesCountsPage> out) {
+            if (!self)
+                return;   // gone while the request was out
             if (!out.ok()) {
                 finishProject(false);
                 return;

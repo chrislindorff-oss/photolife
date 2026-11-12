@@ -3,6 +3,7 @@
 #include "net/INatParse.h"
 #include "taxonomy/TaxonomyStore.h"
 
+#include <QPointer>
 #include <QSet>
 
 namespace pl::inat {
@@ -47,7 +48,9 @@ void InatSpeciesListFetcher::fetchCountsPage()
         return;
     m_inat.userSpeciesCounts(
         m_request.userLogin, m_request.taxonId, m_request.placeId, m_request.quality, m_page,
-        kPerPage, [this](net::Outcome<net::SpeciesCountsPage> out) {
+        kPerPage, [this, self = QPointer<InatSpeciesListFetcher>(this)](net::Outcome<net::SpeciesCountsPage> out) {
+            if (!self)
+                return;   // gone while the request was out
             if (checkCancelled())
                 return;
             if (!out.ok()) {
@@ -113,7 +116,9 @@ void InatSpeciesListFetcher::fetchNextTaxaBatch()
                   m_missingDone, int(m_missing.size()));
 
     const QList<qint64> batch = m_missing.mid(m_missingDone, kTaxaBatchSize);
-    m_inat.fetchTaxa(batch, [this, batch](net::Outcome<QList<taxonomy::Taxon>> out) {
+    m_inat.fetchTaxa(batch, [this, self = QPointer<InatSpeciesListFetcher>(this), batch](net::Outcome<QList<taxonomy::Taxon>> out) {
+        if (!self)
+            return;   // gone while the request was out
         if (checkCancelled())
             return;
         if (!out.ok()) {

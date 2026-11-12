@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QSet>
 #include <QSqlDatabase>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
 #include <QVariant>
@@ -142,15 +143,19 @@ void CommonNameFetcher::fetchNext()
             // Recorded per batch, so a stopped run carries on from here.
             QSqlDatabase db = QSqlDatabase::database(m_connection, false);
             db.transaction();
+            bool recorded = true;
             const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
             for (const Taxon &t : std::as_const(full)) {
                 QSqlQuery q(db);
                 q.prepare(QStringLiteral("INSERT OR REPLACE INTO fetched (inat_id, fetched_at) VALUES (?, ?)"));
                 q.addBindValue(qlonglong(t.inatId));
                 q.addBindValue(now);
-                q.exec();
+                if (!q.exec())
+                    recorded = false;
             }
-            db.commit();
+            // Unrecorded, these taxa are simply asked for again next time.
+            if (!db.commit() || !recorded)
+                qWarning().noquote() << "Common names: couldn't record what was fetched -" << db.lastError().text();
 
             m_done += int(batch.size());
             ++m_index;

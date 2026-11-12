@@ -18,6 +18,7 @@ private slots:
     void initTestCase();
     void init();
     void watchedRootsRoundTrip();
+    void settingsFileIsOwnerOnly();
     void databasePathDefaultsToAppData();
     void databasePathHonoursOverride();
     void databasePathExpandsLeadingTilde();
@@ -162,6 +163,36 @@ void TestSettings::inatSettingsDefaultEmptyAndRoundTrip()
     Settings reader;
     QCOMPARE(reader.inatUsername(), QStringLiteral("some_observer"));
     QCOMPARE(reader.inatApiToken(), QStringLiteral("test-token-value"));
+}
+
+void TestSettings::settingsFileIsOwnerOnly()
+{
+#ifdef Q_OS_WIN
+    QSKIP("The settings file is per-user on Windows.");
+#else
+    QString path;
+    {
+        Settings s;
+        s.setInatApiToken(QStringLiteral("a-secret"));
+        s.sync();
+        path = QSettings().fileName();
+    }
+    QVERIFY(QFile::exists(path));
+    const QFileDevice::Permissions others = QFileDevice::ReadGroup | QFileDevice::WriteGroup
+                                            | QFileDevice::ReadOther | QFileDevice::WriteOther;
+    QVERIFY(!(QFile::permissions(path) & others));
+    // Opened up by something else (an older version wrote it 664): closed again at start-up...
+    QVERIFY(QFile::setPermissions(path, QFile::permissions(path) | others));
+    {
+        Settings s;
+        QVERIFY(!(QFile::permissions(path) & others));
+        // ...and it stays closed when rewritten.
+        s.setInatApiToken(QStringLiteral("another"));
+        s.sync();
+    }
+    QVERIFY(!(QFile::permissions(path) & others));
+    QCOMPARE(Settings().inatApiToken(), QStringLiteral("another"));
+#endif
 }
 
 void TestSettings::startsWithOnlyTheLocalCatalogue()

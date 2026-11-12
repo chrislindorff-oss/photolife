@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QSqlDatabase>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -228,7 +229,14 @@ SyncService::Outcome SyncService::runLocal(Op op, const Config &config)
             QSqlQuery q(QSqlDatabase::database(restored.connectionName(), false));
             q.prepare(QStringLiteral("UPDATE catalogue_sync SET version = ? WHERE id = 1"));
             q.addBindValue(version);
-            q.exec();
+            if (!q.exec()) {
+                // Without its sync position the backup would look already sent.
+                out.error = tr("The backup couldn't be prepared: %1").arg(q.lastError().text());
+                q.finish();
+                restored.close();
+                removeDatabaseFiles(pulled);
+                return out;
+            }
         }
         const QString newBase = QFile::exists(base) ? base : pulled;
         if (!QFile::copy(newBase, basePath(pulled))) {
@@ -475,6 +483,11 @@ SyncService::Outcome SyncService::runInWorker(Op op, const Config &config)
         out.ok = true;
         return out;
     }
+    // Handled before the switch, each returning on its own.
+    case Op::Changes:
+    case Op::Discard:
+    case Op::RestoreBackup:
+        break;
     }
     return out;
 }

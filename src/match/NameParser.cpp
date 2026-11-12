@@ -11,16 +11,6 @@ QString lc(const QString &s)
     return s.toLower();
 }
 
-// Strips a leading token if it matches, returning true and removing it.
-bool takeLeading(QStringList &tokens, const QSet<QString> &words)
-{
-    if (!tokens.isEmpty() && words.contains(lc(tokens.first()))) {
-        tokens.removeFirst();
-        return true;
-    }
-    return false;
-}
-
 bool isSpMarker(const QString &t)
 {
     const QString l = lc(t);

@@ -13,9 +13,18 @@ QtNetworkTransport::QtNetworkTransport(QObject *parent)
 
 QtNetworkTransport::~QtNetworkTransport() = default;
 
+void QtNetworkTransport::setIdleTimeouts(int getMs, int sendMs)
+{
+    m_getIdleMs = getMs;
+    m_sendIdleMs = sendMs;
+}
+
 void QtNetworkTransport::send(const Request &request, Callback callback)
 {
     QNetworkRequest req(request.url);
+    // Without one, a connection that stalls leaves its caller waiting for good.
+    const int idleMs = request.verb == "GET" ? m_getIdleMs : m_sendIdleMs;
+    req.setTransferTimeout(idleMs);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                      QNetworkRequest::NoLessSafeRedirectPolicy);
     if (!request.userAgent.isEmpty())
@@ -36,7 +45,7 @@ void QtNetworkTransport::send(const Request &request, Callback callback)
         reply = m_nam->sendCustomRequest(req, request.verb, request.body);
     }
 
-    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, callback] {
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, callback, idleMs] {
         Reply out;
         out.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         out.body = reply->readAll();
@@ -51,7 +60,9 @@ void QtNetworkTransport::send(const Request &request, Callback callback)
                 out.retryAfterSeconds = seconds;
         }
 
-        if (reply->error() != QNetworkReply::NoError && out.status == 0)
+        if (reply->error() == QNetworkReply::OperationCanceledError && out.status == 0)
+            out.error = QStringLiteral("no response for %1 seconds").arg(idleMs / 1000);
+        else if (reply->error() != QNetworkReply::NoError && out.status == 0)
             out.error = reply->errorString();
 
         reply->deleteLater();

@@ -59,7 +59,10 @@ void MatchReviewer::learnAlias(const QString &rawText, qint64 taxonInatId, const
     q.addBindValue(TaxonomyStore::foldName(rawText));
     q.addBindValue(qlonglong(taxonInatId));
     q.addBindValue(scope.isEmpty() ? QStringLiteral("global") : scope);
-    q.exec();
+    // Not fatal to the review (the photo is matched either way), but the next
+    // photo of this name would be asked about again: worth a line in the log.
+    if (!q.exec())
+        qWarning().noquote() << "Couldn't remember the name" << rawText.trimmed() << "-" << q.lastError().text();
 }
 
 bool MatchReviewer::writeDecision(qint64 captureId, qint64 taxonInatId, const QString &status,

@@ -3,6 +3,7 @@
 #include "net/INatClient.h"
 
 #include <algorithm>
+#include <QPointer>
 
 namespace pl::taxonomy {
 
@@ -37,7 +38,9 @@ void TreeChangeFinder::fetchNext()
     }
     const QList<qint64> batch = m_toFetch.mid(0, kBatch);
     m_toFetch.remove(0, batch.size());
-    m_inat.fetchTaxa(batch, [this](net::Outcome<QList<Taxon>> out) {
+    m_inat.fetchTaxa(batch, [this, self = QPointer<TreeChangeFinder>(this)](net::Outcome<QList<Taxon>> out) {
+        if (!self)
+            return;   // gone while the request was out
         if (!out.ok()) {
             done(out.error);
             return;

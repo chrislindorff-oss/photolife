@@ -3,6 +3,7 @@
 #include "geo/Distance.h"
 #include "net/INatClient.h"
 
+#include <QPointer>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QtMath>
@@ -119,7 +120,9 @@ void InatObservationFetcher::fetchAllPage()
         return;
 
     m_inat.fetchAllObservations(
-        m_userLogin, m_placeId, m_allTaxonId, m_idAbove, [this](net::Outcome<net::ObservationPage> out) {
+        m_userLogin, m_placeId, m_allTaxonId, m_idAbove, [this, self = QPointer<InatObservationFetcher>(this)](net::Outcome<net::ObservationPage> out) {
+            if (!self)
+                return;   // gone while the request was out
             if (checkCancelled())
                 return;
             if (!out.ok()) {
@@ -187,7 +190,9 @@ void InatObservationFetcher::fetchPage()
 
     m_inat.fetchObservations(
         m_userLogin, m_batches.at(m_batchIndex), m_placeId, QDate(), QDate(), m_page,
-        [this](net::Outcome<net::ObservationPage> out) {
+        [this, self = QPointer<InatObservationFetcher>(this)](net::Outcome<net::ObservationPage> out) {
+            if (!self)
+                return;   // gone while the request was out
             if (checkCancelled())
                 return;
             if (!out.ok()) {

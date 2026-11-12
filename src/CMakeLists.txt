@@ -225,6 +225,16 @@ set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(QXlsx)
 target_link_libraries(photolife_core PRIVATE QXlsx::QXlsx)
 target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_EXIV2)
+
+# Warnings on, for this project's own code (PRIVATE: not for what links to it).
+# Unused parameters are routine in Qt overrides; a struct initialised with only
+# its leading members relies on the defaults for the rest, on purpose.
+if(MSVC)
+    target_compile_options(photolife_core PRIVATE /W4 /wd4100 /wd4458 /wd4456 /wd4457)
+else()
+    target_compile_options(photolife_core PRIVATE -Wall -Wextra -Wno-unused-parameter
+                                                  -Wno-missing-field-initializers)
+endif()
 message(STATUS "exiv2 ${Exiv2_VERSION}: EXIF writing enabled")
 
 # Schema migrations and the help pages are compiled in so the binary is

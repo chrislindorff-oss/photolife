@@ -125,6 +125,12 @@ public:
     // when a *new process* (e.g. the self-relaunch after a catalogue change)
     // starts reading it. Call this before spawning that new process.
     void sync();
+    // The settings file holds passwords and tokens in plain text: readable
+    // and writable by its owner only. Done at start-up, after sync() and on
+    // the way out; a rewrite keeps the mode. Nothing to do on Windows, where
+    // the file is already per-user.
+    void protectFile();
+    ~Settings();
 
     QByteArray mainWindowGeometry() const;
     void setMainWindowGeometry(const QByteArray &geometry);

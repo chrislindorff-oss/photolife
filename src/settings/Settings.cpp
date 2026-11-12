@@ -1,6 +1,7 @@
 #include "settings/Settings.h"
 
 #include <QDir>
+#include <QFile>
 #include <QJsonDocument>
 #include <QObject>
 #include <QStandardPaths>
@@ -54,7 +55,27 @@ QString expandHome(const QString &path)
 }
 } // namespace
 
-Settings::Settings() = default;
+Settings::Settings()
+{
+    protectFile();
+}
+
+Settings::~Settings()
+{
+    m_settings.sync();
+    protectFile();
+}
+
+void Settings::protectFile()
+{
+#ifndef Q_OS_WIN
+    const QString path = m_settings.fileName();
+    const QFileDevice::Permissions others = QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+                                            | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    if (QFile::exists(path) && (QFile::permissions(path) & others))
+        QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+}
 
 // --- catalogue profiles -------------------------------------------------------
 
@@ -382,6 +403,7 @@ void Settings::setSyncConfirmSend(bool confirm)
 void Settings::sync()
 {
     m_settings.sync();
+    protectFile();
 }
 
 QByteArray Settings::mainWindowGeometry() const

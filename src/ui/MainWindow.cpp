@@ -58,6 +58,7 @@
 #include "ui/CatalogueSettingsDialog.h"
 #include "ui/CaptureDelegate.h"
 #include "ui/PhotoOfTheDayDialog.h"
+#include <QPointer>
 #include "ui/PhotosOnComputerDialog.h"
 #include "ui/CoveragePanel.h"
 #include "ui/ExportDialog.h"
@@ -981,7 +982,9 @@ void MainWindow::fetchMissingPlaceDetails()
             ids.append(id);
     }
     for (qsizetype i = 0; i < ids.size(); i += 30) {
-        m_app.inatBackground().fetchPlaces(ids.mid(i, 30), [this](net::Outcome<QList<taxonomy::Place>> out) {
+        m_app.inatBackground().fetchPlaces(ids.mid(i, 30), [this, self = QPointer<MainWindow>(this)](net::Outcome<QList<taxonomy::Place>> out) {
+            if (!self)
+                return;   // gone while the request was out
             if (!out.ok())
                 return;   // offline: try again next launch
             auto &store = m_app.taxonomyStore();
@@ -4389,7 +4392,9 @@ void MainWindow::withTaxonKnown(qint64 taxonInatId, const QString &name, const Q
     // Otherwise fetch it, with the ancestors not yet known, so it sits in the
     // right place in the taxonomy (it isn't added to any reference tree).
     statusBar()->showMessage(tr("Fetching %1 from iNaturalist…").arg(name));
-    m_app.inat().fetchTaxon(taxonInatId, [this, taxonInatId, name, title, then](net::Outcome<net::TaxonDetail> out) {
+    m_app.inat().fetchTaxon(taxonInatId, [this, self = QPointer<MainWindow>(this), taxonInatId, name, title, then](net::Outcome<net::TaxonDetail> out) {
+        if (!self)
+            return;   // gone while the request was out
         if (!out.ok()) {
             statusBar()->clearMessage();
             QMessageBox::warning(this, title,
