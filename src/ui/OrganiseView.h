@@ -1,5 +1,6 @@
 #pragma once
 
+#include "geo/GpxTrack.h"
 #include "organise/OrganiseSession.h"
 #include "ui/ImageViewer.h"
 
@@ -74,6 +75,16 @@ private:
     void toggleNamingEnd(int row);
     void toggleBest();   // the selected photos
     void setLocationOnMap();   // the selected photos
+    // The folder's GPS track: GPX Track… chooses the file and the camera
+    // clock's correction; Create Geotag from GPX gives the selected photos
+    // the track's position at the time each was taken.
+    void chooseGpxTrack();
+    void loadGpxTrack();       // the session's choice, read; quiet when it can't be
+    void updateGpxButton();
+    void geotagFromGpx();      // the selected photos
+    void removeLocation();     // the selected photos' locations, taken out of their files
+    // How many of the photos read so far the track covers, with `offsetSeconds`.
+    int photosOnTrack(const geo::GpxTrack &track, int offsetSeconds) const;
     void showFullSize(int row);
     ImageViewer::Item viewerItem(int row) const;
     void contextMenuAt(const QPoint &pos);
@@ -104,6 +115,8 @@ private:
     QToolButton *m_filmstripButton = nullptr;
     QToolButton *m_gridButton = nullptr;
     QToolButton *m_placesButton = nullptr;
+    QToolButton *m_gpxButton = nullptr;
+    geo::GpxTrack m_track;                // the folder's GPS track, when one is chosen
     QTimer *m_placeScan = nullptr;        // debounces lookups after scrolling
     bool m_placeInFlight = false;
     QPushButton *m_commitButton = nullptr;

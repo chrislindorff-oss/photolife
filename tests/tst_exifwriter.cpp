@@ -189,6 +189,29 @@ void TestExifWriter::sidecarGpsIsWrittenAndReadBack()
     gps = scan::readXmpGps(sidecar);
     QVERIFY(qAbs(*gps.latitude - 51.5) < 1e-6);
     QVERIFY(qAbs(*gps.longitude - -0.1278) < 1e-6);
+    // Removed again: the sidecar stays, without a position.
+    QVERIFY(removeSidecarGps(sidecar));
+    {
+        QFile f(sidecar);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QByteArray left = f.readAll();
+        QVERIFY2(!scan::readXmpGps(sidecar).hasGps(), left.constData());
+    }
+    QVERIFY(removeSidecarGps(sidecar));   // nothing there: fine
+    // A sidecar that held only a position, written once, loses it too.
+    const QString lone = dir.filePath(QStringLiteral("DSC_0002.xmp"));
+    QVERIFY(writeSidecarGps(lone, -25.954235, 153.104513));
+    QVERIFY(removeSidecarGps(lone));
+    QVERIFY(QFile::exists(lone));
+    QVERIFY(!scan::readXmpGps(lone).hasGps());
+    // What else a sidecar holds stays.
+    QVERIFY(writeSidecarRating(lone, 4));
+    QVERIFY(writeSidecarGps(lone, 1.5, 2.5));
+    QVERIFY(removeSidecarGps(lone));
+    QVERIFY(!scan::readXmpGps(lone).hasGps());
+    QCOMPARE(scan::readXmpRating(lone).value_or(-1), 4);
+    QVERIFY(removeSidecarGps(dir.filePath(QStringLiteral("none.xmp"))));   // no sidecar: nothing to do
+    QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("none.xmp"))));
     QCOMPARE(scan::readXmpRating(sidecar).value_or(0), 5);
 
     QCOMPARE(xmpCoordinate(-25.5, true), QStringLiteral("25,30.00000S"));

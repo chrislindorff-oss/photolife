@@ -1682,6 +1682,16 @@ void MainWindow::buildReferenceTreeDock()
     m_columnView->card()->setParent(columnsPage);
     columnsLayout->addWidget(m_columnView->card());
     m_treeStack->addWidget(columnsPage);
+    // While a filter narrows the tree, say so above it -- the group counts
+    // and the coverage box otherwise read as if nothing were hidden.
+    m_treeFilterBanner = new QLabel(treeBox);
+    m_treeFilterBanner->setObjectName(QStringLiteral("treeFilterBanner"));   // styled in theme.qss
+    m_treeFilterBanner->setWordWrap(true);
+    m_treeFilterBanner->setTextFormat(Qt::RichText);
+    m_treeFilterBanner->hide();
+    connect(m_treeFilterBanner, &QLabel::linkActivated, this, [this](const QString &) { clearTreeFilters(); });
+    connect(m_treeModel, &QAbstractItemModel::modelReset, this, &MainWindow::updateTreeFilterBanner);
+    treeBoxLayout->addWidget(m_treeFilterBanner);
     treeBoxLayout->addWidget(m_treeStack, 1);
     treeBoxLayout->addWidget(m_seenTally);
 
@@ -1749,6 +1759,54 @@ void MainWindow::buildReferenceTreeDock()
             return;
         m_app.settings().setTreePanelShown(currentViewKey(), !m_treeDock->isHidden());
     });
+}
+
+void MainWindow::updateTreeFilterBanner()
+{
+    if (!m_treeFilterBanner)
+        return;
+    QStringList shown;
+    if (m_treeModel->introducedOnly())
+        shown << tr("introduced species");
+    else if (!m_treeModel->statusFilter().isEmpty())
+        shown << tr("%1 taxa").arg(m_treeModel->statusFilter().toHtmlEscaped());
+    else if (m_treeModel->threatenedOnly())
+        shown << tr("threatened taxa");
+    if (m_treeModel->photographedOnly())
+        shown << tr("taxa you've photographed");
+    switch (m_treeModel->coverageFilter()) {
+    case model::TaxonomyTreeModel::CoverageFilter::Complete:
+        shown << tr("fully covered taxa");
+        break;
+    case model::TaxonomyTreeModel::CoverageFilter::Incomplete:
+        shown << tr("taxa not fully covered");
+        break;
+    case model::TaxonomyTreeModel::CoverageFilter::All:
+        break;
+    }
+    if (shown.isEmpty()) {
+        m_treeFilterBanner->hide();
+        return;
+    }
+    const bool countsNarrowed = m_treeModel->introducedOnly() || m_treeModel->threatenedOnly()
+                                || !m_treeModel->statusFilter().isEmpty();
+    m_treeFilterBanner->setText(tr("<b>Showing only</b> %1%2 — <a href=\"clear\">Show all</a>")
+                                    .arg(shown.join(QStringLiteral(" · ")),
+                                         countsNarrowed ? tr(" (and counting only them)") : QString()));
+    m_treeFilterBanner->setToolTip(tr("Other taxa are hidden while this filter is on%1. Show all clears it.")
+                                       .arg(countsNarrowed ? tr(", and the groups' Coverage counts only the "
+                                                                "filtered taxa")
+                                                           : QString()));
+    m_treeFilterBanner->show();
+}
+
+void MainWindow::clearTreeFilters()
+{
+    applyThreatenedFilter(false, QString());
+    applyIntroducedFilter(false);
+    m_photographedOnly->setChecked(false);
+    m_coverageFilterCombo->setCurrentIndex(0);   // All coverage
+    updateTreeFilterBanner();
 }
 
 void MainWindow::fillTreeGaps(int projectId)

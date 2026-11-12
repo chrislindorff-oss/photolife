@@ -2,6 +2,7 @@
 
 #include "app/Application.h"
 #include "db/Database.h"
+#include "geo/GpxTrack.h"
 #include "geo/LocalityStore.h"
 #include "net/GeocodeClient.h"
 #include "settings/Settings.h"
@@ -49,10 +50,12 @@ GeotagDialog::GeotagDialog(Application &app, const QList<Photo> &photos, const Q
     connect(m_ownPrevious, &QToolButton::clicked, this, [this] {
         m_ownIndex = std::max(0, m_ownIndex - 1);
         showOwnPhoto();
+        showOwnLocation(true);
     });
     connect(m_ownNext, &QToolButton::clicked, this, [this] {
         m_ownIndex = std::min(int(m_photos.size()) - 1, m_ownIndex + 1);
         showOwnPhoto();
+        showOwnLocation(true);
     });
     m_ownPrevious->setVisible(m_photos.size() > 1);
     m_ownNext->setVisible(m_photos.size() > 1);
@@ -175,8 +178,7 @@ GeotagDialog::GeotagDialog(Application &app, const QList<Photo> &photos, const Q
     const Photo &first = m_photos.value(0);
     if (first.latitude && first.longitude) {
         m_map->centreOn(*first.latitude, *first.longitude, 15);
-        m_map->setPin(*first.latitude, *first.longitude);
-        pinMoved(*first.latitude, *first.longitude);
+        showOwnLocation(false);
     } else if (!clues.isEmpty()) {
         const Clue *nearest = &clues.first();
         if (first.taken.isValid()) {
@@ -198,6 +200,64 @@ GeotagDialog::GeotagDialog(Application &app, const QList<Photo> &photos, const Q
 
     showOwnPhoto();
     updateOk();
+}
+
+void GeotagDialog::setTrack(const geo::GpxTrack &track, int offsetSeconds)
+{
+    if (track.isEmpty())
+        return;
+    QList<QList<LocationPickerMap::TrackVertex>> segments;
+    for (const QList<geo::TrackPoint> &s : track.segments()) {
+        QList<LocationPickerMap::TrackVertex> line;
+        line.reserve(s.size());
+        for (const geo::TrackPoint &p : s) {
+            // As the camera's clock read it, so it compares with the photos' times.
+            const QDateTime time = p.time.isValid() ? p.time.toLocalTime().addSecs(-offsetSeconds) : QDateTime();
+            line << LocationPickerMap::TrackVertex{p.latitude, p.longitude, time};
+        }
+        segments << line;
+    }
+    m_map->setTrack(segments);
+
+    // A ring where each photo's time falls on the track.
+    QList<LocationPickerMap::Dot> dots = m_map->dots();
+    std::optional<geo::GpxTrack::Match> firstMatch;
+    m_trackSpots.fill(std::nullopt, m_photos.size());
+    for (int i = 0; i < m_photos.size(); ++i) {
+        const Photo &p = m_photos.at(i);
+        if (!p.taken.isValid())
+            continue;
+        const std::optional<geo::GpxTrack::Match> match = track.positionAt(p.taken.addSecs(offsetSeconds).toUTC());
+        if (!match)
+            continue;
+        if (i == 0)
+            firstMatch = match;
+        m_trackSpots[i] = QPointF(match->latitude, match->longitude);
+        LocationPickerMap::Dot dot;
+        dot.latitude = match->latitude;
+        dot.longitude = match->longitude;
+        dot.label = tr("%1: where the GPS track was when it was taken (%2)")
+                        .arg(p.label, QLocale().toString(p.taken.time(), QStringLiteral("HH:mm:ss")));
+        dot.selected = true;
+        dot.ring = true;
+        dots << dot;
+    }
+    m_map->setDots(dots);
+
+    // A photo that has no location yet starts on the track; the pin still
+    // waits for a click.
+    if (m_map->hasPin())
+        return;
+    if (firstMatch) {
+        m_map->centreOn(firstMatch->latitude, firstMatch->longitude, 16);
+        m_place->setText(tr("The line is your GPS track; the ring is where this photo's time falls on it. "
+                            "Double-click the ring to put the pin there, or click anywhere on the map."));
+    } else {
+        const QRectF box = track.bounds();
+        m_map->fitTo(box.top(), box.left(), box.bottom(), box.right());
+        m_place->setText(tr("The line is your GPS track. None of it was recorded within 5 minutes of this "
+                            "photo's time, so click the map where it was taken."));
+    }
 }
 
 std::optional<QPointF> GeotagDialog::parseCoordinates(const QString &text)
@@ -241,7 +301,7 @@ bool GeotagDialog::writeIntoRaw() const
 
 void GeotagDialog::accept()
 {
-    if (!m_map->hasPin())
+    if (!m_map->hasPin() || !m_userPlaced)
         return;
     m_app.settings().setGeotagLastView(latitude(), longitude(), m_map->zoom());
     if (m_intoRaw->isVisible())
@@ -298,8 +358,35 @@ void GeotagDialog::showOwnPhoto()
     m_ownPhoto->setPixmap(scaled);
 }
 
+void GeotagDialog::showOwnLocation(bool stepped)
+{
+    if (m_userPlaced || m_photos.isEmpty())
+        return;   // the pin is the user's choice now
+    const Photo &p = m_photos.at(m_ownIndex);
+    if (p.latitude && p.longitude) {
+        m_map->setPin(*p.latitude, *p.longitude);
+        m_map->centreOn(*p.latitude, *p.longitude);
+        m_coordinates->setText(QStringLiteral("%1, %2").arg(*p.latitude, 0, 'f', 6).arg(*p.longitude, 0, 'f', 6));
+        m_place->setText(tr("Finding the place…"));
+        m_placeTimer->start();
+    } else if (stepped) {
+        m_map->clearPin();
+        m_coordinates->clear();
+        m_placeTimer->stop();
+        ++m_placeRequest;   // an answer still on its way is for another photo
+        const std::optional<QPointF> spot = m_trackSpots.value(m_ownIndex);
+        if (spot)
+            m_map->centreOn(spot->x(), spot->y());
+        m_place->setText(spot ? tr("This photo has no location yet. The ring is where its time falls on your GPS "
+                                   "track: double-click it to put the pin there, or click anywhere on the map.")
+                              : tr("This photo has no location yet. Click the map where it was taken."));
+    }
+    updateOk();
+}
+
 void GeotagDialog::pinMoved(double latitude, double longitude)
 {
+    m_userPlaced = true;
     m_coordinates->setText(QStringLiteral("%1, %2").arg(latitude, 0, 'f', 6).arg(longitude, 0, 'f', 6));
     m_place->setText(tr("Finding the place…"));
     m_placeTimer->start();   // once the pin settles: OpenStreetMap allows one lookup a second
@@ -369,7 +456,13 @@ void GeotagDialog::search()
 
 void GeotagDialog::updateOk()
 {
-    m_buttons->button(QDialogButtonBox::Ok)->setEnabled(m_map->hasPin() && !m_photos.isEmpty());
+    // Only a pin the user placed is written: one that's just showing where the
+    // photo in view already is would otherwise go onto every photo selected.
+    QPushButton *ok = m_buttons->button(QDialogButtonBox::Ok);
+    ok->setEnabled(m_map->hasPin() && m_userPlaced && !m_photos.isEmpty());
+    ok->setToolTip(ok->isEnabled() ? QString()
+                                   : tr("Put the pin where the photos were taken first: click the map, or "
+                                        "double-click a dot or ring."));
 }
 
 } // namespace pl

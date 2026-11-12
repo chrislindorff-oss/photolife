@@ -142,7 +142,36 @@ known from your library's photos appear at once, even offline).</p>
       nearest in time: double-click a dot to use it. The place name under the map is the
       one renaming will use. It's written straight away (see
       <a href="#writes">below</a>), so the GEO mark and place appear at once; use it on a
-      geotagged photo to move its location. Undo Organise doesn't remove a location.</li>
+      geotagged photo to move its location. With several photos selected, the arrows
+      under the photo step through them and the pin shows where each one already is (no
+      pin when it has no location yet), until you place the pin yourself; only a pin you
+      placed is written. Undo Organise doesn't remove a location.</li>
+  <li>To take a location off again, select the photos and right-click &rarr;
+      <b>Remove Location&hellip;</b>. After you confirm, the GPS position is taken out of
+      the JPEG and out of a RAW's <i>.xmp</i> sidecar (the sidecar stays, with anything
+      else it holds), and the GEO mark goes. A location held inside a RAW file itself is
+      removed only when <b>Also write it into the RAW files</b> is on in Set Location on
+      Map; otherwise you're told which files still have one. It can't be undone, so a
+      position the camera or phone recorded is gone for good.</li>
+  <li><b>From a GPS track.</b> If you recorded a track while you were out (a <i>.gpx</i>
+      file from a phone app or a GPS unit), <b>GPX Track&hellip;</b> above the photos
+      chooses it for the folder &mdash; a single <i>.gpx</i> file in the folder is picked
+      up by itself, and the button is marked while a track is loaded. Then select photos
+      and right-click &rarr; <b>Create Geotag from GPX</b> (or <b>Shift+G</b>): each one
+      gets the position the track recorded at the time it was taken, worked out between
+      the two track points either side of it, and written straight away as Set Location
+      on Map writes it. A photo taken more than 5 minutes from any track point is left
+      alone, and the message says how many were. If some already have a location you're
+      asked whether to replace it. The track file itself is only read, never changed or
+      moved.<br>
+      A track's times are exact; a camera's are whatever its clock said. PhotoLife reads
+      photo times as this computer's time zone, so if the camera was set to another zone,
+      or its clock was off, set the <b>Camera clock</b> correction in GPX Track&hellip;
+      (the line under it counts how many photos then fall on the track). The correction
+      is remembered for the folder.<br>
+      <b>Set Location on Map&hellip;</b> draws the track as a line, with a ring where the
+      photo's time falls on it: double-click the ring to use that spot, or click anywhere
+      along the line (hover over it to see the time) to choose another.</li>
   <li>With a photo focused, press <b>R</b> to mark it as a reject, or
       <b>V</b> (or double-click it) to view it full size. Right-click for these actions, rename or
       clear a name, and other options. <b>Delete</b> still marks the selected
@@ -525,7 +554,13 @@ summary on the right to do the same for the tree's introduced species: they're s
 <span style="color:#1E63C8">blue</span> with an asterisk in the Coverage column
 (<b>&#10004; *</b> if you've photographed them, <b>*</b> if not). The introduced and
 threatened filters replace each other; click the active one again, or <b>Clear
-filter</b>, to go back to the whole tree.</p>
+filter</b>, to go back to the whole tree. While one of them is on, the genera and
+families count only the filtered taxa (the Coverage heading says which, such as
+<i>Coverage: introduced</i>), so a genus with one introduced species reads
+<b>0&nbsp;/&nbsp;1</b> rather than its count of every species. Whenever any filter
+narrows the tree &mdash; these, <b>Only taxa I&rsquo;ve photographed</b> or the coverage
+box &mdash; a highlighted line above the tree says what's shown, and its <b>Show all</b>
+clears every filter at once.</p>
 <p>The <b>Unphotographed Taxa</b> tab is a plain list of the gaps, with its own filter
 box &mdash; activate an entry to jump to it in the tree, or right-click it to view its
 reference photo. A line above it counts what's missing: species, and subspecies,
@@ -915,8 +950,12 @@ nothing is posted to iNaturalist and nothing is decided for you. The suggestions
 back best first, each with iNaturalist's score, and marked <b>seen nearby</b> (recorded
 near where it was taken) and <b>in your trees</b>; ones outside your trees are greyed,
 and <b>Only taxa in my trees</b> hides them. To see what a suggestion looks like,
-right-click it (or press <b>Space</b> on it): iNaturalist's photo of that taxon pops up,
+right-click it and choose <b>Show a Photo of It</b> (or press <b>Space</b> on it):
+iNaturalist's photo of that taxon pops up,
 with its names and the photographer's credit; a click anywhere, or <b>Esc</b>, closes it.
+If you'd rather not commit to a species, the same right-click menu lists the ranks above
+the suggestion &mdash; its genus, family, order and so on up to its kingdom &mdash; under
+<b>Use a higher rank instead</b>: choose one and it's used just as a suggestion would be.
 Where a suggestion names your photos (in
 Organise), <b>Name with common names</b> chooses between its common name (<i>Flame
 Robin</i>) and its scientific name (<i>Petroica phoenicea</i>); a taxon without a common
@@ -986,8 +1025,8 @@ your photos. PhotoLife writes files only when you ask it to:</p>
   <li><b>Rename Files on Drive&hellip;</b> (right-click photos in the library) renames the
       photos' files, and their folder if you ask (see <a href="#rename">Renaming photos on your
       drive</a>).</li>
-  <li><b>Set Location on Map&hellip;</b> (right-click photos in Organise or the library)
-      writes the location into a JPEG's GPS data, keeping the file's date. A RAW file
+  <li><b>Set Location on Map&hellip;</b> (right-click photos in Organise or the library),
+      and <b>Create Geotag from GPX</b> in Organise, write the location into a JPEG's GPS data, keeping the file's date. A RAW file
       gets it in an <i>.xmp</i> sidecar beside it &mdash; its existing one (Lightroom's
       <i>DSC_1234.xmp</i> or darktable's <i>DSC_1234.NEF.xmp</i>) or a new
       <i>DSC_1234.xmp</i>, which moves with the photo when organised; Lightroom,

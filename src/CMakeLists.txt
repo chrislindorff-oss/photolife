@@ -28,6 +28,7 @@ qt_add_library(photolife_core STATIC
     geo/LocalityFetcher.h   geo/LocalityFetcher.cpp
     geo/LocalityStore.h     geo/LocalityStore.cpp
     geo/GeotagWriter.h      geo/GeotagWriter.cpp
+    geo/GpxTrack.h          geo/GpxTrack.cpp
     geo/PinClusterer.h      geo/PinClusterer.cpp
     geo/WebMercator.h       geo/WebMercator.cpp
     inat/ExifWriter.h        inat/ExifWriter.cpp

@@ -25,6 +25,13 @@ public:
     static Result writeShot(const QStringList &renditions, const QString &baseName, double latitude,
                             double longitude, bool intoRaw);
 
+    // Takes the shot's location out again: from a JPEG's EXIF and from every
+    // sidecar the shot has (which stay, with whatever else they hold). A
+    // location inside a RAW is removed only with `intoRaw`, the same careful
+    // way it's written; without it that RAW is reported in `failures`.
+    static Result clearShot(const QStringList &renditions, const QString &baseName, bool intoRaw);
+    static bool removeFromRaw(const QString &path, QString *error = nullptr);
+
     // Whether a RAW of this kind can have its location written into it: the
     // TIFF-based formats exiv2 writes (not Canon CR3 or Fuji RAF).
     static bool canWriteIntoRaw(const QString &path);

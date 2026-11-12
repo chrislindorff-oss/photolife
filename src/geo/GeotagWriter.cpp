@@ -9,7 +9,10 @@
 #include <QFile>
 #include <QFileInfo>
 
+#include <QPointF>
+
 #include <cmath>
+#include <optional>
 
 namespace pl::geo {
 namespace {
@@ -51,14 +54,31 @@ bool GeotagWriter::canWriteIntoRaw(const QString &path)
     return kinds.contains(QFileInfo(path).suffix().toLower());
 }
 
+namespace {
+bool rewriteRaw(const QString &path, const std::optional<QPointF> &place, QString *error);   // x = latitude
+}
+
 bool GeotagWriter::writeIntoRaw(const QString &path, double latitude, double longitude, QString *error)
+{
+    return rewriteRaw(path, QPointF(latitude, longitude), error);
+}
+
+bool GeotagWriter::removeFromRaw(const QString &path, QString *error)
+{
+    return rewriteRaw(path, std::nullopt, error);
+}
+
+namespace {
+
+// The RAW at `path` with its location set to `place`, or removed without one.
+bool rewriteRaw(const QString &path, const std::optional<QPointF> &place, QString *error)
 {
     auto fail = [error](const QString &why) {
         if (error)
             *error = why;
         return false;
     };
-    if (!canWriteIntoRaw(path))
+    if (!GeotagWriter::canWriteIntoRaw(path))
         return fail(QStringLiteral("this kind of RAW can't be written to"));
     const scan::ExifData before = scan::readTiffExif(path);
     if (!before.hasDate())
@@ -71,8 +91,12 @@ bool GeotagWriter::writeIntoRaw(const QString &path, double latitude, double lon
     if (!QFile::copy(path, temp))
         return fail(QStringLiteral("couldn't make a working copy"));
     inat::ExifFields fields;
-    fields.latitude = latitude;
-    fields.longitude = longitude;
+    if (place) {
+        fields.latitude = place->x();
+        fields.longitude = place->y();
+    } else {
+        fields.removeGps = true;
+    }
     QString why;
     if (!inat::writeExif(temp, fields, &why)) {
         QFile::remove(temp);
@@ -82,7 +106,8 @@ bool GeotagWriter::writeIntoRaw(const QString &path, double latitude, double lon
     // not suspiciously shrunk -- before it may replace the original.
     const scan::ExifData after = scan::readTiffExif(temp);
     if (after.dateTimeOriginal != before.dateTimeOriginal || after.cameraModel != before.cameraModel
-        || !samePlace(after, latitude, longitude) || QFileInfo(temp).size() < size * 9 / 10) {
+        || (place ? !samePlace(after, place->x(), place->y()) : after.hasGps())
+        || QFileInfo(temp).size() < size * 9 / 10) {
         QFile::remove(temp);
         return fail(QStringLiteral("the written copy didn't read back intact, so the original is left as it is"));
     }
@@ -94,6 +119,50 @@ bool GeotagWriter::writeIntoRaw(const QString &path, double latitude, double lon
     if (!QFile::rename(temp, path))
         return fail(QStringLiteral("written, but couldn't be put in place: the copy is at %1").arg(temp));
     return true;
+}
+
+} // namespace
+
+GeotagWriter::Result GeotagWriter::clearShot(const QStringList &renditions, const QString &baseName, bool intoRaw)
+{
+    Result out;
+    if (renditions.isEmpty())
+        return out;
+    QStringList sidecars;
+    const QDir dir = QFileInfo(renditions.first()).absoluteDir();
+    sidecars << dir.filePath(baseName + QStringLiteral(".xmp"));
+    for (const QString &path : renditions) {
+        const QString name = QFileInfo(path).fileName();
+        sidecars << path + QStringLiteral(".xmp");
+        if (isJpeg(path)) {
+            if (!scan::readJpegExif(path).hasGps())
+                continue;
+            const QDateTime modified = QFileInfo(path).lastModified();
+            inat::ExifFields fields;
+            fields.removeGps = true;
+            QString error;
+            if (inat::writeExifSafely(path, fields, &error))
+                keepDate(path, modified);
+            else
+                out.failures << QStringLiteral("%1: %2").arg(name, error);
+        } else if (isRaw(path) && scan::readTiffExif(path).hasGps()) {
+            QString error;
+            if (!intoRaw || !canWriteIntoRaw(path))
+                out.failures << QStringLiteral("%1: the location is inside the RAW file itself, which is only "
+                                               "changed when \"Also write it into the RAW files\" is on in "
+                                               "Set Location on Map").arg(name);
+            else if (!removeFromRaw(path, &error))
+                out.failures << QStringLiteral("%1: %2").arg(name, error);
+        }
+    }
+    for (const QString &sidecar : std::as_const(sidecars)) {
+        if (!QFileInfo::exists(sidecar) || !scan::readXmpGps(sidecar).hasGps())
+            continue;
+        QString error;
+        if (!inat::removeSidecarGps(sidecar, &error))
+            out.failures << QStringLiteral("%1: %2").arg(QFileInfo(sidecar).fileName(), error);
+    }
+    return out;
 }
 
 GeotagWriter::Result GeotagWriter::writeShot(const QStringList &renditions, const QString &baseName,

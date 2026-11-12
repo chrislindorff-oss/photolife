@@ -617,6 +617,10 @@ private:
     QLabel *m_seenTally = nullptr;        // ...and what it adds up to
     void updateSeenTally();
     QComboBox *m_coverageFilterCombo = nullptr;   // all / fully covered / not fully covered
+    // "Showing only: introduced species — Show all", while a filter narrows the tree.
+    QLabel *m_treeFilterBanner = nullptr;
+    void updateTreeFilterBanner();
+    void clearTreeFilters();
     QToolButton *m_rankFilterButton = nullptr;
     QToolButton *m_expandAllButton = nullptr;   // keeps the whole tree open while on
     // The Columns view of the tree, and the switch between them.

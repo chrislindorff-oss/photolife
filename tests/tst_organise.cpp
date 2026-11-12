@@ -85,6 +85,8 @@ private slots:
     void bestShotsAreRatedFiveStars();
     void fiveStarPhotosArriveAsBestShots();
     void locationIsWrittenAndKeptWithTheShot();
+    void locationCanBeRemovedAgain();
+    void gpxTrackChoiceIsKeptWithTheFolder();
     void organiseRenamesShotsTogetherAndUndoPutsNamesBack();
     void neverOverwrites();
     void undoTakesBackOneWholeOrganiseAtATime();
@@ -539,6 +541,128 @@ void TestOrganise::renamedBaseNames()
     const QString longName = OrganiseSession::renamedBase(QString(300, QLatin1Char('x')), QStringLiteral("Anakie"), taken);
     QVERIFY(longName.size() <= 200);
     QVERIFY(longName.endsWith(QStringLiteral(" - Anakie, 2025-10-18")));
+}
+
+void TestOrganise::locationCanBeRemovedAgain()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.jpg"), 1000);   // a JPEG
+    writeShot(dir, QStringLiteral("DSC_0002.NEF"), 2000);   // RAW + JPEG
+    writeShot(dir, QStringLiteral("DSC_0002.jpg"), 2000);
+    writeShot(dir, QStringLiteral("DSC_0003.NEF"), 3000);   // a RAW alone
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    s.setName(0, QStringLiteral("Bar-shouldered Dove"));
+    QFile raw(dir.filePath(QStringLiteral("DSC_0003.NEF")));
+    QVERIFY(raw.open(QIODevice::ReadOnly));
+    const QByteArray rawBefore = raw.readAll();
+    raw.close();
+    for (int i = 0; i < 3; ++i)
+        QVERIFY(s.setLocation(i, -25.954, 153.105, false).ok());
+    const QDateTime taken = s.items().at(0).taken;
+    for (int i = 0; i < 3; ++i) {
+        QVERIFY(s.items().at(i).hasGps());
+        const geo::GeotagWriter::Result r = s.clearLocation(i, false);
+        QVERIFY2(r.ok(), qPrintable(r.failures.join(QLatin1Char(';'))));
+        QVERIFY(!s.items().at(i).hasGps());
+    }
+    // Out of the JPEGs and the sidecars -- which stay, as do the photos' dates.
+    QVERIFY(!scan::readJpegExif(dir.filePath(QStringLiteral("DSC_0001.jpg"))).hasGps());
+    QVERIFY(!scan::readJpegExif(dir.filePath(QStringLiteral("DSC_0002.jpg"))).hasGps());
+    QVERIFY(QFile::exists(dir.filePath(QStringLiteral("DSC_0003.xmp"))));
+    QVERIFY(!scan::readXmpGps(dir.filePath(QStringLiteral("DSC_0003.xmp"))).hasGps());
+    QCOMPARE(s.items().at(0).taken, taken);
+    QVERIFY(raw.open(QIODevice::ReadOnly));
+    QCOMPARE(raw.readAll(), rawBefore);   // the RAW untouched
+    raw.close();
+    // Removing what isn't there is nothing, not a failure.
+    QVERIFY(s.clearLocation(0, false).ok());
+
+    // Opened again: no locations, and the shots are still recognised.
+    OrganiseSession again;
+    again.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    again.loadProgress();
+    for (int i = 0; i < 3; ++i)
+        QVERIFY(!again.items().at(i).hasGps());
+    QCOMPARE(again.nameAt(0), QStringLiteral("Bar-shouldered Dove"));
+    // ...and one can be set again.
+    QVERIFY(again.setLocation(0, 51.5, -0.1278, false).ok());
+    QVERIFY(std::abs(*again.items().at(0).latitude - 51.5) < 1e-5);
+}
+
+void TestOrganise::gpxTrackChoiceIsKeptWithTheFolder()
+{
+    QTemporaryDir tmp, elsewhere;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.JPG"), 1000);
+    const QString progress = dir.filePath(QLatin1String(OrganiseSession::kProgressFile));
+    auto open = [&](OrganiseSession &s) {
+        s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+        s.loadProgress();
+    };
+    {
+        OrganiseSession s;
+        open(s);
+        QVERIFY(s.gpxPath().isEmpty());   // none in the folder
+        QVERIFY(OrganiseSession::gpxFilesIn(tmp.path()).isEmpty());
+    }
+    // The folder's only .gpx file is taken without asking -- and isn't a photo.
+    writeShot(dir, QStringLiteral("2015-09-19_17-43-20.gpx"), 900);
+    const QString inFolder = dir.absoluteFilePath(QStringLiteral("2015-09-19_17-43-20.gpx"));
+    {
+        OrganiseSession s;
+        open(s);
+        QCOMPARE(s.count(), 1);
+        QCOMPARE(s.gpxPath(), inFolder);
+        QCOMPARE(s.gpxOffsetSeconds(), 0);
+        QVERIFY(!QFile::exists(progress));   // found, not chosen: nothing to keep
+        // A clock correction is the user's choice: kept, though no photo is named.
+        s.setGpx(inFolder, -3600);
+        QVERIFY(QFile::exists(progress));
+    }
+    {
+        OrganiseSession s;
+        open(s);
+        QCOMPARE(s.gpxPath(), inFolder);
+        QCOMPARE(s.gpxOffsetSeconds(), -3600);
+        // Starting the naming again leaves the track.
+        s.setName(0, QStringLiteral("Scarlet Robin"));
+        s.saveProgress();
+        s.clearProgress();
+        QVERIFY(s.nameAt(0).isEmpty());
+        QCOMPARE(s.gpxPath(), inFolder);
+    }
+    // A track kept somewhere else, and a second one in the folder: the choice holds.
+    const QString outside = QDir(elsewhere.path()).absoluteFilePath(QStringLiteral("trip.gpx"));
+    writeShot(QDir(elsewhere.path()), QStringLiteral("trip.gpx"), 900);
+    writeShot(dir, QStringLiteral("another.gpx"), 900);
+    {
+        OrganiseSession s;
+        open(s);
+        QCOMPARE(s.gpxPath(), inFolder);
+        QCOMPARE(s.gpxOffsetSeconds(), -3600);
+        s.setGpx(outside, 7200);
+    }
+    {
+        OrganiseSession s;
+        open(s);
+        QCOMPARE(s.gpxPath(), outside);
+        QCOMPARE(s.gpxOffsetSeconds(), 7200);
+        s.setGpx(QString(), 7200);   // removed
+        QVERIFY(s.gpxPath().isEmpty());
+        QCOMPARE(s.gpxOffsetSeconds(), 0);
+    }
+    {
+        // Removed stays removed, though the folder has tracks in it.
+        OrganiseSession s;
+        open(s);
+        QVERIFY(s.gpxPath().isEmpty());
+        QCOMPARE(OrganiseSession::gpxFilesIn(tmp.path()).size(), 2);
+    }
+    // The files themselves were never touched.
+    QVERIFY(QFile::exists(inFolder));
+    QVERIFY(QFile::exists(outside));
 }
 
 void TestOrganise::organiseRenamesShotsTogetherAndUndoPutsNamesBack()

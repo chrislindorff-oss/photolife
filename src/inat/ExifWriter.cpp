@@ -4,6 +4,8 @@
 
 #include <QFile>
 
+#include <iterator>
+
 #include <cmath>
 #include <functional>
 
@@ -64,7 +66,15 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
             exif["Exif.Photo.DateTimeOriginal"] = exifDate.toStdString();
             exif["Exif.Image.DateTime"] = exifDate.toStdString();
         }
-        if (fields.latitude && fields.longitude) {
+        if (fields.removeGps) {
+            // The whole GPS block: a position without its refs, or an altitude
+            // and time left behind, would only confuse what reads it next.
+            for (auto it = exif.begin(); it != exif.end();)
+                it = it->groupName() == "GPSInfo" ? exif.erase(it) : std::next(it);
+            Exiv2::XmpData &xmp = image->xmpData();
+            for (auto it = xmp.begin(); it != xmp.end();)
+                it = it->key().rfind("Xmp.exif.GPS", 0) == 0 ? xmp.erase(it) : std::next(it);
+        } else if (fields.latitude && fields.longitude) {
             // Replaced, not added to: ExifData::add() appends, so a photo
             // that already had a position kept it first in line (and every
             // reader took that one), with the new one behind it unseen.
@@ -107,6 +117,19 @@ bool writeExif(const QString &path, const ExifFields &fields, QString *error)
 
 namespace {
 
+// A sidecar with nothing in it yet.
+QByteArray emptySidecar()
+{
+    // The packet's begin attribute is a UTF-8 byte-order mark.
+    return QByteArray("<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+                      "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
+                      " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+                      "  <rdf:Description rdf:about=\"\"/>\n"
+                      " </rdf:RDF>\n"
+                      "</x:xmpmeta>\n"
+                      "<?xpacket end=\"w\"?>\n");
+}
+
 // Opens the sidecar at `path` -- creating a minimal empty one first if there
 // isn't one -- lets `set` change its XMP, and writes it back.
 bool updateSidecar(const QString &path, const std::function<void(Exiv2::XmpData &)> &set, QString *error)
@@ -118,14 +141,7 @@ bool updateSidecar(const QString &path, const std::function<void(Exiv2::XmpData 
                 *error = QStringLiteral("could not create %1").arg(path);
             return false;
         }
-        // The packet's begin attribute is a UTF-8 byte-order mark.
-        const QByteArray packet("<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
-                                "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
-                                " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
-                                "  <rdf:Description rdf:about=\"\"/>\n"
-                                " </rdf:RDF>\n"
-                                "</x:xmpmeta>\n"
-                                "<?xpacket end=\"w\"?>\n");
+        const QByteArray packet = emptySidecar();
         if (file.write(packet) != packet.size()) {
             if (error)
                 *error = QStringLiteral("could not write %1").arg(path);
@@ -178,6 +194,30 @@ bool writeSidecarGps(const QString &path, double latitude, double longitude, QSt
         xmp["Xmp.exif.GPSLatitude"] = xmpCoordinate(latitude, true).toStdString();
         xmp["Xmp.exif.GPSLongitude"] = xmpCoordinate(longitude, false).toStdString();
     }, error);
+}
+
+bool removeSidecarGps(const QString &path, QString *error)
+{
+    if (!QFile::exists(path))
+        return true;
+    bool nothingLeft = false;
+    if (!updateSidecar(path, [&nothingLeft](Exiv2::XmpData &xmp) {
+            for (auto it = xmp.begin(); it != xmp.end();)
+                it = it->key().rfind("Xmp.exif.GPS", 0) == 0 ? xmp.erase(it) : std::next(it);
+            nothingLeft = xmp.empty();
+        }, error))
+        return false;
+    if (!nothingLeft)
+        return true;
+    // exiv2 writes nothing at all when no XMP is left, so the position would
+    // stay: the sidecar held only that, and becomes an empty one.
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(emptySidecar()) < 0) {
+        if (error)
+            *error = QStringLiteral("could not write %1").arg(path);
+        return false;
+    }
+    return true;
 }
 
 bool writeExifSafely(const QString &path, const ExifFields &fields, QString *error)

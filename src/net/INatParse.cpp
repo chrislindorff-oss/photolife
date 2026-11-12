@@ -50,6 +50,15 @@ pl::taxonomy::Taxon parseTaxon(const QJsonObject &obj)
     t.name = obj.value(QStringLiteral("name")).toString();
     t.commonName = obj.value(QStringLiteral("preferred_common_name")).toString();
     t.ancestry = obj.value(QStringLiteral("ancestry")).toString();
+    if (t.ancestry.isEmpty()) {
+        // Some replies give the chain only as ancestor_ids (root first, the taxon itself last).
+        QStringList chain;
+        for (const QJsonValue &v : obj.value(QStringLiteral("ancestor_ids")).toArray()) {
+            if (const auto id = optId(v); id && *id != t.inatId)
+                chain << QString::number(*id);
+        }
+        t.ancestry = chain.join(QLatin1Char('/'));
+    }
     t.isActive = obj.value(QStringLiteral("is_active")).toBool(true);
     for (const QJsonValue &v : obj.value(QStringLiteral("current_synonymous_taxon_ids")).toArray()) {
         if (const auto id = optId(v))

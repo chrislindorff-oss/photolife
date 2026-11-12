@@ -3,6 +3,7 @@
 #include "inat/PhotoIdentifier.h"
 #include "taxonomy/TaxonomyTypes.h"
 
+#include <QHash>
 #include <QWidget>
 
 #include <optional>
@@ -52,6 +53,15 @@ private:
     void showMessage(const QString &text, bool offerToken = false);
     // iNaturalist's photo of the suggestion at `item`, in a small pop-up at `at`.
     void previewSuggestion(QListWidgetItem *item, const QPoint &at);
+    // Right-click: a look at the suggestion, or a coarser taxon above it to
+    // use instead (its genus, family... up to its kingdom).
+    void suggestionMenu(QListWidgetItem *item, const QPoint &at);
+    // The taxa above the suggestions, for that menu: from the catalogue where
+    // it has them, else asked of iNaturalist (read-only; nothing is stored).
+    void loadHigherRanks();
+    void loadAncestors(int generation);
+    QString ancestryOf(const taxonomy::Taxon &taxon) const;
+    QList<taxonomy::Taxon> higherRanks(const taxonomy::Taxon &taxon) const;   // nearest first
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -68,6 +78,10 @@ private:
     std::optional<inat::IdentifyRequest> m_request;   // the photo being asked about
     std::optional<inat::Identification> m_result;
     bool m_waitingForToken = false;
+    QHash<qint64, taxonomy::Taxon> m_higher;   // taxa above the suggestions, by iNat id
+    QHash<qint64, QString> m_ancestry;         // for suggestions whose reply didn't carry it
+    int m_higherGeneration = 0;                // each result bumps it: older answers are dropped
+    int m_higherPending = 0;                   // requests still out
 };
 
 } // namespace pl

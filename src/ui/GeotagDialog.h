@@ -15,6 +15,10 @@ class QLineEdit;
 class QTimer;
 class QToolButton;
 
+namespace pl::geo {
+class GpxTrack;
+}
+
 namespace pl {
 
 class Application;
@@ -52,6 +56,11 @@ public:
     GeotagDialog(Application &app, const QList<Photo> &photos, const QList<Clue> &clues,
                  QWidget *parent = nullptr);
 
+    // The folder's GPS track: drawn on the map, with a ring where each
+    // photo's time falls on it. `offsetSeconds` is added to the photos' times
+    // first (the camera clock's correction). Call before exec().
+    void setTrack(const geo::GpxTrack &track, int offsetSeconds);
+
     double latitude() const;
     double longitude() const;
     // Whether the photos that already have a location get this one instead.
@@ -71,6 +80,10 @@ protected:
 
 private:
     void showOwnPhoto();
+    // Until the user places the pin, it follows the photo shown: on that
+    // photo's own location, or gone when it has none. `stepped`: the user
+    // moved to this photo (not the dialog's first showing).
+    void showOwnLocation(bool stepped);
     void pinMoved(double latitude, double longitude);
     void lookUpPlace();
     void search();
@@ -79,6 +92,8 @@ private:
     Application &m_app;
     QList<Photo> m_photos;
     int m_ownIndex = 0;
+    bool m_userPlaced = false;      // the pin is where the user put it, so it stays
+    QList<std::optional<QPointF>> m_trackSpots;   // per photo: x = latitude, y = longitude on the GPS track
     QLabel *m_ownPhoto = nullptr;
     QLabel *m_ownCaption = nullptr;
     QToolButton *m_ownPrevious = nullptr;

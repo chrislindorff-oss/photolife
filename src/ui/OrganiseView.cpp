@@ -40,6 +40,9 @@
 #include <QPromise>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSpinBox>
+#include <QComboBox>
+#include <QFormLayout>
 #include <QTimer>
 #include <QStyledItemDelegate>
 #include <QToolButton>
@@ -634,6 +637,12 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
                                   "looked up on OpenStreetMap for the photos in view. Photos with "
                                   "GPS are marked GEO."));
     connect(m_placesButton, &QToolButton::toggled, this, &OrganiseView::setShowPlaces);
+    m_gpxButton = new QToolButton(this);
+    m_gpxButton->setText(tr("GPX Track…"));
+    m_gpxButton->setCheckable(true);
+    m_gpxButton->setProperty("toggle", true);   // marked while a track is loaded (theme.qss)
+    connect(m_gpxButton, &QToolButton::clicked, this, &OrganiseView::chooseGpxTrack);
+    updateGpxButton();
 
     m_counts = new QLabel(this);
     m_scanProgress = new QProgressBar(this);
@@ -662,13 +671,14 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
     bar->addWidget(m_filmstripButton);
     bar->addWidget(m_gridButton);
     bar->addWidget(m_placesButton);
+    bar->addWidget(m_gpxButton);
     bar->addSpacing(12);
     bar->addWidget(m_identifyRunsButton);
     bar->addWidget(m_undoButton);
     bar->addWidget(m_commitButton);
 
     m_hint = new QLabel(tr("Click a photo to focus and preview it. N names it · R marks it as a "
-                           "reject · B marks it as a best shot · I identifies it with iNaturalist · G sets its location on a map · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
+                           "reject · B marks it as a best shot · I identifies it with iNaturalist · G sets its location on a map (Shift+G from the folder's GPX track) · E marks it as the last photo of its taxon · V, a double-click or ⤢ shows it full size (there A is 1:1 and R rejects) · "
                            "right-click for actions. The photos after a named one go with it, "
                            "up to the next name or end. The wheel scrolls · F11 full screen."),
                         this);
@@ -817,6 +827,7 @@ void OrganiseView::openFolder(const QString &folder)
         FirstPage page = watcher->result();
         m_session.setItems(folder, std::move(page.read), std::move(page.pending));
         m_session.loadProgress();
+        loadGpxTrack();
         m_model->reset();
         updateCellSize();
         updateCounts();
@@ -1335,6 +1346,7 @@ void OrganiseView::setLocationOnMap()
     }
 
     GeotagDialog dialog(m_app, photos, clues, this);
+    dialog.setTrack(m_track, m_session.gpxOffsetSeconds());
     if (dialog.exec() != QDialog::Accepted)
         return;
     QApplication::setOverrideCursor(Qt::WaitCursor);
@@ -1356,6 +1368,337 @@ void OrganiseView::setLocationOnMap()
                                 int(failures.size()))
                                  .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
     emit statusMessage(tr("Set the location of %n photo(s).", nullptr, set), 6000);
+    updatePreview();
+    m_placeScan->start();
+}
+
+void OrganiseView::loadGpxTrack()
+{
+    m_track = {};
+    if (!m_session.gpxPath().isEmpty())
+        m_track = geo::GpxTrack::load(m_session.gpxPath());
+    updateGpxButton();
+}
+
+void OrganiseView::updateGpxButton()
+{
+    const bool loaded = m_track.hasTimes();
+    m_gpxButton->setChecked(loaded);
+    m_gpxButton->setEnabled(!m_session.folder().isEmpty());
+    QString tip = tr("Choose the GPS track (a .gpx file from a phone or GPS unit) recorded while these "
+                     "photos were taken. Right-click photos → Create Geotag from GPX then gives each the "
+                     "track's position at the time it was taken, and Set Location on Map shows the track.");
+    if (loaded)
+        tip += tr("\n\nNow: %1 (%n point(s))", nullptr, m_track.pointCount())
+                   .arg(QFileInfo(m_session.gpxPath()).fileName());
+    else if (!m_session.gpxPath().isEmpty())
+        tip += tr("\n\n%1 couldn't be read, or has no times in it.").arg(QFileInfo(m_session.gpxPath()).fileName());
+    m_gpxButton->setToolTip(tip);
+}
+
+int OrganiseView::photosOnTrack(const geo::GpxTrack &track, int offsetSeconds) const
+{
+    int n = 0;
+    for (const organise::Item &it : m_session.items()) {
+        if (it.taken.isValid() && track.positionAt(it.taken.addSecs(offsetSeconds).toUTC()))
+            ++n;
+    }
+    return n;
+}
+
+void OrganiseView::chooseGpxTrack()
+{
+    updateGpxButton();   // the click toggled it: it shows the track, not the click
+    if (m_session.folder().isEmpty())
+        return;
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("GPX Track"));
+    QString path = m_session.gpxPath();
+    geo::GpxTrack track = m_track;
+
+    auto *intro = new QLabel(tr("The GPS track recorded while this folder's photos were taken. Each "
+                                "photo's time is looked up in it to find where the photo was taken."),
+                             &dialog);
+    intro->setWordWrap(true);
+    auto *file = new QLabel(&dialog);
+    file->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    file->setWordWrap(true);
+    auto *choose = new QPushButton(tr("Choose…"), &dialog);
+    auto *remove = new QPushButton(tr("Remove"), &dialog);
+    auto *summary = new QLabel(&dialog);
+    summary->setWordWrap(true);
+    auto *sign = new QComboBox(&dialog);
+    sign->addItem(tr("Add"), 1);
+    sign->addItem(tr("Subtract"), -1);
+    auto *hours = new QSpinBox(&dialog);
+    hours->setRange(0, 23);
+    hours->setSuffix(tr(" h"));
+    auto *minutes = new QSpinBox(&dialog);
+    minutes->setRange(0, 59);
+    minutes->setSuffix(tr(" min"));
+    const int saved = m_session.gpxOffsetSeconds();
+    sign->setCurrentIndex(saved < 0 ? 1 : 0);
+    hours->setValue(std::abs(saved) / 3600);
+    minutes->setValue(std::abs(saved) % 3600 / 60);
+    auto *clock = new QHBoxLayout;
+    clock->addWidget(sign);
+    clock->addWidget(hours);
+    clock->addWidget(minutes);
+    clock->addWidget(new QLabel(tr("to the photos' times"), &dialog));
+    clock->addStretch(1);
+    auto *clockNote = new QLabel(tr("Leave at 0 when the camera's clock was right and set to this computer's "
+                                    "time zone. Otherwise: add hours if the camera was behind the local time "
+                                    "here (photos taken further west read earlier), subtract if it was ahead."),
+                                 &dialog);
+    clockNote->setWordWrap(true);
+    QPalette muted = clockNote->palette();
+    muted.setColor(QPalette::WindowText, themeColors(currentThemeVariant()).mutedText);
+    clockNote->setPalette(muted);
+    auto *covered = new QLabel(&dialog);
+    covered->setWordWrap(true);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    auto offset = [sign, hours, minutes] {
+        return sign->currentData().toInt() * (hours->value() * 3600 + minutes->value() * 60);
+    };
+    QString loadError;
+    auto refresh = [&] {
+        const QLocale locale;
+        file->setText(path.isEmpty() ? tr("<i>No track chosen.</i>")
+                                     : QDir::toNativeSeparators(path).toHtmlEscaped());
+        remove->setEnabled(!path.isEmpty());
+        for (QWidget *w : {static_cast<QWidget *>(sign), static_cast<QWidget *>(hours), static_cast<QWidget *>(minutes)})
+            w->setEnabled(track.hasTimes());
+        if (path.isEmpty()) {
+            summary->clear();
+            covered->clear();
+            return;
+        }
+        if (track.isEmpty()) {
+            summary->setText(tr("This file can't be used: %1.").arg(loadError.isEmpty() ? tr("it has no track points") : loadError));
+            covered->clear();
+            return;
+        }
+        if (!track.hasTimes()) {
+            summary->setText(tr("%n point(s), but none has a time, so photos can't be matched to it. "
+                                "It can still be seen in Set Location on Map.", nullptr, track.pointCount()));
+            covered->clear();
+            return;
+        }
+        summary->setText(tr("%n point(s), from %1 to %2 (this computer's time).", nullptr, track.pointCount())
+                             .arg(locale.toString(track.start().toLocalTime(), QStringLiteral("d MMM yyyy HH:mm:ss")),
+                                  locale.toString(track.end().toLocalTime(), track.start().toLocalTime().date() == track.end().toLocalTime().date()
+                                                                                 ? QStringLiteral("HH:mm:ss")
+                                                                                 : QStringLiteral("d MMM yyyy HH:mm:ss"))));
+        const int total = m_session.count();
+        const int on = photosOnTrack(track, offset());
+        QString text = tr("<b>%1 of %n photo(s)</b> were taken within 5 minutes of a track point.", nullptr, total).arg(on);
+        if (m_session.pendingCount() > 0)
+            text += QStringLiteral(" ") + tr("(%n more in the folder haven't been read yet.)", nullptr, m_session.pendingCount());
+        if (on == 0 && total > 0) {
+            const QDateTime first = m_session.items().first().taken, last = m_session.items().last().taken;
+            text += QStringLiteral("<br>")
+                    + tr("The photos read %1 to %2: if that's the same outing, the camera's clock or time zone "
+                         "was different, so set the correction above.")
+                          .arg(locale.toString(first, QStringLiteral("d MMM yyyy HH:mm")),
+                               locale.toString(last, QStringLiteral("d MMM yyyy HH:mm")));
+        }
+        covered->setText(text);
+    };
+    connect(choose, &QPushButton::clicked, &dialog, [&] {
+        const QString start = path.isEmpty() ? m_session.folder() : QFileInfo(path).absolutePath();
+        const QString picked = QFileDialog::getOpenFileName(&dialog, tr("Choose a GPX Track"), start,
+                                                            tr("GPS tracks (*.gpx *.GPX);;All files (*)"));
+        if (picked.isEmpty())
+            return;
+        path = picked;
+        loadError.clear();
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        track = geo::GpxTrack::load(path, &loadError);
+        QApplication::restoreOverrideCursor();
+        refresh();
+    });
+    connect(remove, &QPushButton::clicked, &dialog, [&] {
+        path.clear();
+        track = {};
+        refresh();
+    });
+    connect(sign, &QComboBox::currentIndexChanged, &dialog, [&] { refresh(); });
+    connect(hours, &QSpinBox::valueChanged, &dialog, [&] { refresh(); });
+    connect(minutes, &QSpinBox::valueChanged, &dialog, [&] { refresh(); });
+
+    auto *fileRow = new QHBoxLayout;
+    fileRow->addWidget(file, 1);
+    fileRow->addWidget(choose);
+    fileRow->addWidget(remove);
+    auto *form = new QFormLayout;
+    form->addRow(tr("Track file:"), fileRow);
+    form->addRow(QString(), summary);
+    form->addRow(tr("Camera clock:"), clock);
+    form->addRow(QString(), clockNote);
+    form->addRow(QString(), covered);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(intro);
+    layout->addLayout(form);
+    layout->addStretch(1);
+    layout->addWidget(buttons);
+    if (!path.isEmpty() && track.isEmpty())
+        track = geo::GpxTrack::load(path, &loadError);
+    refresh();
+    // Wrapped labels don't tell a layout their height until they have a width.
+    dialog.setMinimumWidth(680);
+    dialog.resize(680, std::max(380, layout->totalHeightForWidth(680)));
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    m_session.setGpx(path, track.hasTimes() ? offset() : 0);
+    m_track = track;
+    updateGpxButton();
+    if (path.isEmpty())
+        emit statusMessage(tr("No GPX track for this folder."), 5000);
+    else
+        emit statusMessage(tr("GPX track: %1. Select photos, right-click → Create Geotag from GPX.")
+                               .arg(QFileInfo(path).fileName()), 8000);
+}
+
+void OrganiseView::geotagFromGpx()
+{
+    QList<int> rows;
+    for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes())
+        rows << i.row();
+    std::sort(rows.begin(), rows.end());
+    if (rows.isEmpty())
+        return;
+    if (!m_track.hasTimes()) {
+        QMessageBox::information(this, tr("Create Geotag from GPX"),
+                                 m_session.gpxPath().isEmpty()
+                                     ? tr("Choose this folder's GPS track first, with GPX Track… above the photos.")
+                                     : tr("%1 couldn't be read, or has no times in it. Choose another with GPX Track… above the photos.")
+                                           .arg(QFileInfo(m_session.gpxPath()).fileName()));
+        return;
+    }
+    const int offset = m_session.gpxOffsetSeconds();
+    struct Found
+    {
+        int row;
+        geo::GpxTrack::Match match;
+    };
+    QList<Found> found;
+    int tooFar = 0, located = 0, fileDated = 0;
+    for (int r : std::as_const(rows)) {
+        const organise::Item &it = m_session.items().at(r);
+        const std::optional<geo::GpxTrack::Match> match =
+            it.taken.isValid() ? m_track.positionAt(it.taken.addSecs(offset).toUTC()) : std::nullopt;
+        if (!match) {
+            ++tooFar;
+            continue;
+        }
+        found << Found{r, *match};
+        located += it.hasGps() ? 1 : 0;
+        fileDated += it.takenFromExif ? 0 : 1;
+    }
+    const QLocale locale;
+    const QString stamp = QStringLiteral("d MMM yyyy HH:mm:ss");
+    if (found.isEmpty()) {
+        const organise::Item &a = m_session.items().at(rows.first());
+        const organise::Item &b = m_session.items().at(rows.last());
+        QMessageBox::warning(
+            this, tr("Create Geotag from GPX"),
+            tr("No location was set: the track has no point within 5 minutes of %n selected photo(s).\n\n"
+               "Photos: %1 to %2\nTrack: %3 to %4\n\n"
+               "If these are the same outing, the camera's clock or time zone was different: set the "
+               "Camera clock correction in GPX Track….", nullptr, int(rows.size()))
+                .arg(locale.toString(a.taken.addSecs(offset), stamp), locale.toString(b.taken.addSecs(offset), stamp),
+                     locale.toString(m_track.start().toLocalTime(), stamp),
+                     locale.toString(m_track.end().toLocalTime(), stamp)));
+        return;
+    }
+    bool replace = true;
+    if (located > 0) {
+        QMessageBox box(QMessageBox::Question, tr("Create Geotag from GPX"),
+                        tr("%n of the selected photos already have a location.", nullptr, located),
+                        QMessageBox::NoButton, this);
+        box.setInformativeText(tr("Replace it with the position from the track, or keep theirs and set only the others?"));
+        QPushButton *replaceButton = box.addButton(tr("Replace"), QMessageBox::AcceptRole);
+        QPushButton *keepButton = box.addButton(tr("Keep Theirs"), QMessageBox::NoRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(keepButton);
+        box.exec();
+        if (box.clickedButton() != replaceButton && box.clickedButton() != keepButton)
+            return;
+        replace = box.clickedButton() == replaceButton;
+    }
+    const bool intoRaw = m_app.settings().geotagWriteIntoRaw();
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QStringList failures;
+    int set = 0, kept = 0;
+    for (const Found &f : std::as_const(found)) {
+        if (m_session.items().at(f.row).hasGps() && !replace) {
+            ++kept;
+            continue;
+        }
+        const geo::GeotagWriter::Result result =
+            m_session.setLocation(f.row, f.match.latitude, f.match.longitude, intoRaw);
+        failures << result.failures;
+        ++set;
+        m_model->runChanged(f.row);
+    }
+    QApplication::restoreOverrideCursor();
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, tr("Create Geotag from GPX"),
+                             tr("The location couldn't be written into %n file(s):\n\n%1", nullptr,
+                                int(failures.size()))
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    QStringList parts{tr("Set the location of %n photo(s) from the GPX track.", nullptr, set)};
+    if (tooFar > 0)
+        parts << tr("%n photo(s) taken more than 5 minutes from any track point were left.", nullptr, tooFar);
+    if (kept > 0)
+        parts << tr("%n photo(s) kept the location they had.", nullptr, kept);
+    if (fileDated > 0)
+        parts << tr("%n photo(s) had no date taken, so the file's date was used.", nullptr, fileDated);
+    emit statusMessage(parts.join(QLatin1Char(' ')), 10000);
+    updatePreview();
+    m_placeScan->start();
+}
+
+void OrganiseView::removeLocation()
+{
+    QList<int> rows;
+    for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes()) {
+        if (m_session.items().at(i.row()).hasGps())
+            rows << i.row();
+    }
+    std::sort(rows.begin(), rows.end());
+    if (rows.isEmpty())
+        return;
+    QMessageBox box(QMessageBox::Question, tr("Remove Location"),
+                    tr("Remove the location from %n photo(s)?", nullptr, int(rows.size())), QMessageBox::NoButton, this);
+    box.setInformativeText(tr("The GPS position is taken out of the files (a JPEG's own data, and a RAW's "
+                              ".xmp sidecar). It can't be undone here: a location the camera or phone "
+                              "recorded is gone for good, though one you set can be set again."));
+    QPushButton *removeButton = box.addButton(tr("Remove Location"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    if (box.clickedButton() != removeButton)
+        return;
+    const bool intoRaw = m_app.settings().geotagWriteIntoRaw();
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QStringList failures;
+    int removed = 0;
+    for (int r : std::as_const(rows)) {
+        failures << m_session.clearLocation(r, intoRaw).failures;
+        removed += m_session.items().at(r).hasGps() ? 0 : 1;
+        m_model->runChanged(r);
+    }
+    QApplication::restoreOverrideCursor();
+    if (!failures.isEmpty())
+        QMessageBox::warning(this, tr("Remove Location"),
+                             tr("The location couldn't be removed from %n file(s):\n\n%1", nullptr,
+                                int(failures.size()))
+                                 .arg(failures.mid(0, 10).join(QLatin1Char('\n'))));
+    emit statusMessage(tr("Removed the location from %n photo(s).", nullptr, removed), 6000);
     updatePreview();
     m_placeScan->start();
 }
@@ -1468,6 +1811,21 @@ void OrganiseView::contextMenuAt(const QPoint &pos)
     locate->setShortcut(Qt::Key_G);
     locate->setToolTip(tr("Put a pin on a map where the selected photos were taken, or move it: "
                           "written into the JPEG, and an .xmp sidecar beside a RAW."));
+    QAction *fromTrack = menu.addAction(tr("Create Geotag from GPX"), this, [this] { geotagFromGpx(); });
+    fromTrack->setShortcut(Qt::SHIFT | Qt::Key_G);
+    fromTrack->setEnabled(m_track.hasTimes());
+    fromTrack->setToolTip(m_track.hasTimes()
+                              ? tr("Give the selected photos the position the GPS track (%1) recorded at "
+                                   "the time each was taken.").arg(QFileInfo(m_session.gpxPath()).fileName())
+                              : tr("Choose the folder's GPS track first, with GPX Track… above the photos."));
+    bool anyLocated = false;
+    for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes())
+        anyLocated = anyLocated || m_session.items().at(i.row()).hasGps();
+    QAction *unlocate = menu.addAction(tr("Remove Location…"), this, [this] { removeLocation(); });
+    unlocate->setEnabled(anyLocated);
+    unlocate->setToolTip(tr("Take the location (the GEO mark) off the selected photos: out of the JPEG's "
+                            "GPS data and a RAW's .xmp sidecar."));
+    menu.setToolTipsVisible(true);
     menu.addSeparator();
     menu.addAction(tr("View Full Size"), this, [this, row] { showFullSize(row); });
     menu.addAction(tr("Show in File Manager"), this, [this] {
@@ -1507,7 +1865,10 @@ bool OrganiseView::eventFilter(QObject *watched, QEvent *event)
             toggleBest();
             return true;
         case Qt::Key_G:
-            setLocationOnMap();
+            if (key->modifiers() & Qt::ShiftModifier)
+                geotagFromGpx();
+            else
+                setLocationOnMap();
             return true;
         case Qt::Key_I:
             nameAt(row, true);

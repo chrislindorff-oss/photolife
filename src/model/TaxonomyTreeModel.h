@@ -166,6 +166,11 @@ private:
     void rebuild();
     void emitCoverageDataChanged(const QModelIndex &parent);
     void emitSeenDataChanged(const QModelIndex &parent);
+    // While a threatened, status or introduced filter is on, a higher rank's
+    // Coverage counts the taxa that filter is about (with photos / all),
+    // not every species: 0 / 1 introduced, not 1 / 4.
+    bool countsFollowFilter() const { return m_threatenedOnly || !m_statusFilter.isEmpty() || m_introducedOnly; }
+    void recomputeFilterCounts();
     void recomputeSeen();
     bool isCoverageComplete(qint64 inatId) const;
     // A taxon the active threatened filter is about: any listed taxon under
@@ -184,6 +189,7 @@ private:
     QSet<qint64> m_markedSeen;                         // hand ticks (SeenStore)
     QHash<qint64, pl::coverage::SeenState> m_seen;     // rolled up over m_flat
     std::function<bool()> m_editGuard;
+    QHash<qint64, QPair<int, int>> m_filterCounts;   // inat id -> (with photos, total) under the filter
     bool m_photographedOnly = false;
     bool m_threatenedOnly = false;
     bool m_introducedOnly = false;

@@ -24,6 +24,7 @@ private slots:
     void ancestrySplits();
     void taxonCoreFields();
     void taxonParentFromAncestryWhenNoParentId();
+    void taxonAncestryFromAncestorIds();
     void taxonNamesSplitIntoSynonymsAndVernacular();
     void taxonDefaultPhoto();
     void inactiveTaxon();
@@ -65,6 +66,18 @@ void TestINatParse::taxonParentFromAncestryWhenNoParentId()
         "id": 5, "rank": "genus", "name": "Diuris", "ancestry": "1/2/3"
     })"));
     QCOMPARE(t.parentInatId.value_or(-1), qint64(3));
+}
+
+void TestINatParse::taxonAncestryFromAncestorIds()
+{
+    // A reply with only ancestor_ids (the taxon itself last): the chain above it.
+    const auto t = parseTaxon(obj("{\"id\": 58669, \"rank\": \"species\", \"name\": \"Leotia lubrica\","
+                                  " \"ancestor_ids\": [48460, 47170, 58673, 58669]}"));
+    QCOMPARE(t.ancestry, QStringLiteral("48460/47170/58673"));
+    QCOMPARE(t.parentInatId.value_or(-1), qint64(58673));
+    // Its own ancestry string wins when there is one.
+    const auto u = parseTaxon(obj("{\"id\": 5, \"ancestry\": \"1/2\", \"ancestor_ids\": [1, 2, 3, 5]}"));
+    QCOMPARE(u.ancestry, QStringLiteral("1/2"));
 }
 
 void TestINatParse::taxonNamesSplitIntoSynonymsAndVernacular()

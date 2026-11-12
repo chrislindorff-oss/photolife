@@ -121,6 +121,11 @@ public:
     // moves with it -- and the RAW itself with `intoRaw`), and kept here.
     geo::GeotagWriter::Result setLocation(int i, double latitude, double longitude, bool intoRaw);
 
+    // Takes shot `i`'s location out of its files again (Remove Location):
+    // geo::GeotagWriter::clearShot(). What's still there afterwards (inside a
+    // RAW that wasn't to be changed) is kept here, and reported.
+    geo::GeotagWriter::Result clearLocation(int i, bool intoRaw);
+
     // Shot `i`'s files changed (a rating written): its size and time read
     // again, so its progress still recognises it.
     void refreshFileStats(int i);
@@ -137,6 +142,16 @@ public:
     bool saveProgress() const;
     void loadProgress();
     void clearProgress();
+
+    // The folder's GPS track (GPX Track…): the .gpx file photos are geotagged
+    // from, and the correction added to the photos' times before they're
+    // matched to it (a camera clock that was off, or set to another time
+    // zone). Kept with the progress; the file itself is only ever read.
+    QString gpxPath() const { return m_gpxPath; }   // absolute; empty when none
+    int gpxOffsetSeconds() const { return m_gpxOffsetSeconds; }
+    void setGpx(const QString &path, int offsetSeconds);   // an empty path removes it
+    // The .gpx files directly in `folder`, by name.
+    static QStringList gpxFilesIn(const QString &folder);
 
     // The folder name for a given name: sanitised for the file system.
     static QString folderNameFor(const QString &name);
@@ -160,6 +175,9 @@ private:
     QSet<int> m_best;
     QSet<int> m_namingEnds;
     QStringList m_nameOrder;   // names in the order given (for recentNames())
+    QString m_gpxPath;
+    int m_gpxOffsetSeconds = 0;
+    bool m_gpxChosen = false;  // the user's choice (even "none"), not one just found in the folder
 };
 
 } // namespace pl::organise

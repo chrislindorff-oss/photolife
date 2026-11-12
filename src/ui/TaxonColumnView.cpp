@@ -50,22 +50,22 @@ bool isLeaf(const QModelIndex &index)
     return index.data(Model::SeenRole).isValid();   // species and lower only
 }
 
+// The Coverage column's own text (✔, ·, "7 / 8" -- or the filtered counts
+// while a threatened or introduced filter is on), so both views agree.
 QString coverageText(const QModelIndex &index)
 {
-    if (isLeaf(index))
-        return index.data(Model::HasPhotosRole).toBool() ? QStringLiteral("✔") : QStringLiteral("·");
-    const int total = index.data(Model::SpeciesTotalRole).toInt();
-    if (total <= 0)
-        return {};
-    return QStringLiteral("%1 / %2").arg(index.data(Model::SpeciesWithPhotosRole).toInt()).arg(total);
+    return index.sibling(index.row(), Model::CoverageColumn).data(Qt::DisplayRole).toString();
 }
 
-bool coverageComplete(const QModelIndex &index)
+QColor coverageColor(const QModelIndex &index, const ThemeColors &theme)
 {
-    if (isLeaf(index))
-        return index.data(Model::HasPhotosRole).toBool();
-    const int total = index.data(Model::SpeciesTotalRole).toInt();
-    return total > 0 && index.data(Model::SpeciesWithPhotosRole).toInt() == total;
+    const QVariant fg = index.sibling(index.row(), Model::CoverageColumn).data(Qt::ForegroundRole);
+    if (fg.isValid())
+        return fg.value<QColor>();
+    // A group: green once every one of them is photographed.
+    const QStringList parts = coverageText(index).split(QStringLiteral(" / "));
+    return parts.size() == 2 && parts.at(0) == parts.at(1) && parts.at(1) != QLatin1String("0") ? theme.positive
+                                                                                               : theme.mutedText;
 }
 
 // The rank to show: iNaturalist's top rank for Life ("stateofmatter") says nothing.
@@ -162,7 +162,7 @@ void TaxonColumnDelegate::paint(QPainter *p, const QStyleOptionViewItem &option,
     p->drawText(l.rank, Qt::AlignRight | Qt::AlignVCenter, rankText(index));
 
     p->setFont(option.font);
-    p->setPen(coverageComplete(index) ? theme.positive : theme.mutedText);
+    p->setPen(coverageColor(index, theme));
     p->drawText(l.coverage, Qt::AlignRight | Qt::AlignVCenter, coverageText(index));
 
     if (!l.check.isNull()) {

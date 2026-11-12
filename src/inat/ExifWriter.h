@@ -17,6 +17,7 @@ struct ExifFields
     std::optional<double> longitude;
     QString taxonName;                  // -> UserComment
     std::optional<int> rating;          // 0-5 stars -> Xmp.xmp.Rating and Exif.Image.Rating
+    bool removeGps = false;             // takes the whole GPS block out (latitude/longitude then ignored)
 };
 
 // Writes `fields` into the JPEG at `path`, in place, via exiv2. Returns false
@@ -41,6 +42,9 @@ bool writeSidecarRating(const QString &path, int rating, QString *error = nullpt
 // Sets the GPS position (exif:GPSLatitude/GPSLongitude) in the XMP sidecar at
 // `path`, the same way: an existing sidecar keeps everything else in it.
 bool writeSidecarGps(const QString &path, double latitude, double longitude, QString *error = nullptr);
+// Takes the GPS position out of the XMP sidecar at `path`, keeping everything
+// else in it. True when there's no sidecar: nothing to remove.
+bool removeSidecarGps(const QString &path, QString *error = nullptr);
 // One coordinate in XMP's form: "25,57.25440S".
 QString xmpCoordinate(double value, bool latitude);
 

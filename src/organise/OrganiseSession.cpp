@@ -210,6 +210,9 @@ void OrganiseSession::setItems(const QString &folder, QList<Item> items, QList<I
     m_best.clear();
     m_namingEnds.clear();
     m_nameOrder.clear();
+    m_gpxPath.clear();
+    m_gpxOffsetSeconds = 0;
+    m_gpxChosen = false;
 }
 
 int OrganiseSession::appendItems(QList<Item> batch)
@@ -500,7 +503,16 @@ bool OrganiseSession::saveProgress() const
             o.insert(QStringLiteral("best"), true);
         shots.insert(item.baseName, o);
     }
-    if (shots.isEmpty()) {
+    // The GPS track chosen for the folder: by name when it's in the folder
+    // (so the folder can be moved), else where it is.
+    QJsonObject gpx;
+    if (m_gpxChosen) {
+        const QFileInfo info(m_gpxPath);
+        const bool inFolder = !m_gpxPath.isEmpty() && info.absolutePath() == QDir(m_folder).absolutePath();
+        gpx = QJsonObject{{QStringLiteral("file"), inFolder ? info.fileName() : m_gpxPath},
+                          {QStringLiteral("offsetSeconds"), m_gpxOffsetSeconds}};
+    }
+    if (shots.isEmpty() && gpx.isEmpty()) {
         QFile::remove(path);   // nothing to keep
         return true;
     }
@@ -510,10 +522,12 @@ bool OrganiseSession::saveProgress() const
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))
         return false;
-    file.write(QJsonDocument(QJsonObject{{QStringLiteral("version"), 1},
-                                         {QStringLiteral("shots"), shots},
-                                         {QStringLiteral("recent"), order}})
-                   .toJson());
+    QJsonObject root{{QStringLiteral("version"), 1},
+                     {QStringLiteral("shots"), shots},
+                     {QStringLiteral("recent"), order}};
+    if (!gpx.isEmpty())
+        root.insert(QStringLiteral("gpx"), gpx);
+    file.write(QJsonDocument(root).toJson());
     return file.commit();
 }
 
@@ -522,6 +536,61 @@ void OrganiseSession::loadProgress()
     const QJsonObject root = applyProgress(0);
     for (const QJsonValue &v : root.value(QStringLiteral("recent")).toArray())
         m_nameOrder << v.toString();
+    // The track chosen before; else the folder's own, when it has just one.
+    m_gpxPath.clear();
+    m_gpxOffsetSeconds = 0;
+    m_gpxChosen = false;
+    if (root.contains(QStringLiteral("gpx"))) {
+        const QJsonObject gpx = root.value(QStringLiteral("gpx")).toObject();
+        const QString file = gpx.value(QStringLiteral("file")).toString();
+        m_gpxChosen = true;
+        m_gpxOffsetSeconds = gpx.value(QStringLiteral("offsetSeconds")).toInt();
+        if (!file.isEmpty())
+            m_gpxPath = QDir::cleanPath(QDir(m_folder).absoluteFilePath(file));
+    } else if (const QStringList found = gpxFilesIn(m_folder); found.size() == 1) {
+        m_gpxPath = found.first();
+    }
+}
+
+void OrganiseSession::setGpx(const QString &path, int offsetSeconds)
+{
+    m_gpxPath = path.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    m_gpxOffsetSeconds = m_gpxPath.isEmpty() ? 0 : offsetSeconds;
+    m_gpxChosen = true;
+    saveProgress();
+}
+
+geo::GeotagWriter::Result OrganiseSession::clearLocation(int i, bool intoRaw)
+{
+    if (i < 0 || i >= count())
+        return {};
+    Item &item = m_items[i];
+    geo::GeotagWriter::Result result =
+        geo::GeotagWriter::clearShot(item.files.mid(0, item.kinds.size()), item.baseName, intoRaw);
+    // What the files hold now.
+    Item reread = item;
+    reread.latitude.reset();
+    reread.longitude.reset();
+    readMetadata(reread);
+    item.latitude = reread.latitude;
+    item.longitude = reread.longitude;
+    if (item.hasGps() && result.ok())
+        result.failures << QStringLiteral("%1: a location is still inside its RAW file, which wasn't changed")
+                               .arg(item.baseName);
+    refreshFileStats(i);
+    saveProgress();
+    return result;
+}
+
+QStringList OrganiseSession::gpxFilesIn(const QString &folder)
+{
+    QStringList out;
+    if (folder.isEmpty())
+        return out;
+    const QDir dir(folder);
+    for (const QString &name : dir.entryList({QStringLiteral("*.gpx")}, QDir::Files, QDir::Name | QDir::IgnoreCase))
+        out << dir.absoluteFilePath(name);
+    return out;
 }
 
 QJsonObject OrganiseSession::applyProgress(int from)
@@ -558,6 +627,7 @@ void OrganiseSession::clearProgress()
     m_namingEnds.clear();
     m_nameOrder.clear();
     QFile::remove(QDir(m_folder).filePath(QLatin1String(kProgressFile)));
+    saveProgress();   // the folder's GPS track isn't naming progress: it stays
 }
 
 } // namespace pl::organise

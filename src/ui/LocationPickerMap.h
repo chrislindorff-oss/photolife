@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QDateTime>
 #include <QList>
 #include <QPointF>
 #include <QString>
@@ -33,13 +34,28 @@ public:
         double longitude = 0;
         QString label;          // its tooltip
         bool selected = false;  // one of the photos being set (else a clue)
+        bool ring = false;      // where a photo's time falls on the GPS track
+    };
+    // A point of a GPS track drawn on the map; `time` (as the camera's clock
+    // would have read it) is shown when the pointer is on it.
+    struct TrackVertex
+    {
+        double latitude = 0;
+        double longitude = 0;
+        QDateTime time;
     };
 
     LocationPickerMap(net::TileCache &streetTiles, net::TileCache &satelliteTiles,
                       QWidget *parent = nullptr);
 
     void setDots(const QList<Dot> &dots);
+    const QList<Dot> &dots() const { return m_dots; }
+    // A GPS track, drawn as a line under the dots: one list per segment.
+    void setTrack(const QList<QList<TrackVertex>> &segments);
+    // Centres and zooms so the box (decimal degrees) is all in view.
+    void fitTo(double south, double west, double north, double east);
     void setPin(double latitude, double longitude);
+    void clearPin();
     bool hasPin() const { return m_pin.has_value(); }
     double pinLatitude() const { return m_pin ? m_pin->y() : 0; }
     double pinLongitude() const { return m_pin ? m_pin->x() : 0; }
@@ -74,6 +90,7 @@ private:
     QPointF toScreen(double lon, double lat) const;
     QPointF toLonLat(QPointF screen) const;   // x = longitude, y = latitude
     const Dot *dotAt(QPoint pos) const;
+    const TrackVertex *trackVertexAt(QPoint pos) const;
     void zoomAround(int zoom, QPointF screen);
     void placeOverlays();
 
@@ -83,6 +100,7 @@ private:
     net::TileCache &m_satelliteTiles;
     bool m_satellite = false;
     QList<Dot> m_dots;
+    QList<QList<TrackVertex>> m_track;
     std::optional<QPointF> m_pin;   // x = longitude, y = latitude
     double m_centerLon = 134.0;     // Australia, until told otherwise
     double m_centerLat = -26.0;

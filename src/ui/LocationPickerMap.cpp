@@ -8,6 +8,7 @@
 #include <QHelpEvent>
 #include <QLabel>
 #include <QLineF>
+#include <QLocale>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -15,10 +16,14 @@
 #include <QToolTip>
 #include <QWheelEvent>
 
+#include <cmath>
+
 namespace pl {
 namespace {
 constexpr double kDotHitRadius = 9.0;
 constexpr double kPinHitRadius = 14.0;
+constexpr double kTrackHitRadius = 8.0;
+const QColor kTrackColor(0xc8, 0x2a, 0xd0);   // tells on the street map and on aerial photos
 } // namespace
 
 LocationPickerMap::LocationPickerMap(net::TileCache &streetTiles, net::TileCache &satelliteTiles,
@@ -78,9 +83,51 @@ void LocationPickerMap::setDots(const QList<Dot> &dots)
     update();
 }
 
+void LocationPickerMap::setTrack(const QList<QList<TrackVertex>> &segments)
+{
+    m_track = segments;
+    update();
+}
+
+void LocationPickerMap::fitTo(double south, double west, double north, double east)
+{
+    // Before the dialog is laid out the widget has no real size yet.
+    const QSizeF view(width() > 400 ? width() : 700, height() > 300 ? height() : 560);
+    int zoom = 17;
+    for (; zoom > kMinZoom; --zoom) {
+        const QPointF a = geo::lonLatToWorldPixel(west, north, zoom);
+        const QPointF b = geo::lonLatToWorldPixel(east, south, zoom);
+        if (std::abs(b.x() - a.x()) <= view.width() * 0.8 && std::abs(b.y() - a.y()) <= view.height() * 0.8)
+            break;
+    }
+    centreOn((south + north) / 2.0, (west + east) / 2.0, zoom);
+}
+
+const LocationPickerMap::TrackVertex *LocationPickerMap::trackVertexAt(QPoint pos) const
+{
+    const TrackVertex *best = nullptr;
+    double bestDistance = kTrackHitRadius;
+    for (const QList<TrackVertex> &segment : m_track) {
+        for (const TrackVertex &v : segment) {
+            const double d = QLineF(toScreen(v.longitude, v.latitude), QPointF(pos)).length();
+            if (d <= bestDistance) {
+                bestDistance = d;
+                best = &v;
+            }
+        }
+    }
+    return best;
+}
+
 void LocationPickerMap::setPin(double latitude, double longitude)
 {
     m_pin = QPointF(longitude, latitude);
+    update();
+}
+
+void LocationPickerMap::clearPin()
+{
+    m_pin.reset();
     update();
 }
 
@@ -139,11 +186,43 @@ void LocationPickerMap::paintEvent(QPaintEvent *)
     drawMapTiles(p, tiles(), origin(), m_zoom, size());
     p.setRenderHint(QPainter::Antialiasing);
 
+    // The GPS track: a line with a white casing, its ends marked. Points
+    // that land on the one before (a long stop, or zoomed out) are skipped.
+    for (const QList<TrackVertex> &segment : std::as_const(m_track)) {
+        QPolygonF line;
+        for (const TrackVertex &v : segment) {
+            const QPointF at = toScreen(v.longitude, v.latitude);
+            if (line.isEmpty() || QLineF(line.last(), at).length() >= 1.5)
+                line << at;
+        }
+        if (line.isEmpty())
+            continue;
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(255, 255, 255, 220), 6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(line);
+        p.setPen(QPen(kTrackColor, 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(line);
+        p.setPen(QPen(kTrackColor, 2));
+        p.setBrush(Qt::white);
+        p.drawEllipse(toScreen(segment.first().longitude, segment.first().latitude), 4.5, 4.5);
+        p.drawEllipse(toScreen(segment.last().longitude, segment.last().latitude), 4.5, 4.5);
+    }
+
     // Clues first, then the photos being set on top.
     for (int pass = 0; pass < 2; ++pass) {
         for (const Dot &d : std::as_const(m_dots)) {
             if (d.selected != (pass == 1))
                 continue;
+            if (d.ring) {
+                // Where a photo's time falls on the track: a ring, so the line shows through.
+                const QPointF at = toScreen(d.longitude, d.latitude);
+                p.setBrush(Qt::NoBrush);
+                p.setPen(QPen(Qt::white, 5.5));
+                p.drawEllipse(at, 8, 8);
+                p.setPen(QPen(QColor(0x20, 0x60, 0xd0), 3));
+                p.drawEllipse(at, 8, 8);
+                continue;
+            }
             p.setPen(QPen(Qt::white, 1.5));
             p.setBrush(d.selected ? QColor(0x20, 0x60, 0xd0) : QColor(0x55, 0x55, 0x55, 200));
             p.drawEllipse(toScreen(d.longitude, d.latitude), d.selected ? 7 : 5.5, d.selected ? 7 : 5.5);
@@ -187,6 +266,13 @@ bool LocationPickerMap::event(QEvent *event)
         auto *help = static_cast<QHelpEvent *>(event);
         if (const Dot *d = dotAt(help->pos()))
             QToolTip::showText(help->globalPos(), d->label + tr("\n(double-click to put the pin here)"), this);
+        else if (const TrackVertex *v = trackVertexAt(help->pos()))
+            QToolTip::showText(help->globalPos(),
+                               v->time.isValid()
+                                   ? tr("GPS track at %1\n(click to put the pin here)")
+                                         .arg(QLocale().toString(v->time, QStringLiteral("d MMM yyyy, HH:mm:ss")))
+                                   : tr("GPS track\n(click to put the pin here)"),
+                               this);
         else
             QToolTip::hideText();
         return true;

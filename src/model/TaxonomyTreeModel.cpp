@@ -216,8 +216,34 @@ void TaxonomyTreeModel::setHiddenRanks(const QSet<QString> &ranks)
     rebuild();
 }
 
+void TaxonomyTreeModel::recomputeFilterCounts()
+{
+    m_filterCounts.clear();
+    if (!countsFollowFilter())
+        return;
+    // Children come after their parents in m_flat: fold them in from the end.
+    for (auto it = m_flat.crbegin(); it != m_flat.crend(); ++it) {
+        const taxonomy::TreeNode &t = *it;
+        const coverage::TaxonCoverage cov = m_coverage.byTaxon.value(t.inatId);
+        // The same taxa the filter marks: listed species and lower, or introduced species.
+        const bool counts = (t.isLeafRank && matchesStatusFilter(cov)) || matchesIntroducedFilter(t, cov);
+        QPair<int, int> &own = m_filterCounts[t.inatId];
+        if (counts) {
+            own.second += 1;
+            if (cov.subtreeHasPhotos)
+                own.first += 1;
+        }
+        if (t.parentInatId) {
+            QPair<int, int> &up = m_filterCounts[*t.parentInatId];
+            up.first += own.first;
+            up.second += own.second;
+        }
+    }
+}
+
 void TaxonomyTreeModel::rebuild()
 {
+    recomputeFilterCounts();
     beginResetModel();
     m_root = std::make_unique<Node>();
     m_byId.clear();   // every Node is reallocated below
@@ -490,6 +516,10 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
             // filter is about -- "not photographed" is the point there.
             return matchesStatusFilter(*cov) ? QStringLiteral("✗") : QStringLiteral("·");
         }
+        if (countsFollowFilter()) {
+            const QPair<int, int> shown = m_filterCounts.value(t.inatId);
+            return shown.second > 0 ? QStringLiteral("%1 / %2").arg(shown.first).arg(shown.second) : QString();
+        }
         if (cov->speciesTotal > 0)
             return QStringLiteral("%1 / %2").arg(cov->speciesWithPhotos).arg(cov->speciesTotal);
         return {};
@@ -524,6 +554,13 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
         return cov->subtreeHasPhotos ? theme.positive : theme.mutedText;
     }
     case Qt::ToolTipRole: {
+        if (index.column() == CoverageColumn && !t.isLeafRank && countsFollowFilter()) {
+            const QString which = m_introducedOnly        ? tr("introduced species")
+                                  : !m_statusFilter.isEmpty() ? tr("%1 taxa").arg(m_statusFilter)
+                                                              : tr("threatened taxa");
+            return tr("Of the %1 here, how many you've photographed — the filter's taxa only "
+                      "(clear the filter for every species)").arg(which);
+        }
         QStringList bits;
         if (t.inRegion)
             bits << tr("Recorded in this region");
@@ -574,7 +611,15 @@ QVariant TaxonomyTreeModel::headerData(int section, Qt::Orientation orientation,
     switch (section) {
     case 0:  return tr("Taxon");
     case 1:  return tr("Rank");
-    case CoverageColumn: return tr("Coverage");
+    case CoverageColumn:
+        // Say what the counts are of while a filter narrows them.
+        if (m_introducedOnly)
+            return tr("Coverage: introduced");
+        if (!m_statusFilter.isEmpty())
+            return tr("Coverage: %1").arg(m_statusFilter);
+        if (m_threatenedOnly)
+            return tr("Coverage: threatened");
+        return tr("Coverage");
     default: return tr("Seen");
     }
 }

@@ -54,6 +54,7 @@ private slots:
     void coverageFilterFollowsCoverageUpdates();
     void threatenedFilterColoursPhotographedGreenAndMissingRed();
     void introducedFilterShowsIntroducedSpeciesInBlueWithAsterisk();
+    void groupCountsFollowTheThreatenedAndIntroducedFilters();
     void seenColumnTicksPhotographedAndLetsTheRestBeTicked();
     void seenTickHoldsInEveryTree();
     void seenSubspeciesTicksItsSpecies();
@@ -619,6 +620,66 @@ void TestTaxonomyTreeModel::introducedFilterShowsIntroducedSpeciesInBlueWithAste
     cov.byTaxon[900].subtreeHasPhotos = false;
     model.setCoverage(cov);
     QCOMPARE(mark(900), QStringLiteral("*"));
+}
+
+void TestTaxonomyTreeModel::groupCountsFollowTheThreatenedAndIntroducedFilters()
+{
+    // Diuris pardina (900): Endangered, photographed, introduced (for the
+    // test). Pterostylis nutans (901): Vulnerable, not photographed.
+    coverage::ProjectCoverage cov = partialCoverage();
+    cov.byTaxon[900].status = QStringLiteral("Endangered");
+    cov.byTaxon[901].status = QStringLiteral("Vulnerable");
+    for (qint64 id : {qint64(47217), qint64(800), qint64(801), qint64(900), qint64(901)})
+        cov.byTaxon[id].subtreeThreatened = true;
+    cov.byTaxon[47217].subtreeStatuses = {QStringLiteral("Endangered"), QStringLiteral("Vulnerable")};
+    cov.byTaxon[800].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[900].subtreeStatuses = {QStringLiteral("Endangered")};
+    cov.byTaxon[801].subtreeStatuses = {QStringLiteral("Vulnerable")};
+    cov.byTaxon[901].subtreeStatuses = {QStringLiteral("Vulnerable")};
+    cov.byTaxon[901].introduced = true;
+    for (qint64 id : {qint64(47217), qint64(801), qint64(901)})
+        cov.byTaxon[id].subtreeIntroduced = true;
+
+    model::TaxonomyTreeModel model(*m_db);
+    model.setProject(m_projectId);
+    model.setCoverage(cov);
+    auto counts = [&](qint64 id) {
+        return model.data(model.indexForTaxon(id).siblingAtColumn(model::TaxonomyTreeModel::CoverageColumn),
+                          Qt::DisplayRole).toString();
+    };
+    auto heading = [&] {
+        return model.headerData(model::TaxonomyTreeModel::CoverageColumn, Qt::Horizontal, Qt::DisplayRole).toString();
+    };
+
+    // No filter: every species.
+    QCOMPARE(counts(47217), QStringLiteral("1 / 2"));
+    QCOMPARE(heading(), QStringLiteral("Coverage"));
+
+    // Introduced: only the introduced species count -- 0 / 1, not 1 / 2.
+    model.setIntroducedOnly(true);
+    QCOMPARE(counts(47217), QStringLiteral("0 / 1"));
+    QCOMPARE(counts(801), QStringLiteral("0 / 1"));
+    QCOMPARE(heading(), QStringLiteral("Coverage: introduced"));
+    QVERIFY(model.data(model.indexForTaxon(47217).siblingAtColumn(2), Qt::ToolTipRole)
+                .toString().contains(QStringLiteral("introduced species")));
+    model.setIntroducedOnly(false);
+
+    // Threatened: both listed species.
+    model.setThreatenedOnly(true);
+    QCOMPARE(counts(47217), QStringLiteral("1 / 2"));
+    QCOMPARE(counts(800), QStringLiteral("1 / 1"));
+    QCOMPARE(heading(), QStringLiteral("Coverage: threatened"));
+    model.setThreatenedOnly(false);
+
+    // One tier.
+    model.setStatusFilter(QStringLiteral("Vulnerable"));
+    QCOMPARE(counts(47217), QStringLiteral("0 / 1"));
+    QCOMPARE(heading(), QStringLiteral("Coverage: Vulnerable"));
+    model.setStatusFilter(QString());
+
+    // Back to every species.
+    QCOMPARE(counts(47217), QStringLiteral("1 / 2"));
+    QCOMPARE(heading(), QStringLiteral("Coverage"));
 }
 
 namespace {

@@ -2,7 +2,10 @@
 
 #include "app/Application.h"
 #include "net/PhotoCache.h"
+#include "db/Database.h"
+#include "net/INatClient.h"
 #include "settings/Settings.h"
+#include "taxonomy/TaxonomyStore.h"
 #include "ui/InatTokenGetter.h"
 #include "ui/Theme.h"
 
@@ -13,6 +16,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QPointer>
 #include <QScreen>
 #include <QPushButton>
@@ -154,7 +158,7 @@ IdentifyPanel::IdentifyPanel(Application &app, QWidget *parent)
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_list, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
         if (QListWidgetItem *item = m_list->itemAt(pos))
-            previewSuggestion(item, m_list->viewport()->mapToGlobal(pos));
+            suggestionMenu(item, m_list->viewport()->mapToGlobal(pos));
     });
     m_list->installEventFilter(this);
     connect(&m_app, &Application::inatApiTokenChanged, this, [this] {
@@ -265,6 +269,126 @@ void IdentifyPanel::showResult(const inat::Identification &result)
     }
     m_result = result;
     fill();
+    loadHigherRanks();
+}
+
+QString IdentifyPanel::ancestryOf(const taxonomy::Taxon &taxon) const
+{
+    return taxon.ancestry.isEmpty() ? m_ancestry.value(taxon.inatId) : taxon.ancestry;
+}
+
+void IdentifyPanel::loadHigherRanks()
+{
+    const int generation = ++m_higherGeneration;
+    m_higherPending = 0;
+    if (!m_result)
+        return;
+    // A suggestion that came without its chain of ancestors: ask for it first.
+    QList<qint64> bare;
+    auto consider = [&](const taxonomy::Taxon &t) {
+        if (t.inatId > 0 && ancestryOf(t).isEmpty() && t.rank != QLatin1String("kingdom") && !bare.contains(t.inatId))
+            bare << t.inatId;
+    };
+    if (m_result->result.commonAncestor)
+        consider(m_result->result.commonAncestor->taxon);
+    for (const net::VisionSuggestion &s : m_result->result.suggestions.mid(0, kMaxRows * 2))
+        consider(s.taxon);
+    if (bare.isEmpty()) {
+        loadAncestors(generation);
+        return;
+    }
+    ++m_higherPending;
+    QPointer<IdentifyPanel> self(this);
+    m_app.inat().fetchTaxa(bare.mid(0, 30), [self, generation](net::Outcome<QList<taxonomy::Taxon>> out) {
+        if (!self || generation != self->m_higherGeneration)
+            return;
+        --self->m_higherPending;
+        if (out.ok()) {
+            for (const taxonomy::Taxon &t : std::as_const(out.value))
+                self->m_ancestry.insert(t.inatId, t.ancestry);
+        }
+        self->loadAncestors(generation);
+    });
+}
+
+void IdentifyPanel::loadAncestors(int generation)
+{
+    if (!m_result)
+        return;
+    QList<qint64> wanted;
+    auto consider = [&](const taxonomy::Taxon &t) {
+        for (const QString &part : ancestryOf(t).split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+            const qint64 id = part.toLongLong();
+            if (id > 0 && !m_higher.contains(id) && !wanted.contains(id))
+                wanted << id;
+        }
+    };
+    if (m_result->result.commonAncestor)
+        consider(m_result->result.commonAncestor->taxon);
+    for (const net::VisionSuggestion &s : m_result->result.suggestions.mid(0, kMaxRows * 2))
+        consider(s.taxon);
+    if (wanted.isEmpty())
+        return;
+    // Those in the catalogue (anything in a tree) need no asking.
+    const taxonomy::TaxonomyStore store(m_app.database().connectionName());
+    const QHash<qint64, taxonomy::Taxon> local = store.taxaByInatIds(wanted);
+    QList<qint64> toFetch;
+    for (qint64 id : std::as_const(wanted)) {
+        if (local.contains(id))
+            m_higher.insert(id, local.value(id));
+        else
+            toFetch << id;
+    }
+    QPointer<IdentifyPanel> self(this);
+    for (int from = 0; from < toFetch.size(); from += 30) {
+        ++m_higherPending;
+        m_app.inat().fetchTaxa(toFetch.mid(from, 30), [self, generation](net::Outcome<QList<taxonomy::Taxon>> out) {
+            if (!self || generation != self->m_higherGeneration)
+                return;
+            --self->m_higherPending;
+            if (out.ok()) {
+                for (const taxonomy::Taxon &t : std::as_const(out.value))
+                    self->m_higher.insert(t.inatId, t);
+            }
+        });
+    }
+}
+
+QList<taxonomy::Taxon> IdentifyPanel::higherRanks(const taxonomy::Taxon &taxon) const
+{
+    QList<taxonomy::Taxon> out;
+    const QStringList chain = ancestryOf(taxon).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (auto it = chain.crbegin(); it != chain.crend(); ++it) {
+        const auto known = m_higher.constFind(it->toLongLong());
+        // Not "Life" itself: that names nothing.
+        if (known != m_higher.cend() && known->rank != QLatin1String("stateofmatter") && !known->name.isEmpty())
+            out << *known;
+    }
+    return out;
+}
+
+void IdentifyPanel::suggestionMenu(QListWidgetItem *item, const QPoint &at)
+{
+    const QVariant data = item->data(Qt::UserRole);
+    if (!data.canConvert<taxonomy::Taxon>())
+        return;
+    const taxonomy::Taxon taxon = data.value<taxonomy::Taxon>();
+    QMenu menu(this);
+    menu.addAction(tr("Show a Photo of It"), this, [this, item, at] { previewSuggestion(item, at); });
+    menu.addSeparator();
+    QAction *heading = menu.addAction(tr("Use a higher rank instead:"));
+    heading->setEnabled(false);
+    const QList<taxonomy::Taxon> higher = higherRanks(taxon);
+    for (const taxonomy::Taxon &t : higher) {
+        QString label = nameOf(t);   // "Jelly Babies · Leotia (genus)"
+        menu.addAction(label.replace(QLatin1Char('&'), QStringLiteral("&&")), this, [this, t] { emit chosen(t); });
+    }
+    if (higher.isEmpty() || m_higherPending > 0) {
+        QAction *note = menu.addAction(m_higherPending > 0 ? tr("Asking iNaturalist for the ranks above… try again in a moment")
+                                                           : tr("The ranks above it couldn't be found"));
+        note->setEnabled(false);
+    }
+    menu.exec(at);
 }
 
 void IdentifyPanel::fill()
@@ -311,8 +435,8 @@ void IdentifyPanel::fill()
         return;
     }
     m_status->setText(m_request && m_request->crop
-                          ? tr("Suggestions for the selected part — click to use, right-click to see one:")
-                          : tr("iNaturalist's suggestions — click to use, right-click to see one:"));
+                          ? tr("Suggestions for the selected part — click to use; right-click to see one, or to use its genus, family or higher:")
+                          : tr("iNaturalist's suggestions — click to use; right-click to see one, or to use its genus, family or higher:"));
 }
 
 bool IdentifyPanel::eventFilter(QObject *watched, QEvent *event)
