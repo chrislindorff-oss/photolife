@@ -295,6 +295,45 @@ void CaptureListModel::setGpsFilter(GpsFilter filter)
     reloadAsync();
 }
 
+void CaptureListModel::setSearch(const QString &text)
+{
+    const QString simplified = text.simplified();
+    if (m_search == simplified)
+        return;
+    m_search = simplified;
+    reloadAsync();
+}
+
+QString CaptureListModel::searchClause(const QString &search, QStringList *binds)
+{
+    static const QStringList columns = {
+        QStringLiteral("name_text"),   QStringLiteral("matched_name"), QStringLiteral("matched_common_name"),
+        QStringLiteral("base_name"),   QStringLiteral("path"),         QStringLiteral("locality"),
+        QStringLiteral("captured_on"),
+    };
+    QStringList words;
+    for (const QString &w : search.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts))
+        words << w.toLower();
+    if (words.isEmpty())
+        return {};
+    QStringList perWord;
+    for (const QString &word : std::as_const(words)) {
+        // LIKE's own wildcards in what was typed match themselves.
+        QString escaped = word;
+        escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"))
+            .replace(QLatin1Char('%'), QStringLiteral("\\%"))
+            .replace(QLatin1Char('_'), QStringLiteral("\\_"));
+        QStringList anyColumn;
+        for (const QString &column : columns) {
+            // LOWER() on both sides: Postgres's LIKE heeds case, SQLite's doesn't.
+            anyColumn << QStringLiteral("LOWER(COALESCE(%1, '')) LIKE ? ESCAPE '\\'").arg(column);
+            *binds << QLatin1Char('%') + escaped + QLatin1Char('%');
+        }
+        perWord << QLatin1Char('(') + anyColumn.join(QStringLiteral(" OR ")) + QLatin1Char(')');
+    }
+    return perWord.join(QStringLiteral(" AND "));
+}
+
 void CaptureListModel::applyBestShot(const QList<int> &captureIds, bool on)
 {
     if (captureIds.isEmpty())
@@ -340,7 +379,7 @@ void CaptureListModel::reload()
 
     if (m_db.isOpen()) {
         const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly,
-                                 m_taxonSet, m_gpsFilter};
+                                 m_taxonSet, m_gpsFilter, m_search};
         m_rows = fetchRows(QSqlDatabase::database(m_db.connectionName(), false), params);
         for (int i = 0; i < m_rows.size(); ++i) {
             if (!m_rows[i].previewHash.isEmpty())
@@ -368,7 +407,7 @@ void CaptureListModel::reloadAsync()
     ensureWorker();
     const quint64 generation = ++m_generation;
     emit requestFetch(generation, QueryParams{m_statusFilter, m_taxonScope, m_projectScope,
-                                              m_bestShotOnly, m_taxonSet, m_gpsFilter});
+                                              m_bestShotOnly, m_taxonSet, m_gpsFilter, m_search});
 }
 
 void CaptureListModel::onRowsReady(quint64 generation, QList<Row> rows)
@@ -461,6 +500,10 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
         else if (params.gpsFilter == GpsFilter::Without)
             clauses << QStringLiteral("(latitude IS NULL OR longitude IS NULL)");
 
+        // Last: its values are bound after the scope's.
+        QStringList searchBinds;
+        if (const QString clause = searchClause(params.search, &searchBinds); !clause.isEmpty())
+            clauses << clause;
         const QString where =
             clauses.isEmpty() ? QString()
                               : QStringLiteral(" WHERE ") + clauses.join(QStringLiteral(" AND "));
@@ -510,6 +553,8 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             if (taxonScope > 0)
                 q.addBindValue(qlonglong(taxonScope));
         }
+        for (const QString &b : std::as_const(searchBinds))
+            q.addBindValue(b);
         q.exec();
 
         while (q.next()) {

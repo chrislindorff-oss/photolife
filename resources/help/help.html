@@ -81,7 +81,10 @@ toolbar):</p>
       selected on the left.</li>
   <li><b>All Library Photos</b> &mdash; every photo in the catalogue, regardless of
       any reference tree. PhotoLife starts in this mode. This is where the
-      <b>Show</b> status filter in the toolbar applies.</li>
+      <b>Show</b> status filter in the toolbar applies, and the <b>Search the library</b>
+      box beside it (<b>Ctrl+F</b>): type a name &mdash; scientific or common, including
+      species in no reference tree &mdash; a file or folder name, a place or a date
+      (<i>2025-10</i>), and every word must match. Typing there switches to this view.</li>
   <li><b>Review Unmatched</b> &mdash; the review queue (see below). Its count badge
       shows how many photos are waiting.</li>
   <li><b>iNaturalist</b> &mdash; tools that work with an iNaturalist account (see
@@ -744,6 +747,8 @@ aerial photos (World Imagery); <b>Set Location on Map</b> has the same switch, a
 PhotoLife remembers your choice for both.
 Drag to pan, scroll to zoom, and use <b>Fit to Photos</b> to frame everything in view
 &mdash; it does this automatically whenever you change the tree selection.
+<b>GPS Track&hellip;</b> draws a <i>.gpx</i> track over the pins &mdash; the route you walked
+that day &mdash; and its menu then zooms to it, swaps it for another, or hides it.
 The active tree's region is outlined and lightly shaded, using the boundary
 iNaturalist has for that place (fetched once, in the background); turn this off with
 <b>View &rarr; Show Tree Locality on Map</b>.
@@ -1080,6 +1085,16 @@ your photos. PhotoLife writes files only when you ask it to:</p>
       writes it. It goes on the clipboard as <i>latitude, longitude</i>, so a location
       copied from Google Maps (right-click a spot, click its coordinates) pastes too.
       Photos that already have a location keep it unless you say to replace it.</li>
+  <li><b>Create Geotag from GPX&hellip;</b> (right-click photos in the library) does what it
+      does in Organise for photos already in the library: choose the track, and the camera
+      clock correction if needed, and it says how many of the photos fall on it before
+      anything is written. Only photos with a time from their EXIF can be matched; those
+      dated just from the file name have no time of day.</li>
+  <li><b>Library &rarr; Find Duplicate Photos&hellip;</b> lists the files that have an
+      identical copy elsewhere in the library, the most space first, with <b>Show in File
+      Manager</b> for each copy. It only lists them: PhotoLife never deletes photos. Copies
+      the catalogue still lists but that are no longer on disk are left out and counted
+      (<b>Remove Photos With Missing Files&hellip;</b> tidies those away).</li>
 </ul>
 
 <h2 id="settings">Catalogue, appearance &amp; updates</h2>

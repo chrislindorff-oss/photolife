@@ -34,6 +34,7 @@
 #include "scan/FileScanner.h"
 #include "scan/CatalogueMaintenance.h"
 #include "catalogue/CameraInfoStore.h"
+#include "catalogue/DuplicateFinder.h"
 #include "scan/Exif.h"
 #include "scan/LibraryWatcher.h"
 #include "scan/ScanService.h"
@@ -57,6 +58,7 @@
 #include "ui/CatalogueConnectDialog.h"
 #include "ui/CatalogueSettingsDialog.h"
 #include "ui/CaptureDelegate.h"
+#include "ui/DuplicatesDialog.h"
 #include "ui/PhotoOfTheDayDialog.h"
 #include <QPointer>
 #include "ui/PhotosOnComputerDialog.h"
@@ -70,6 +72,7 @@
 #include "geo/GeotagWriter.h"
 #include "geo/LatLon.h"
 #include "ui/GeotagDialog.h"
+#include "ui/GpxGeotagDialog.h"
 #include "ui/InatObservationMatchDialog.h"
 #include "ui/InatComparePage.h"
 #include "ui/InatDownloadPage.h"
@@ -121,6 +124,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QShortcut>
 #include <QLocale>
 #include <QListView>
 #include <QListWidget>
@@ -1111,6 +1115,25 @@ void MainWindow::buildLibraryMenu(QMenu *libraryMenu)
 
     libraryMenu->addSeparator();
     libraryMenu->addAction(tr("Fix RAW Photo &Locations…"), this, &MainWindow::fixRawGeolocation);
+    libraryMenu->addAction(tr("Find &Duplicate Photos…"), this, [this] {
+        if (!m_app.database().isOpen())
+            return;
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        QString error;
+        int stale = 0;
+        // Kept online by photo sync counts as there; otherwise it must be on disk.
+        const QList<catalogue::DuplicateGroup> groups = catalogue::findDuplicates(
+            m_app.database().connectionName(), &error,
+            [](const QString &path) { return CaptureDelegate::isOnlineOnly(path) || QFileInfo::exists(path); },
+            &stale);
+        QApplication::restoreOverrideCursor();
+        if (!error.isEmpty()) {
+            QMessageBox::warning(this, tr("Duplicate Photos"), tr("The library couldn't be searched: %1").arg(error));
+            return;
+        }
+        DuplicatesDialog dialog(groups, stale, this);
+        dialog.exec();
+    });
     m_fetchLocalitiesAction = libraryMenu->addAction(tr("Fetch Photo &Localities"),
                                                      this, &MainWindow::fetchPhotoLocalities);
     libraryMenu->addAction(tr("Remove Photos With &Missing Files…"),
@@ -1462,6 +1485,34 @@ void MainWindow::buildToolBar()
         updateEmptyState();
     });
     toolbar->addWidget(m_filterCombo);
+
+    // Search the whole library (Ctrl+F): typing shows All Library Photos,
+    // narrowed to photos matching every word.
+    toolbar->addSeparator();
+    m_librarySearch = new QLineEdit(toolbar);
+    m_librarySearch->setPlaceholderText(tr("Search the library (Ctrl+F)"));
+    m_librarySearch->setClearButtonEnabled(true);
+    m_librarySearch->setMinimumWidth(240);
+    m_librarySearch->setToolTip(tr("Find photos by name, scientific or common name, file name, folder, place or "
+                                   "date (2025-10) — every word must match. Searches the whole library, including "
+                                   "photos of species in no reference tree."));
+    auto *searchTimer = new QTimer(this);
+    searchTimer->setSingleShot(true);
+    searchTimer->setInterval(300);
+    connect(m_librarySearch, &QLineEdit::textChanged, searchTimer, qOverload<>(&QTimer::start));
+    connect(searchTimer, &QTimer::timeout, this, [this] {
+        const QString text = m_librarySearch->text().simplified();
+        m_model->setSearch(text);
+        if (!text.isEmpty() && !m_viewLibraryAction->isChecked())
+            m_viewLibraryAction->trigger();
+        updateEmptyState();
+    });
+    auto *focusSearch = new QShortcut(QKeySequence::Find, this);
+    connect(focusSearch, &QShortcut::activated, this, [this] {
+        m_librarySearch->setFocus();
+        m_librarySearch->selectAll();
+    });
+    toolbar->addWidget(m_librarySearch);
 }
 
 void MainWindow::buildReferenceTreeDock()
@@ -3706,6 +3757,11 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
                                   : tr("Copy a location first: from a photo, or as \"latitude, longitude\" "
                                        "from a map."));
         connect(pasteLoc, &QAction::triggered, this, [this, chosen] { pasteLocation(chosen); });
+        QAction *fromGpx = menu.addAction(tr("Create Geotag from GPX…"));
+        fromGpx->setToolTip(tr("Give these photos the positions a GPS track (.gpx) recorded at the times they "
+                               "were taken."));
+        fromGpx->setEnabled(onlineIds.size() < sel.size());
+        connect(fromGpx, &QAction::triggered, this, [this, chosen] { geotagFromGpx(chosen); });
 
         menu.addSeparator();
         QAction *rename = menu.addAction(tr("Rename Files on Drive…"));
@@ -4004,7 +4060,7 @@ void MainWindow::matchTargetsWithInat(const QList<InatMatchTarget> &targets, boo
 }
 
 int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon,
-                                 bool replace, bool intoRaw, const QString &title)
+                                 bool replace, bool intoRaw, const QString &title, const QHash<int, QPointF> *each)
 {
     QSqlDatabase db = QSqlDatabase::database(m_app.database().connectionName(), false);
     QStringList failures;
@@ -4013,7 +4069,11 @@ int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double l
     for (const InatMatchTarget &t : targets) {
         if (t.hasGps && !replace)
             continue;
-        double useLat = lat, useLon = lon;
+        if (each && !each->contains(t.captureId))
+            continue;
+        const double setLat = each ? each->value(t.captureId).x() : lat;
+        const double setLon = each ? each->value(t.captureId).y() : lon;
+        double useLat = setLat, useLon = setLon;
         // Into the photo's files where they're here (photos kept online carry
         // it in the catalogue only -- a rescan never blanks coordinates the
         // catalogue has).
@@ -4030,7 +4090,7 @@ int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double l
         }
         if (!renditions.isEmpty()) {
             const geo::GeotagWriter::Result written = geo::GeotagWriter::writeShot(
-                renditions, QFileInfo(renditions.first()).completeBaseName(), lat, lon, intoRaw);
+                renditions, QFileInfo(renditions.first()).completeBaseName(), setLat, setLon, intoRaw);
             failures << written.failures;
             // What's now actually in a JPEG, to the precision EXIF keeps.
             for (const QString &path : std::as_const(renditions)) {
@@ -4072,6 +4132,66 @@ int MainWindow::applyCoordinates(const QList<InatMatchTarget> &targets, double l
         }
     }
     return done;
+}
+
+void MainWindow::geotagFromGpx(const QList<int> &captureIds)
+{
+    const QString title = tr("Create Geotag from GPX");
+    if (captureIds.isEmpty() || !ensureCanEdit())
+        return;
+    // Each photo's time: only an EXIF one has the time of day.
+    QList<QDateTime> taken;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+        q.prepare(QStringLiteral("SELECT captured_on, date_source FROM capture WHERE id = ?"));
+        for (int id : captureIds) {
+            q.addBindValue(id);
+            QDateTime t;
+            if (q.exec() && q.next() && q.value(1).toString() == QLatin1String("exif")) {
+                t = QDateTime::fromString(q.value(0).toString(), Qt::ISODate);
+                if (t.isValid())
+                    t.setTimeSpec(Qt::LocalTime);
+            }
+            taken << t;
+        }
+    }
+    GpxGeotagDialog dialog(m_app, taken, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int offset = dialog.offsetSeconds();
+    QHash<int, QPointF> positions;
+    for (int i = 0; i < captureIds.size(); ++i) {
+        if (!taken.at(i).isValid())
+            continue;
+        if (const auto match = dialog.track().positionAt(taken.at(i).addSecs(offset).toUTC()))
+            positions.insert(captureIds.at(i), QPointF(match->latitude, match->longitude));
+    }
+    QList<InatMatchTarget> targets;
+    for (const InatMatchTarget &t : geotagTargets(captureIds)) {
+        if (positions.contains(t.captureId))
+            targets << t;
+    }
+    const int located = int(std::count_if(targets.cbegin(), targets.cend(), [](const InatMatchTarget &t) { return t.hasGps; }));
+    bool replace = true;
+    if (located > 0) {
+        QMessageBox box(QMessageBox::Question, title,
+                        tr("%n of these photos already have a location.", nullptr, located), QMessageBox::NoButton, this);
+        box.setInformativeText(tr("Replace it with the position from the track, or keep theirs and set only the others?"));
+        QPushButton *replaceButton = box.addButton(tr("Replace"), QMessageBox::AcceptRole);
+        QPushButton *keepButton = box.addButton(tr("Keep Theirs"), QMessageBox::NoRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(keepButton);
+        box.exec();
+        if (box.clickedButton() != replaceButton && box.clickedButton() != keepButton)
+            return;
+        replace = box.clickedButton() == replaceButton;
+    }
+    const int done = applyCoordinates(targets, 0, 0, replace, m_app.settings().geotagWriteIntoRaw(), title, &positions);
+    const int left = int(captureIds.size()) - int(positions.size());
+    statusBar()->showMessage(left > 0 ? tr("Set the location of %n photo(s) from the GPX track; %1 weren't on it.", nullptr, done)
+                                            .arg(left)
+                                      : tr("Set the location of %n photo(s) from the GPX track.", nullptr, done),
+                             8000);
 }
 
 void MainWindow::setLocationOnMap(QListView *grid)
@@ -6106,12 +6226,17 @@ void MainWindow::updateEmptyState()
         return;
 
     const int count = m_model->captureCount();
-    const bool filtered = !m_model->statusFilter().isEmpty();
+    const bool filtered = !m_model->statusFilter().isEmpty() || !m_model->search().isEmpty();
     if (count > 0) {
         stack->setCurrentIndex(1);
     } else if (filtered) {
         m_emptyGuideButton->hide();
-        m_emptyHint->setText(tr("No captures match this filter."));
+        m_emptyHint->setText(m_model->search().isEmpty()
+                                 ? tr("No captures match this filter.")
+                                 : tr("No photos match \u201c%1\u201d%2.")
+                                       .arg(m_model->search(), m_model->statusFilter().isEmpty()
+                                                                   ? QString()
+                                                                   : tr(" with the Show filter")));
         stack->setCurrentIndex(0);
     } else {
         const bool haveRoots = !m_app.settings().watchedRoots().isEmpty();
@@ -6125,7 +6250,9 @@ void MainWindow::updateEmptyState()
 
     m_statusLabel->setText(count > 0
                                ? tr("%n capture(s)%1", nullptr, count)
-                                     .arg(filtered ? tr(" (filtered)") : QString())
+                                     .arg(!m_model->search().isEmpty()
+                                              ? tr(" matching \u201c%1\u201d").arg(m_model->search())
+                                              : filtered ? tr(" (filtered)") : QString())
                                : QString());
     scheduleGuideRefresh();
 }

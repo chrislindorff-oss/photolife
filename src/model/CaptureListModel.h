@@ -123,6 +123,15 @@ public:
     void setGpsFilter(GpsFilter filter);
     GpsFilter gpsFilter() const { return m_gpsFilter; }
 
+    // Search: only photos where every word (case aside) is in the photo's
+    // name, its taxon's scientific or common name, its file name, folder,
+    // place or date ("2025-10"). Empty: no search. Combines with the rest.
+    void setSearch(const QString &text);
+    QString search() const { return m_search; }
+    // The WHERE clause for `search` over fetchRows()'s columns, and its bind
+    // values in order: exposed for tests.
+    static QString searchClause(const QString &search, QStringList *binds);
+
     // Patches the starred state of the given captures in place (no model reset),
     // for a snappy repaint of the star overlay after the user stars/unstars
     // from the grid. Rows not currently loaded are ignored.
@@ -178,6 +187,7 @@ public:
         bool bestShotOnly = false;
         QList<qint64> taxonSet;   // empty = disabled; see setTaxonSetScope()
         GpsFilter gpsFilter = GpsFilter::Any;
+        QString search;   // words, each matching a name, file, folder, place or date
     };
 
 signals:
@@ -208,6 +218,7 @@ private:
     int m_projectScope = 0;
     bool m_bestShotOnly = false;
     GpsFilter m_gpsFilter = GpsFilter::Any;
+    QString m_search;
     QList<qint64> m_taxonSet;
     int m_captionFields = CaptionName;
 };

@@ -5,6 +5,7 @@ qt_add_library(photolife_core STATIC
     app/StorageStats.h      app/StorageStats.cpp
     catalogue/BestShotStore.h catalogue/BestShotStore.cpp
     catalogue/SeenStore.h catalogue/SeenStore.cpp
+    catalogue/DuplicateFinder.h catalogue/DuplicateFinder.cpp
     catalogue/CameraInfoStore.h catalogue/CameraInfoStore.cpp
     catalogue/PhotoOfTheDay.h catalogue/PhotoOfTheDay.cpp
     catalogue/UntreedMatchStore.h catalogue/UntreedMatchStore.cpp
@@ -127,6 +128,7 @@ qt_add_library(photolife_core STATIC
     ui/CatalogueSettingsDialog.h ui/CatalogueSettingsDialog.cpp
     ui/CardImportDialog.h   ui/CardImportDialog.cpp
     ui/CompareViewer.h      ui/CompareViewer.cpp
+    ui/DuplicatesDialog.h   ui/DuplicatesDialog.cpp
     ui/CaptureDelegate.h    ui/CaptureDelegate.cpp
     ui/ContactSheetDialog.h ui/ContactSheetDialog.cpp
     ui/CoveragePanel.h      ui/CoveragePanel.cpp
@@ -158,6 +160,7 @@ qt_add_library(photolife_core STATIC
     ui/LifeListPage.h       ui/LifeListPage.cpp
     ui/LocationPickerMap.h  ui/LocationPickerMap.cpp
     ui/GeotagDialog.h       ui/GeotagDialog.cpp
+    ui/GpxGeotagDialog.h    ui/GpxGeotagDialog.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp
     ui/PhotosOnComputerDialog.h ui/PhotosOnComputerDialog.cpp
     ui/PlaceConfirmDialog.h ui/PlaceConfirmDialog.cpp

@@ -1,6 +1,9 @@
 #include <QtTest>
 
+#include "catalogue/DuplicateFinder.h"
+
 #include <QSignalSpy>
+#include <QSqlError>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -38,6 +41,8 @@ private slots:
     void applyGpsPatchesRowInPlaceWithoutReset();
     void gpsFilterKeepsOnlyPhotosWithOrWithoutALocation();
     void confirmedOrAutoStatusFilterIncludesBothStatuses();
+    void searchMatchesEveryWordAnywhere();
+    void duplicatesAreFilesWithTheSameContent();
 
 private:
     std::unique_ptr<QTemporaryDir> m_dbDir;
@@ -166,6 +171,88 @@ QStringList TestCaptureListModel::names(CaptureListModel &m) const
         out << m.index(r, 0).data(CaptureListModel::MatchedNameRole).toString();
     out.sort();
     return out;
+}
+
+void TestCaptureListModel::searchMatchesEveryWordAnywhere()
+{
+    QSqlQuery(QSqlDatabase::database(m_db->connectionName(), false))
+        .exec(QStringLiteral("UPDATE capture SET captured_on = '2025-10-18T09:30:00' WHERE base_name = 'orchid'"));
+    QSqlQuery(QSqlDatabase::database(m_db->connectionName(), false))
+        .exec(QStringLiteral("UPDATE taxon SET common_name = 'Pink Fingers' WHERE inat_id = 101"));
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    auto search = [&](const QString &text) {
+        spy.clear();
+        model.setSearch(text);
+        if (spy.isEmpty())
+            spy.wait(2000);
+        return names(model);
+    };
+    const QStringList both{QStringLiteral("Caladenia carnea"), QStringLiteral("Corvus mellori")};
+    QCOMPARE(search(QStringLiteral("caladenia")), QStringList{QStringLiteral("Caladenia carnea")});   // scientific name
+    QCOMPARE(search(QStringLiteral("PINK")), QStringList{QStringLiteral("Caladenia carnea")});      // common name, any case
+    QCOMPARE(search(QStringLiteral("crow")), QStringList{QStringLiteral("Corvus mellori")});        // file name
+    QCOMPARE(search(QStringLiteral("2025-10")), QStringList{QStringLiteral("Caladenia carnea")});   // date
+    QCOMPARE(search(QStringLiteral("/lib")), both);                                                 // folder
+    QCOMPARE(search(QStringLiteral("pink 2025")), QStringList{QStringLiteral("Caladenia carnea")}); // every word
+    QVERIFY(search(QStringLiteral("pink corvus")).isEmpty());
+    QVERIFY(search(QStringLiteral("100%")).isEmpty());   // % is just a character
+    QCOMPARE(search(QString()), both);                    // no search
+    // Combines with a scope: the bird tree has no orchid.
+    spy.clear();
+    model.setProjectScope(m_birdProject);
+    spy.wait(2000);
+    QVERIFY(search(QStringLiteral("caladenia")).isEmpty());
+
+    QStringList binds;
+    QVERIFY(CaptureListModel::searchClause(QStringLiteral("  "), &binds).isEmpty());
+    const QString clause = CaptureListModel::searchClause(QStringLiteral("a_b"), &binds);
+    QVERIFY(clause.contains(QStringLiteral("ESCAPE")));
+    QCOMPARE(binds.first(), QStringLiteral("%a\\_b%"));
+}
+
+void TestCaptureListModel::duplicatesAreFilesWithTheSameContent()
+{
+    QSqlDatabase db = QSqlDatabase::database(m_db->connectionName(), false);
+    QVERIFY(catalogue::findDuplicates(m_db->connectionName()).isEmpty());
+    auto addFile = [&](int captureId, const QString &path, const QString &hash, qint64 size) {
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("INSERT INTO rendition (capture_id, path, kind, ext, content_hash, file_size) "
+                                 "VALUES (?, ?, 'jpeg', 'jpg', ?, ?)"));
+        q.addBindValue(captureId);
+        q.addBindValue(path);
+        q.addBindValue(hash);
+        q.addBindValue(size);
+        QVERIFY2(q.exec(), qPrintable(q.lastError().text()));
+    };
+    const int a = addCaptureMatchedTo(QStringLiteral("a"), 901);
+    const int b = addCaptureMatchedTo(QStringLiteral("b"), 901);
+    addFile(a, QStringLiteral("/lib/one/small.jpg"), QStringLiteral("h1"), 100);
+    addFile(b, QStringLiteral("/lib/two/small.jpg"), QStringLiteral("h1"), 100);
+    addFile(a, QStringLiteral("/lib/one/big.jpg"), QStringLiteral("h2"), 5000);
+    addFile(b, QStringLiteral("/lib/two/big copy.jpg"), QStringLiteral("h2"), 5000);
+    addFile(b, QStringLiteral("/lib/three/big.jpg"), QStringLiteral("h2"), 5000);
+    addFile(a, QStringLiteral("/lib/one/only.jpg"), QStringLiteral("h3"), 700);
+    const auto everywhere = [](const QString &) { return true; };
+    const QList<catalogue::DuplicateGroup> groups = catalogue::findDuplicates(m_db->connectionName(), nullptr, everywhere);
+    QCOMPARE(groups.size(), 2);
+    QCOMPARE(groups.at(0).contentHash, QStringLiteral("h2"));   // the most to free, first
+    QCOMPARE(groups.at(0).paths.size(), 3);
+    QCOMPARE(groups.at(0).spareBytes(), qint64(10000));
+    QCOMPARE(groups.at(1).paths, (QStringList{QStringLiteral("/lib/one/small.jpg"), QStringLiteral("/lib/two/small.jpg")}));
+    QCOMPARE(groups.at(1).captureIds, (QList<int>{a, b}));
+    // Copies no longer on disk aren't duplicates: one of big.jpg's three is gone,
+    // and small.jpg's other copy, so small.jpg has none left.
+    int stale = -1;
+    const QList<catalogue::DuplicateGroup> onDisk = catalogue::findDuplicates(
+        m_db->connectionName(), nullptr,
+        [](const QString &path) { return path != QLatin1String("/lib/three/big.jpg") && path != QLatin1String("/lib/two/small.jpg"); },
+        &stale);
+    QCOMPARE(stale, 2);
+    QCOMPARE(onDisk.size(), 1);
+    QCOMPARE(onDisk.first().paths.size(), 2);
+    // And by default it's the disk that says: none of these made-up paths exist.
+    QVERIFY(catalogue::findDuplicates(m_db->connectionName()).isEmpty());
 }
 
 void TestCaptureListModel::taxonScopeAloneSpansEveryTreeSharingTheAncestor()

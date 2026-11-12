@@ -401,8 +401,12 @@ private:
     // photos that have a location alone unless the user says otherwise.
     void copyLocation(int captureId);
     bool pasteLocation(const QList<int> &captureIds);
+    // `each`: a position per capture (x = latitude, y = longitude) instead of
+    // lat/lon for all; captures missing from it are left.
     int applyCoordinates(const QList<InatMatchTarget> &targets, double lat, double lon, bool replace,
-                         bool intoRaw, const QString &title);
+                         bool intoRaw, const QString &title, const QHash<int, QPointF> *each = nullptr);
+    // Create Geotag from GPX… for library photos.
+    void geotagFromGpx(const QList<int> &captureIds);
     void setLocationOnMap(QListView *grid);
     // Set Location on Map for these captures: true when it set one.
     bool setLocationOnMap(const QList<int> &captureIds);
@@ -452,6 +456,7 @@ private:
     Application &m_app;
 
     model::CaptureListModel *m_model = nullptr;
+    QLineEdit *m_librarySearch = nullptr;   // the toolbar's Search the library
     QListView *m_grid = nullptr;
     QLabel *m_emptyHint = nullptr;
     QLabel *m_statusLabel = nullptr;

@@ -8,6 +8,7 @@
 #include <QModelIndex>
 #include <QPainterPath>
 #include <QPointF>
+#include <QPolygonF>
 #include <QWidget>
 
 #include <optional>
@@ -56,6 +57,14 @@ public:
     // Whether the locality's outline is drawn (View > Show Tree Locality on Map).
     void setShowLocality(bool show);
 
+    // A GPS track drawn over the map (GPS Track… on the map): its segments as
+    // lines, x = longitude, y = latitude. Empty: none.
+    void setTrack(const QList<QPolygonF> &segments, const QString &name);
+    bool hasTrack() const { return !m_track.isEmpty(); }
+    // Centres and zooms so the box (decimal degrees) is in view.
+    // `maxZoom`: how close it may come (a short walk wants closer than pins do).
+    void fitTo(double minLon, double minLat, double maxLon, double maxLat, int maxZoom = 17);
+
     // Aerial photos rather than the street map.
     bool satellite() const { return m_satellite; }
     void setSatellite(bool satellite);   // doesn't emit satelliteChanged()
@@ -79,6 +88,8 @@ private:
     void rebuildPins();
     void recluster();
     void fitToPins();
+    void chooseTrack();
+    void paintTrack(QPainter &painter);
     void layoutOverlays();
     QPointF centerWorldPixel() const;
     QPointF lonLatToScreen(double lon, double lat) const;
@@ -122,6 +133,9 @@ private:
 
     QPushButton *m_fitButton;
     QPushButton *m_localityButton;
+    QPushButton *m_trackButton = nullptr;
+    QList<QPolygonF> m_track;     // x = longitude, y = latitude
+    QString m_trackName;
     QLabel *m_attribution;
     MapLayerSwitch *m_layers;
     QLabel *m_emptyOverlay;

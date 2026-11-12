@@ -1,5 +1,7 @@
 #include "ui/MapView.h"
 
+#include "geo/GpxTrack.h"
+
 #include "ui/MapTiles.h"
 
 #include "geo/WebMercator.h"
@@ -16,6 +18,10 @@
 #include <QListWidget>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QFileDialog>
+#include <QMenu>
+#include <QMessageBox>
+#include <QFileInfo>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalBlocker>
@@ -66,6 +72,11 @@ MapView::MapView(model::CaptureListModel &model, net::TileCache &streetTiles,
         fitToPins();
         update();
     });
+
+    m_trackButton = new QPushButton(tr("GPS Track…"), this);
+    m_trackButton->setToolTip(tr("Show a GPS track (a .gpx file) on the map with the photos — where you walked "
+                                 "that day."));
+    connect(m_trackButton, &QPushButton::clicked, this, &MapView::chooseTrack);
 
     m_localityButton = new QPushButton(tr("Restrict to Active Reference Tree Locality"), this);
     m_localityButton->setCheckable(true);
@@ -240,6 +251,98 @@ void MapView::recluster()
     m_clusters = geo::clusterPins(m_pins, m_zoom, kClusterPixelRadius);
 }
 
+void MapView::setTrack(const QList<QPolygonF> &segments, const QString &name)
+{
+    m_track = segments;
+    m_trackName = name;
+    m_trackButton->setText(m_track.isEmpty() ? tr("GPS Track…") : tr("Track: %1 ▾").arg(name));
+    layoutOverlays();
+    update();
+}
+
+void MapView::chooseTrack()
+{
+    if (!m_track.isEmpty()) {
+        QMenu menu(this);
+        menu.addAction(tr("Show Another Track…"), this, [this] {
+            setTrack({}, {});
+            chooseTrack();
+        });
+        menu.addAction(tr("Zoom to the Track"), this, [this] {
+            double minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
+            for (const QPolygonF &s : std::as_const(m_track))
+                for (const QPointF &p : s) {
+                    minLon = std::min(minLon, p.x());
+                    maxLon = std::max(maxLon, p.x());
+                    minLat = std::min(minLat, p.y());
+                    maxLat = std::max(maxLat, p.y());
+                }
+            fitTo(minLon, minLat, maxLon, maxLat);
+            update();
+        });
+        menu.addAction(tr("Hide the Track"), this, [this] { setTrack({}, {}); });
+        menu.exec(m_trackButton->mapToGlobal(QPoint(0, m_trackButton->height())));
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(this, tr("Show a GPS Track"), QString(),
+                                                      tr("GPS tracks (*.gpx *.GPX);;All files (*)"));
+    if (path.isEmpty())
+        return;
+    QString error;
+    const geo::GpxTrack track = geo::GpxTrack::load(path, &error);
+    if (track.isEmpty()) {
+        QMessageBox::warning(this, tr("GPS Track"), tr("%1 can't be shown: %2.").arg(QFileInfo(path).fileName(), error));
+        return;
+    }
+    QList<QPolygonF> segments;
+    for (const QList<geo::TrackPoint> &s : track.segments()) {
+        QPolygonF line;
+        for (const geo::TrackPoint &p : s)
+            line << QPointF(p.longitude, p.latitude);
+        segments << line;
+    }
+    setTrack(segments, QFileInfo(path).completeBaseName());
+    const QRectF box = track.bounds();
+    fitTo(box.left(), box.top(), box.right(), box.bottom());
+    update();
+}
+
+void MapView::paintTrack(QPainter &painter)
+{
+    for (const QPolygonF &segment : std::as_const(m_track)) {
+        QPolygonF line;
+        for (const QPointF &p : segment) {
+            const QPointF at = lonLatToScreen(p.x(), p.y());
+            if (line.isEmpty() || QLineF(line.last(), at).length() >= 1.5)
+                line << at;
+        }
+        if (line.isEmpty())
+            continue;
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(line);
+        painter.setPen(QPen(QColor(0xc8, 0x2a, 0xd0), 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(line);
+    }
+}
+
+void MapView::fitTo(double minLon, double minLat, double maxLon, double maxLat, int maxZoom)
+{
+    m_centerLon = (minLon + maxLon) / 2.0;
+    m_centerLat = (minLat + maxLat) / 2.0;
+    const int margin = 40;
+    const double availW = std::max(1, width() - 2 * margin);
+    const double availH = std::max(1, height() - 2 * margin);
+    int zoom = std::min(maxZoom, kMaxZoom);
+    for (; zoom > kMinZoom; --zoom) {
+        const QPointF a = geo::lonLatToWorldPixel(minLon, maxLat, zoom);
+        const QPointF b = geo::lonLatToWorldPixel(maxLon, minLat, zoom);
+        if (std::abs(b.x() - a.x()) <= availW && std::abs(b.y() - a.y()) <= availH)
+            break;
+    }
+    m_zoom = zoom;
+}
+
 void MapView::fitToPins()
 {
     if (m_pins.isEmpty())
@@ -275,6 +378,8 @@ void MapView::layoutOverlays()
 {
     m_fitButton->adjustSize();
     m_fitButton->move(8, 8);
+    m_trackButton->adjustSize();
+    m_trackButton->move(m_fitButton->geometry().right() + 8, 8);
     m_localityButton->adjustSize();
     m_localityButton->move(8, m_fitButton->geometry().bottom() + 8);
     m_attribution->adjustSize();
@@ -287,6 +392,7 @@ void MapView::layoutOverlays()
     // locality restriction itself empties the pin set, the user must still be
     // able to reach the button to turn it back off.
     m_fitButton->raise();
+    m_trackButton->raise();
     m_localityButton->raise();
     m_layers->raise();
     m_attribution->raise();
@@ -324,6 +430,7 @@ void MapView::paintEvent(QPaintEvent *)
 
     painter.setRenderHint(QPainter::Antialiasing);
     paintLocality(painter, origin);
+    paintTrack(painter);
     for (const geo::Cluster &c : m_clusters) {
         const QPointF pos = lonLatToScreen(c.centerLonLat.x(), c.centerLonLat.y());
         const bool multi = c.rows.size() > 1;
