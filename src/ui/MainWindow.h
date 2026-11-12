@@ -45,6 +45,8 @@ class QProgressDialog;
 
 namespace pl {
 
+class LifeListPage;
+
 class ActivityLogDialog;
 class ReviewChangesDialog;
 class ServerStatusDialog;
@@ -355,13 +357,9 @@ private:
     void rebuildRankFilterMenu();
     void updateMissingList();
     void showMissingListContextMenu(const QPoint &pos);
-    // Photographic Life List: reloadLifeList() re-reads it from the catalogue
-    // (after any coverage refresh); showLifeList() numbers and shows it (the
-    // subspecies toggle); openLifeListPhoto() shows a row's first photo full
-    // screen, the shown rows' first photos a step away.
+    // Photographic Life List (its own page): re-read from the catalogue
+    // after anything that can change it.
     void reloadLifeList();
-    void showLifeList();
-    void openLifeListPhoto(const QModelIndex &proxyIndex);
     // "Not in Any Tree" tab: reloadUntreedTaxa() re-runs the catalogue query
     // (after anything that can change matches or tree membership);
     // updateUntreedList() just repopulates the list from the cached result
@@ -492,25 +490,7 @@ private:
     model::ReferencePhotoModel *m_missingPhotoModel = nullptr;
     QWidget *m_missingPage = nullptr;
 
-    QList<coverage::LifeListEntry> m_lifeListAll;   // reloadLifeList()'s, species and below
-    QWidget *m_lifeListPage = nullptr;
-    QLineEdit *m_lifeListSearch = nullptr;
-    QCheckBox *m_lifeListInfra = nullptr;    // subspecies, varieties and hybrids as entries
-    QCheckBox *m_lifeListThumbs = nullptr;   // each entry's first photo
-    QToolButton *m_lifeListColumnsButton = nullptr;   // Columns…: which columns show
-    QMenu *m_lifeListColumnsMenu = nullptr;
-    // Camera and Focal length: the first photos' EXIF, read a chunk at a time.
-    QList<QPair<int, QString>> m_cameraQueue;   // capture id, file
-    QSet<int> m_cameraRequested;                // queued this session (read or not)
-    bool m_cameraReading = false;
-    int m_cameraTotal = 0;
-    int m_cameraDone = 0;
-    void readLifeListCameras();
-    void readNextCameraChunk();
-    QLabel *m_lifeListCounts = nullptr;
-    QTreeView *m_lifeListView = nullptr;
-    model::LifeListModel *m_lifeListModel = nullptr;
-    QSortFilterProxyModel *m_lifeListProxy = nullptr;
+    LifeListPage *m_lifeListPage = nullptr;
 
     QList<catalogue::UntreedTaxon> m_untreedTaxa;   // last reloadUntreedTaxa() result
     QTreeWidget *m_untreedList = nullptr;

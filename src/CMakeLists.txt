@@ -151,6 +151,7 @@ qt_add_library(photolife_core STATIC
     ui/ManageCataloguesDialog.h ui/ManageCataloguesDialog.cpp
     ui/MapView.h            ui/MapView.cpp
     ui/MapTiles.h           ui/MapTiles.cpp
+    ui/LifeListPage.h       ui/LifeListPage.cpp
     ui/LocationPickerMap.h  ui/LocationPickerMap.cpp
     ui/GeotagDialog.h       ui/GeotagDialog.cpp
     ui/NewProjectDialog.h   ui/NewProjectDialog.cpp

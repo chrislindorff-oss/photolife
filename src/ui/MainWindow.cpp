@@ -66,6 +66,7 @@
 #include "ui/HelpWindow.h"
 #include "ui/IdentifyPanel.h"
 #include "ui/ImageViewer.h"
+#include "ui/LifeListPage.h"
 #include "geo/GeotagWriter.h"
 #include "geo/LatLon.h"
 #include "ui/GeotagDialog.h"
@@ -5089,397 +5090,35 @@ QWidget *MainWindow::buildMissingPage()
 
 QWidget *MainWindow::buildLifeListPage()
 {
-    using LL = model::LifeListModel;
-    m_lifeListSearch = new QLineEdit(this);
-    m_lifeListSearch->setPlaceholderText(tr("Filter by common or scientific name, or place…"));
-    m_lifeListSearch->setClearButtonEnabled(true);
-
-    m_lifeListInfra = new QCheckBox(tr("Show subspecies, varieties and hybrids"), this);
-    m_lifeListInfra->setToolTip(tr("Also number subspecies, varieties, forms and hybrids as entries of their own. "
-                                   "Off: species only (a photo of a subspecies still counts for its species)."));
-    m_lifeListInfra->setChecked(m_app.settings().lifeListShowsInfraspecific());
-    connect(m_lifeListInfra, &QCheckBox::toggled, this, [this](bool on) {
-        m_app.settings().setLifeListShowsInfraspecific(on);
-        showLifeList();
+    LifeListPage::Hooks hooks;
+    hooks.onlineOnlyRenditions = [this](const QList<int> &ids) { return onlineOnlyRenditions(ids); };
+    hooks.fetchPhotos = [this](const QStringList &paths, std::function<void()> then) { fetchPhotos(paths, std::move(then)); };
+    hooks.requestScan = [this](std::function<void()> then) { requestScan(std::move(then)); };
+    hooks.showInViewer = [this](const QVector<ImageViewer::Item> &items, int start) { showInViewer(items, start); };
+    m_lifeListPage = new LifeListPage(m_app, std::move(hooks), this);
+    connect(m_lifeListPage, &LifeListPage::statusMessage, this, [this](const QString &text, int timeoutMs) {
+        if (text.isEmpty())
+            statusBar()->clearMessage();
+        else
+            statusBar()->showMessage(text, timeoutMs);
     });
-    m_lifeListThumbs = new QCheckBox(tr("Thumbnails"), this);
-    m_lifeListThumbs->setToolTip(tr("Show each entry's first photo. Double-click or right-click one to see it full "
-                                    "screen."));
-    m_lifeListThumbs->setChecked(m_app.settings().lifeListThumbnails());
-
-    m_lifeListCounts = new QLabel(this);
-    m_lifeListCounts->setObjectName(QStringLiteral("muted"));
-    m_lifeListCounts->setWordWrap(true);
-
-    m_lifeListModel = new LL(m_app.thumbnails(), this);
-    m_lifeListProxy = new QSortFilterProxyModel(this);
-    m_lifeListProxy->setSourceModel(m_lifeListModel);
-    m_lifeListProxy->setSortRole(LL::SortRole);
-    m_lifeListProxy->setFilterKeyColumn(-1);
-    m_lifeListProxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
-    connect(m_lifeListSearch, &QLineEdit::textChanged, m_lifeListProxy,
-            &QSortFilterProxyModel::setFilterFixedString);
-
-    m_lifeListView = new QTreeView(this);
-    m_lifeListView->setModel(m_lifeListProxy);
-    m_lifeListView->setRootIsDecorated(false);
-    m_lifeListView->setUniformRowHeights(true);
-    m_lifeListView->setAlternatingRowColors(true);
-    m_lifeListView->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_lifeListView->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_lifeListView->setSortingEnabled(true);
-    m_lifeListView->sortByColumn(LL::NumberColumn, Qt::AscendingOrder);
-    QHeaderView *header = m_lifeListView->header();
-    header->setStretchLastSection(false);
-    header->setSectionResizeMode(QHeaderView::Interactive);
-    header->setSectionResizeMode(LL::PlaceColumn, QHeaderView::Stretch);
-    const QFontMetrics fm(m_lifeListView->font());
-    header->resizeSection(LL::NumberColumn, fm.horizontalAdvance(QStringLiteral("00000")) + 24);
-    header->resizeSection(LL::PhotoColumn, 64 + 16);
-    header->resizeSection(LL::DateColumn, fm.horizontalAdvance(tr("First photographed")) + 32);
-    header->resizeSection(LL::CommonColumn, fm.horizontalAdvance(QStringLiteral("M")) * 16);
-    header->resizeSection(LL::ScientificColumn, fm.horizontalAdvance(QStringLiteral("M")) * 17);
-    header->resizeSection(LL::PhotosColumn, fm.horizontalAdvance(tr("Photos")) + 32);
-    header->resizeSection(LL::CameraColumn, fm.horizontalAdvance(QStringLiteral("Nikon COOLPIX P330")) + 24);
-    header->resizeSection(LL::FocalColumn, fm.horizontalAdvance(tr("Focal length")) + 32);
-
-    const auto applyThumbnails = [this](bool on) {
-        m_lifeListModel->setShowThumbnails(on);
-        m_lifeListView->setIconSize(on ? QSize(64, 64) : QSize(16, 16));
-        m_lifeListView->header()->setSectionHidden(model::LifeListModel::PhotoColumn, !on);
-        // Uniform rows take their height from the first: make it measure again.
-        m_lifeListView->doItemsLayout();
-    };
-    applyThumbnails(m_lifeListThumbs->isChecked());
-
-    // Columns…: which columns show (# always does). Photo is the Thumbnails
-    // tick; Camera and Focal length come from the first photo's EXIF.
-    m_lifeListColumnsButton = new QToolButton(this);
-    m_lifeListColumnsButton->setText(tr("Columns…"));
-    m_lifeListColumnsButton->setToolTip(tr("Choose the columns to show — including the first photo's camera and "
-                                           "focal length. Right-clicking the column headings does the same."));
-    m_lifeListColumnsButton->setPopupMode(QToolButton::InstantPopup);
-    m_lifeListColumnsMenu = new QMenu(m_lifeListColumnsButton);
-    m_lifeListColumnsButton->setMenu(m_lifeListColumnsMenu);
-    QAction *photoAction = m_lifeListColumnsMenu->addAction(tr("Photo (thumbnails)"));
-    photoAction->setCheckable(true);
-    photoAction->setChecked(m_lifeListThumbs->isChecked());
-    connect(photoAction, &QAction::toggled, m_lifeListThumbs, &QCheckBox::setChecked);
-    connect(m_lifeListThumbs, &QCheckBox::toggled, this, [this, applyThumbnails, photoAction](bool on) {
-        m_app.settings().setLifeListThumbnails(on);
-        applyThumbnails(on);
-        photoAction->setChecked(on);
+    connect(m_lifeListPage, &LifeListPage::showTaxonPhotos, this, [this](qint64 inatId) {
+        selectTaxonInTree(inatId);
+        switchToTreeTab(m_tabs->widget(0));   // Photos of Tree Selection
     });
-    static const QList<QPair<int, const char *>> kOptionalColumns = {
-        {LL::DateColumn, "date"},     {LL::CommonColumn, "common"}, {LL::ScientificColumn, "scientific"},
-        {LL::PlaceColumn, "place"},   {LL::CameraColumn, "camera"}, {LL::FocalColumn, "focal"},
-        {LL::PhotosColumn, "photos"},
-    };
-    const QStringList hidden = m_app.settings().lifeListHiddenColumns();
-    for (const auto &[column, key] : kOptionalColumns) {
-        const QString title = m_lifeListModel->headerData(column, Qt::Horizontal, Qt::DisplayRole).toString();
-        QAction *action = m_lifeListColumnsMenu->addAction(title);
-        action->setCheckable(true);
-        const bool shown = !hidden.contains(QLatin1String(key));
-        action->setChecked(shown);
-        header->setSectionHidden(column, !shown);
-        connect(action, &QAction::toggled, this, [this, column, key](bool on) {
-            m_lifeListView->header()->setSectionHidden(column, !on);
-            QStringList keys = m_app.settings().lifeListHiddenColumns();
-            keys.removeAll(QLatin1String(key));
-            if (!on)
-                keys << QLatin1String(key);
-            m_app.settings().setLifeListHiddenColumns(keys);
-            if (on && (column == model::LifeListModel::CameraColumn || column == model::LifeListModel::FocalColumn))
-                readLifeListCameras();
-        });
-    }
-    header->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(header, &QWidget::customContextMenuRequested, this,
-            [this](const QPoint &pos) { m_lifeListColumnsMenu->exec(m_lifeListView->header()->mapToGlobal(pos)); });
-
-    connect(m_lifeListView, &QAbstractItemView::activated, this,
-            [this](const QModelIndex &idx) { openLifeListPhoto(idx); });
-    m_lifeListView->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_lifeListView, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
-        const QModelIndex idx = m_lifeListView->indexAt(pos);
-        if (!idx.isValid())
-            return;
-        m_lifeListView->setCurrentIndex(idx);
-        const qint64 inatId = idx.data(model::LifeListModel::InatIdRole).toLongLong();
-        const QPersistentModelIndex at(idx);
-        QMenu menu(this);
-        QAction *full = menu.addAction(tr("View Full Screen"), this, [this, at] {
-            if (at.isValid())
-                openLifeListPhoto(at);
-        });
-        full->setEnabled(!idx.data(model::LifeListModel::PreviewPathRole).toString().isEmpty());
-        menu.setDefaultAction(full);
-        menu.addAction(tr("Show All Photos of This Taxon"), this, [this, inatId] {
-            selectTaxonInTree(inatId);
-            switchToTreeTab(m_tabs->widget(0));   // Photos of Tree Selection
-        });
-        menu.addAction(tr("Open on iNaturalist"), this, [inatId] {
-            QDesktopServices::openUrl(QUrl(QStringLiteral("https://www.inaturalist.org/taxa/%1").arg(inatId)));
-        });
-        menu.exec(m_lifeListView->viewport()->mapToGlobal(pos));
+    connect(m_lifeListPage, &LifeListPage::countChanged, this, [this](int shown) {
+        const int tab = m_tabs ? m_tabs->indexOf(m_lifeListPage) : -1;
+        if (tab >= 0)
+            m_tabs->setTabText(tab, shown == 0 ? tr("Photographic Life List")
+                                               : tr("Photographic Life List (%1)").arg(shown));
     });
-
-    m_lifeListPage = new QWidget(this);
-    auto *layout = new QVBoxLayout(m_lifeListPage);
-    auto *controls = new QHBoxLayout;
-    controls->addWidget(m_lifeListSearch, 1);
-    controls->addWidget(m_lifeListInfra);
-    controls->addWidget(m_lifeListThumbs);
-    controls->addWidget(m_lifeListColumnsButton);
-    layout->addLayout(controls);
-    layout->addWidget(m_lifeListCounts);
-    layout->addWidget(m_lifeListView, 1);
     return m_lifeListPage;
-}
-
-void MainWindow::readLifeListCameras()
-{
-    if (!m_lifeListModel || !m_app.database().isOpen())
-        return;
-    const QHeaderView *header = m_lifeListView->header();
-    if (header->isSectionHidden(model::LifeListModel::CameraColumn)
-        && header->isSectionHidden(model::LifeListModel::FocalColumn))
-        return;   // nobody's looking: don't touch the disk
-    for (const coverage::LifeListEntry &e : std::as_const(m_lifeListAll)) {
-        if (e.cameraChecked || e.previewPath.isEmpty() || m_cameraRequested.contains(e.captureId))
-            continue;
-        // Never make a cloud-synced file download itself just for this.
-        if (CaptureDelegate::isOnlineOnly(e.previewPath))
-            continue;
-        m_cameraRequested.insert(e.captureId);
-        m_cameraQueue.append({e.captureId, e.previewPath});
-        ++m_cameraTotal;
-    }
-    if (!m_cameraReading)
-        readNextCameraChunk();
-}
-
-void MainWindow::readNextCameraChunk()
-{
-    constexpr int kChunk = 50;
-    if (m_cameraQueue.isEmpty()) {
-        if (m_cameraReading && m_cameraDone > 0)
-            statusBar()->showMessage(tr("Read the camera details of %n photo(s).", nullptr, m_cameraDone), 4000);
-        m_cameraReading = false;
-        m_cameraDone = m_cameraTotal = 0;
-        return;
-    }
-    m_cameraReading = true;
-    const QList<QPair<int, QString>> chunk = m_cameraQueue.mid(0, kChunk);
-    m_cameraQueue.remove(0, chunk.size());
-    statusBar()->showMessage(tr("Reading camera details from the life list's photos… %1 of %2")
-                                 .arg(m_cameraDone)
-                                 .arg(m_cameraTotal));
-    auto *watcher = new QFutureWatcher<QList<catalogue::CameraInfo>>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, chunk] {
-        const QList<catalogue::CameraInfo> infos = watcher->result();
-        watcher->deleteLater();
-        const int read = int(chunk.size());
-        // A file that wasn't there (renamed, moved) is tried again on a later reload.
-        QSet<int> found;
-        for (const catalogue::CameraInfo &info : infos)
-            found.insert(info.captureId);
-        for (const auto &item : chunk)
-            if (!found.contains(item.first))
-                m_cameraRequested.remove(item.first);
-        catalogue::CameraInfoStore store(m_app.database().connectionName());
-        if (!store.save(infos))
-            qWarning() << "Couldn't keep the camera details:" << store.error();
-        QHash<int, catalogue::CameraInfo> byCapture;
-        for (const catalogue::CameraInfo &info : infos) {
-            byCapture.insert(info.captureId, info);
-            m_lifeListModel->setCameraInfo(info.captureId, info.camera, info.focalLength);
-        }
-        for (coverage::LifeListEntry &e : m_lifeListAll) {
-            if (const auto it = byCapture.constFind(e.captureId); it != byCapture.constEnd()) {
-                e.camera = it->camera;
-                e.focalLength = it->focalLength;
-                e.cameraChecked = true;
-            }
-        }
-        m_cameraDone += read;
-        readNextCameraChunk();
-    });
-    watcher->setFuture(QtConcurrent::run([chunk] {
-        QList<catalogue::CameraInfo> out;
-        for (const auto &[captureId, path] : chunk) {
-            if (!QFileInfo::exists(path))
-                continue;   // moved or renamed: tried again once the library has caught up
-            const scan::ExifData exif = scan::readPhotoExif(path);
-            out.append({captureId, scan::prettyCameraName(exif.cameraMake, exif.cameraModel), exif.focalLength});
-        }
-        return out;
-    }));
 }
 
 void MainWindow::reloadLifeList()
 {
-    if (!m_lifeListModel)
-        return;
-    const int pid = currentProjectId();
-    m_lifeListAll = pid > 0 && m_app.database().isOpen()
-                        ? coverage::loadLifeList(m_app.database().connectionName(), pid)
-                        : QList<coverage::LifeListEntry>{};
-    showLifeList();
-}
-
-void MainWindow::showLifeList()
-{
-    if (!m_lifeListModel)
-        return;
-    const bool showBelow = m_lifeListInfra->isChecked();
-    const QList<coverage::LifeListEntry> shown = coverage::numberedLifeList(m_lifeListAll, showBelow);
-    // Kept across the reload: the row picked and how far down the list is.
-    const qint64 picked = m_lifeListView->currentIndex().data(model::LifeListModel::InatIdRole).toLongLong();
-    const int scrolled = m_lifeListView->verticalScrollBar()->value();
-    m_lifeListModel->setEntries(shown);
-    if (picked > 0) {
-        const QModelIndexList hit = m_lifeListProxy->match(m_lifeListProxy->index(0, 0),
-                                                           model::LifeListModel::InatIdRole, picked, 1,
-                                                           Qt::MatchExactly);
-        if (!hit.isEmpty())
-            m_lifeListView->setCurrentIndex(hit.first());
-    }
-    m_lifeListView->verticalScrollBar()->setValue(scrolled);
-    readLifeListCameras();
-
-    int species = 0, below = 0, belowTotal = 0, undated = 0;
-    QString first, latest;
-    for (const auto &e : std::as_const(m_lifeListAll))
-        belowTotal += e.belowSpecies ? 1 : 0;
-    for (const auto &e : shown) {
-        ++(e.belowSpecies ? below : species);
-        if (e.firstOn.isEmpty()) {
-            ++undated;
-            continue;
-        }
-        if (first.isEmpty())
-            first = e.firstOn;
-        latest = e.firstOn;
-    }
-    m_lifeListInfra->setText(tr("Show subspecies, varieties and hybrids (%1)").arg(belowTotal));
-    m_lifeListInfra->setEnabled(belowTotal > 0 || showBelow);
-
-    QString text;
-    if (shown.isEmpty()) {
-        text = currentProjectId() > 0 ? tr("Nothing in this tree photographed yet.") : tr("Select a reference tree.");
-    } else {
-        text = species == 1 ? tr("1 species photographed") : tr("%1 species photographed").arg(species);
-        if (showBelow)
-            text += below == 1 ? tr(", and 1 subspecies, variety or hybrid")
-                               : tr(", and %1 subspecies, varieties and hybrids").arg(below);
-        if (!first.isEmpty())
-            text += first == latest ? tr(" — the first on %1.").arg(model::LifeListModel::dateText(first))
-                                    : tr(" — the first on %1, the latest new one on %2.")
-                                          .arg(model::LifeListModel::dateText(first),
-                                               model::LifeListModel::dateText(latest));
-        else
-            text += QLatin1Char('.');
-        if (undated > 0)
-            text += undated == 1 ? tr(" 1 has no usable date, so comes last.")
-                                 : tr(" %1 have no usable date, so come last.").arg(undated);
-    }
-    m_lifeListCounts->setText(text);
-
-    const int tab = m_tabs ? m_tabs->indexOf(m_lifeListPage) : -1;
-    if (tab >= 0)
-        m_tabs->setTabText(tab, shown.isEmpty() ? tr("Photographic Life List")
-                                                : tr("Photographic Life List (%1)").arg(shown.size()));
-}
-
-void MainWindow::openLifeListPhoto(const QModelIndex &proxyIndex)
-{
-    using LL = model::LifeListModel;
-    if (!proxyIndex.isValid())
-        return;
-    const QString clickedPath = proxyIndex.data(LL::PreviewPathRole).toString();
-    if (clickedPath.isEmpty())
-        return;
-
-    // A photo only online comes down first.
-    if (CaptureDelegate::isOnlineOnly(clickedPath)) {
-        const QStringList files = onlineOnlyRenditions({proxyIndex.data(LL::CaptureIdRole).toInt()});
-        if (QMessageBox::question(this, tr("Photo Only Online"),
-                                  tr("This photo is kept online, not on this computer. Download "
-                                     "it now?\n\nIt then stays on this computer."))
-            != QMessageBox::Yes)
-            return;
-        const QPersistentModelIndex index(proxyIndex);
-        fetchPhotos(files, [this, index, clickedPath] {
-            if (index.isValid() && QFileInfo::exists(clickedPath))
-                openLifeListPhoto(index);
-        });
-        return;
-    }
-    // Renamed or moved outside PhotoLife: look, then open it under its new name.
-    if (!QFileInfo::exists(clickedPath)) {
-        if (!m_app.catalogueEditable()) {
-            statusBar()->showMessage(tr("This photo's file isn't at %1 any more.").arg(clickedPath), 8000);
-            return;
-        }
-        const qint64 inatId = proxyIndex.data(LL::InatIdRole).toLongLong();
-        statusBar()->showMessage(tr("This photo's file has been renamed or moved — finding it…"));
-        requestScan([this, inatId, clickedPath] {
-            reloadLifeList();   // the scan's own refresh may not have run (nothing found)
-            const QModelIndexList hit = m_lifeListProxy->match(m_lifeListProxy->index(0, 0), LL::InatIdRole,
-                                                               inatId, 1, Qt::MatchExactly);
-            if (!hit.isEmpty() && QFileInfo::exists(hit.first().data(LL::PreviewPathRole).toString())) {
-                statusBar()->clearMessage();
-                openLifeListPhoto(hit.first());
-                return;
-            }
-            statusBar()->showMessage(tr("Couldn't find this photo's file: it isn't at %1 any more, and no "
-                                        "file with the same contents turned up in your library folders.")
-                                         .arg(clickedPath),
-                                     10000);
-        });
-        return;
-    }
-
-    // Which are starred, in one go.
-    QSet<int> starred;
-    {
-        QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
-        if (q.exec(QStringLiteral("SELECT capture_id FROM best_shot"))) {
-            while (q.next())
-                starred.insert(q.value(0).toInt());
-        }
-    }
-    // Every shown row's first photo, in the list's order, so the arrow keys step through it.
-    QVector<ImageViewer::Item> items;
-    int start = 0;
-    for (int r = 0; r < m_lifeListProxy->rowCount(); ++r) {
-        const QModelIndex at = m_lifeListProxy->index(r, 0);
-        const coverage::LifeListEntry &e = m_lifeListModel->entry(m_lifeListProxy->mapToSource(at).row());
-        if (e.previewPath.isEmpty())
-            continue;
-        const bool hasCommon = !e.commonName.isEmpty() && e.commonName != e.name;
-        const QString name = hasCommon ? QStringLiteral("%1 (%2)").arg(e.commonName, e.name) : e.name;
-        const QString number = e.number > 0 ? QString::number(e.number) : QStringLiteral("—");
-        ImageViewer::Item item;
-        item.path = e.previewPath;
-        item.title = QStringLiteral("%1 · %2").arg(number, hasCommon ? e.commonName : e.name);
-        item.caption = QStringLiteral("%1. %2\n").arg(number, name)
-                       + (e.firstOn.isEmpty()
-                              ? tr("First photographed: no usable date")
-                              : tr("First photographed %1").arg(model::LifeListModel::dateText(e.firstOn)))
-                       + (e.locality.isEmpty() ? QString() : QStringLiteral(" · ") + e.locality);
-        item.captureId = e.captureId;
-        item.canBestShot = true;
-        item.bestShot = starred.contains(e.captureId);
-        item.canIdentify = true;
-        item.taken = QDate::fromString(e.firstOn.left(10), Qt::ISODate);
-        if (r == proxyIndex.row())
-            start = items.size();
-        items.append(item);
-    }
-    showInViewer(items, start);
+    if (m_lifeListPage)
+        m_lifeListPage->reload(currentProjectId());
 }
 
 namespace {
