@@ -170,7 +170,8 @@ private:
     // already) and scans it; `afterScan` runs once that scan is done.
     void addFolderToLibrary(const QString &dir, std::function<void()> afterScan);
     // ...then matches its photos that have never been matched (a new
-    // folder's, for Upload Observations), and runs `done`.
+    // folder's: Add Folder to Library, Organise, Upload Observations),
+    // and runs `done` (may be empty).
     void addFolderAndMatch(const QString &dir, std::function<void()> done);
     void manageLibraryFolders();
     void startScan();

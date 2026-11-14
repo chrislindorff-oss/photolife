@@ -4971,12 +4971,15 @@ void MainWindow::buildCentralWidget()
     connect(m_organiseView, &OrganiseView::organised, this, [this](const QString &folder) {
         m_app.settings().setGuideOrganised(true);
         scheduleGuideRefresh();
-        // Inside the library: catalogue the new folders (their names match).
+        // Inside the library: catalogue the new folders and match their
+        // photos (their names give the species), so they show in the tree.
+        if (!m_app.catalogueEditable())
+            return;   // a read-only shared copy: nothing to catalogue into
         const QString clean = QDir::cleanPath(folder);
         for (const QString &root : m_app.settings().watchedRoots()) {
             const QString r = QDir::cleanPath(root);
             if (clean == r || clean.startsWith(r + QLatin1Char('/'))) {
-                requestScan();
+                addFolderAndMatch(clean, {});
                 break;
             }
         }
@@ -6291,7 +6294,9 @@ void MainWindow::addWatchedFolder()
         QDir::homePath(), QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (dir.isEmpty())
         return;
-    addFolderToLibrary(dir, {});
+    // Its new photos get their species straight away, as Match Library
+    // would give them, without re-matching the rest of the library.
+    addFolderAndMatch(dir, {});
 }
 
 void MainWindow::addFolderToLibrary(const QString &dir, std::function<void()> afterScan)
@@ -6357,6 +6362,8 @@ void MainWindow::addFolderToLibrary(const QString &dir, std::function<void()> af
 
 void MainWindow::addFolderAndMatch(const QString &dir, std::function<void()> done)
 {
+    if (!done)
+        done = [] {};
     const QString folder = QDir::cleanPath(dir);
     addFolderToLibrary(folder, [this, folder, done = std::move(done)] {
         // Its photos that have never been matched: new ones, usually. Any
