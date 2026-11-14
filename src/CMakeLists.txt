@@ -24,6 +24,7 @@ qt_add_library(photolife_core STATIC
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
     geo/Distance.h
     geo/GeoBox.h            geo/GeoBox.cpp
+    geo/SavedPlaces.h       geo/SavedPlaces.cpp
     geo/LatLon.h            geo/LatLon.cpp
     geo/GeoShape.h          geo/GeoShape.cpp
     geo/LocalityFetcher.h   geo/LocalityFetcher.cpp

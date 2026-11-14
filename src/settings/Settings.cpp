@@ -790,6 +790,16 @@ void Settings::setLifeListTrips(const QStringList &trips)
     m_settings.setValue(QStringLiteral("ui/lifeListTrips"), trips);
 }
 
+QStringList Settings::savedPlaces() const
+{
+    return m_settings.value(QStringLiteral("places/saved")).toStringList();
+}
+
+void Settings::setSavedPlaces(const QStringList &places)
+{
+    m_settings.setValue(QStringLiteral("places/saved"), places);
+}
+
 QStringList Settings::inatKeptIdentifications() const
 {
     return m_settings.value(QStringLiteral("inat/keptIdentifications")).toStringList();

@@ -196,7 +196,7 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
         q.setForwardOnly(true);
         const bool byPlace = !filter.place.trimmed().isEmpty();
         q.prepare(QStringLiteral(
-                      "SELECT t.inat_id, m.capture_id, c.captured_on%1 "
+                      "SELECT t.inat_id, m.capture_id, c.captured_on, c.latitude, c.longitude%1 "
                       "FROM capture_match m JOIN capture c ON c.id = m.capture_id "
                       "JOIN taxon t ON t.id = m.taxon_id "
                       "JOIN project_taxon pt ON pt.taxon_id = m.taxon_id AND pt.project_id = ? %2"
@@ -219,7 +219,11 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
                 if (!day.isValid() || day < filter.from || (filter.to.isValid() && day > filter.to))
                     continue;
             }
-            if (byPlace && !matchesPlace(q.value(3).toString() + QLatin1Char(' ') + q.value(4).toString(), words))
+            if (filter.area
+                && (q.value(3).isNull() || q.value(4).isNull()
+                    || !geo::boxContains(*filter.area, q.value(4).toDouble(), q.value(3).toDouble())))
+                continue;
+            if (byPlace && !matchesPlace(q.value(5).toString() + QLatin1Char(' ') + q.value(6).toString(), words))
                 continue;
             sightings.append({q.value(0).toLongLong(), q.value(1).toInt(), on});
         }

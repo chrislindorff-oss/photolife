@@ -21,14 +21,20 @@ public:
     int flags() const;
     void clear();
 
+    // A chip for a map area narrowing the photos too ("Map area: Anakie
+    // Gorge ✕"); clicking it clears the area. Empty: hidden.
+    void setAreaChip(const QString &text);
+
 signals:
     void flagsChanged(int flags);
+    void areaChipCleared();
 
 private:
     QToolButton *addChip(const QString &text, const QString &tip, int flag);
 
     QList<QToolButton *> m_chips;
     QToolButton *m_clear = nullptr;
+    QToolButton *m_area = nullptr;
 };
 
 } // namespace pl

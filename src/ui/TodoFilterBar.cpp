@@ -41,6 +41,17 @@ TodoFilterBar::TodoFilterBar(bool withNotInTree, QWidget *parent)
     connect(m_clear, &QToolButton::clicked, this, &TodoFilterBar::clear);
     layout->addWidget(m_clear);
     layout->addStretch(1);
+    m_area = new QToolButton(this);
+    m_area->setProperty("chip", true);
+    m_area->setCheckable(true);
+    m_area->setToolTip(tr("Only the photos in this area of the map. Click to show them all again (or Esc on "
+                          "the map)."));
+    m_area->hide();
+    connect(m_area, &QToolButton::clicked, this, [this] {
+        m_area->hide();
+        emit areaChipCleared();
+    });
+    layout->addWidget(m_area);
 }
 
 QToolButton *TodoFilterBar::addChip(const QString &text, const QString &tip, int flag)
@@ -65,6 +76,13 @@ int TodoFilterBar::flags() const
     for (const QToolButton *chip : m_chips)
         f |= chip->isChecked() ? chip->property("todoFlag").toInt() : 0;
     return f;
+}
+
+void TodoFilterBar::setAreaChip(const QString &text)
+{
+    m_area->setText(text + QStringLiteral("  \u2715"));
+    m_area->setChecked(true);
+    m_area->setVisible(!text.isEmpty());
 }
 
 void TodoFilterBar::clear()

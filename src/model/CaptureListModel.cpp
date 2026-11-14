@@ -1,5 +1,7 @@
 #include "model/CaptureListModel.h"
 
+#include "geo/SavedPlaces.h"
+
 #include "db/Database.h"
 #include "thumb/ThumbnailCache.h"
 
@@ -295,6 +297,17 @@ void CaptureListModel::setGpsFilter(GpsFilter filter)
     reloadAsync();
 }
 
+void CaptureListModel::setAreaFilter(std::optional<geo::GeoBox> area)
+{
+    const auto same = [](const geo::GeoBox &a, const geo::GeoBox &b) {
+        return a.swLat == b.swLat && a.swLng == b.swLng && a.neLat == b.neLat && a.neLng == b.neLng;
+    };
+    if (m_area.has_value() == area.has_value() && (!area || same(*m_area, *area)))
+        return;
+    m_area = area;
+    reloadAsync();
+}
+
 void CaptureListModel::setTodoFilter(int flags)
 {
     if (m_todoFilter == flags)
@@ -407,7 +420,7 @@ void CaptureListModel::reload()
 
     if (m_db.isOpen()) {
         const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly,
-                                 m_taxonSet, m_gpsFilter, m_search, m_todoFilter};
+                                 m_taxonSet, m_gpsFilter, m_search, m_todoFilter, m_area};
         m_rows = fetchRows(QSqlDatabase::database(m_db.connectionName(), false), params);
         for (int i = 0; i < m_rows.size(); ++i) {
             if (!m_rows[i].previewHash.isEmpty())
@@ -436,7 +449,7 @@ void CaptureListModel::reloadAsync()
     const quint64 generation = ++m_generation;
     emit requestFetch(generation, QueryParams{m_statusFilter, m_taxonScope, m_projectScope,
                                               m_bestShotOnly, m_taxonSet, m_gpsFilter, m_search,
-                                              m_todoFilter});
+                                              m_todoFilter, m_area});
 }
 
 void CaptureListModel::onRowsReady(quint64 generation, QList<Row> rows)
@@ -530,6 +543,8 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             clauses << QStringLiteral("(latitude IS NULL OR longitude IS NULL)");
         if (const QString todo = todoClause(params.todo); !todo.isEmpty())
             clauses << todo;
+        if (params.area)
+            clauses << geo::boxClause(*params.area, QStringLiteral("latitude"), QStringLiteral("longitude"));
 
         // Last: its values are bound after the scope's.
         QStringList searchBinds;

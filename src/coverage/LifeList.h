@@ -1,5 +1,7 @@
 #pragma once
 
+#include "geo/GeoBox.h"
+
 #include <QDate>
 #include <QList>
 #include <QString>
@@ -74,7 +76,8 @@ struct LifeListFilter
     QDate from;     // invalid: no period
     QDate to;
     QString place;  // words; empty: anywhere
-    bool isEmpty() const { return !from.isValid() && place.trimmed().isEmpty(); }
+    std::optional<geo::GeoBox> area;   // a place saved from the map (place:Name); nullopt: anywhere
+    bool isEmpty() const { return !from.isValid() && place.trimmed().isEmpty() && !area; }
 };
 
 // buildLifeList() over a project's tree and its auto/confirmed matches, with

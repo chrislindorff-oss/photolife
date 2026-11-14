@@ -11,9 +11,11 @@
 #include <QPolygonF>
 #include <QWidget>
 
+#include <functional>
 #include <optional>
 
 class QFrame;
+class QMenu;
 class QLabel;
 class QListWidget;
 class QListWidgetItem;
@@ -65,6 +67,14 @@ public:
     // `maxZoom`: how close it may come (a short walk wants closer than pins do).
     void fitTo(double minLon, double minLat, double maxLon, double maxLat, int maxZoom = 17);
 
+    // The area chosen by Shift-dragging (or a saved place): drawn as a box.
+    // setArea() doesn't emit areaChosen()/areaCleared().
+    std::optional<geo::GeoBox> area() const { return m_area; }
+    void setArea(std::optional<geo::GeoBox> area);
+    // Fills the Places button's menu each time it opens (saved places, Save
+    // Area as Place…); the window owns the saved places.
+    void setPlacesMenu(std::function<void(QMenu *)> fill) { m_fillPlaces = std::move(fill); }
+
     // Aerial photos rather than the street map.
     bool satellite() const { return m_satellite; }
     void setSatellite(bool satellite);   // doesn't emit satelliteChanged()
@@ -74,6 +84,9 @@ signals:
     void captureActivated(const QModelIndex &index);
     // The user switched between the street map and aerial photos.
     void satelliteChanged(bool satellite);
+    // Shift-drag drew an area (decimal degrees); Esc cleared it.
+    void areaChosen(double swLat, double swLng, double neLat, double neLng);
+    void areaCleared();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -130,6 +143,12 @@ private:
 
     bool m_dragging = false;
     QPoint m_dragLastPos;
+    bool m_selecting = false;          // Shift-dragging out an area
+    QPoint m_selectFrom;
+    QPoint m_selectTo;
+    std::optional<geo::GeoBox> m_area;
+    QPushButton *m_placesButton = nullptr;
+    std::function<void(QMenu *)> m_fillPlaces;
 
     QPushButton *m_fitButton;
     QPushButton *m_localityButton;

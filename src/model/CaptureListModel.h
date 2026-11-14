@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/CatalogueDescriptor.h"
+#include "geo/GeoBox.h"
 
 #include <QAbstractListModel>
 #include <QHash>
@@ -133,6 +134,10 @@ public:
         TodoNotInTree = 8,    // named, but its taxon isn't in any reference tree
     };
     void setTodoFilter(int flags);
+    // Only photos inside a map area (Shift-drag on the map, or a saved
+    // place); nullopt: anywhere. Combines with the other filters.
+    void setAreaFilter(std::optional<geo::GeoBox> area);
+    std::optional<geo::GeoBox> areaFilter() const { return m_area; }
     int todoFilter() const { return m_todoFilter; }
     // The WHERE clause for `flags` over fetchRows()'s columns (empty: none);
     // exposed for tests.
@@ -204,6 +209,7 @@ public:
         GpsFilter gpsFilter = GpsFilter::Any;
         QString search;   // words, each matching a name, file, folder, place or date
         int todo = 0;     // TodoFlag bits
+        std::optional<geo::GeoBox> area;
     };
 
 signals:
@@ -235,6 +241,7 @@ private:
     bool m_bestShotOnly = false;
     GpsFilter m_gpsFilter = GpsFilter::Any;
     int m_todoFilter = 0;
+    std::optional<geo::GeoBox> m_area;
     QString m_search;
     QList<qint64> m_taxonSet;
     int m_captionFields = CaptionName;

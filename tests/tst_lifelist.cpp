@@ -233,6 +233,13 @@ void TestLifeList::loadsFromTheCatalogue()
     QCOMPARE(idsOf(numberedLifeList(loadLifeList(database.connectionName(), project, kToday, anywhereInSteiglitz), false)),
              (QList<qint64>{20, 10}));
     QVERIFY(loadLifeList(database.connectionName(), project, kToday, {QDate(1990, 1, 1), QDate(1990, 12, 31), {}}).isEmpty());
+    // A trip whose place is an area saved from the map: only photos inside it.
+    QVERIFY(more.exec(QStringLiteral("UPDATE capture SET latitude = -37.88, longitude = 144.20 WHERE id = %1").arg(again)));
+    LifeListFilter inArea{QDate(2016, 1, 1), QDate(2016, 12, 31), QString(), geo::GeoBox{-38.0, 144.0, -37.8, 144.4}};
+    QCOMPARE(idsOf(numberedLifeList(loadLifeList(database.connectionName(), project, kToday, inArea), false)),
+             (QList<qint64>{20}));
+    LifeListFilter elsewhere{{}, {}, QString(), geo::GeoBox{-36.0, 145.0, -35.0, 146.0}};
+    QVERIFY(loadLifeList(database.connectionName(), project, kToday, elsewhere).isEmpty());
 
     // Statistics: species a month -- February has both, March one (Flame Robin
     // in February and March counts once in each).

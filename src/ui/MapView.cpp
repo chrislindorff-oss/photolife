@@ -78,6 +78,23 @@ MapView::MapView(model::CaptureListModel &model, net::TileCache &streetTiles,
                                  "that day."));
     connect(m_trackButton, &QPushButton::clicked, this, &MapView::chooseTrack);
 
+    // Areas: Shift-drag one out; Places saves and reopens them.
+    setFocusPolicy(Qt::ClickFocus);   // for Esc
+    m_placesButton = new QPushButton(tr("Places"), this);
+    m_placesButton->setToolTip(tr("Shift-drag on the map to show only the photos in an area; save it as a "
+                                  "place to search for it (place:Name), use it in a trip, or in Targets."));
+    {
+        auto *menu = new QMenu(m_placesButton);
+        connect(menu, &QMenu::aboutToShow, this, [this, menu] {
+            menu->clear();
+            if (m_fillPlaces)
+                m_fillPlaces(menu);
+            if (menu->isEmpty())
+                menu->addAction(tr("Shift-drag on the map to choose an area"))->setEnabled(false);
+        });
+        m_placesButton->setMenu(menu);
+    }
+
     m_localityButton = new QPushButton(tr("Restrict to Active Reference Tree Locality"), this);
     m_localityButton->setCheckable(true);
     m_localityButton->setEnabled(false);   // enabled once setActiveLocality() has a box
@@ -380,6 +397,8 @@ void MapView::layoutOverlays()
     m_fitButton->move(8, 8);
     m_trackButton->adjustSize();
     m_trackButton->move(m_fitButton->geometry().right() + 8, 8);
+    m_placesButton->adjustSize();
+    m_placesButton->move(m_trackButton->geometry().right() + 8, 8);
     m_localityButton->adjustSize();
     m_localityButton->move(8, m_fitButton->geometry().bottom() + 8);
     m_attribution->adjustSize();
@@ -393,6 +412,7 @@ void MapView::layoutOverlays()
     // able to reach the button to turn it back off.
     m_fitButton->raise();
     m_trackButton->raise();
+    m_placesButton->raise();
     m_localityButton->raise();
     m_layers->raise();
     m_attribution->raise();
@@ -431,6 +451,16 @@ void MapView::paintEvent(QPaintEvent *)
     painter.setRenderHint(QPainter::Antialiasing);
     paintLocality(painter, origin);
     paintTrack(painter);
+    // The chosen area, and one being dragged out.
+    const auto drawArea = [&](const QRectF &r) {
+        painter.setPen(QPen(QColor(0x2f, 0x6f, 0xed), 2.0, Qt::DashLine));
+        painter.setBrush(QColor(0x2f, 0x6f, 0xed, 30));
+        painter.drawRect(r.normalized());
+    };
+    if (m_selecting)
+        drawArea(QRectF(m_selectFrom, m_selectTo));
+    else if (m_area)
+        drawArea(QRectF(lonLatToScreen(m_area->swLng, m_area->neLat), lonLatToScreen(m_area->neLng, m_area->swLat)));
     for (const geo::Cluster &c : m_clusters) {
         const QPointF pos = lonLatToScreen(c.centerLonLat.x(), c.centerLonLat.y());
         const bool multi = c.rows.size() > 1;
@@ -480,6 +510,11 @@ void MapView::resizeEvent(QResizeEvent *event)
 
 void MapView::mousePressEvent(QMouseEvent *event)
 {
+    if (event->button() == Qt::LeftButton && (event->modifiers() & Qt::ShiftModifier)) {
+        m_selecting = true;
+        m_selectFrom = m_selectTo = event->pos();
+        return;
+    }
     if (event->button() == Qt::LeftButton) {
         m_dragging = false;
         m_dragLastPos = event->pos();
@@ -487,8 +522,19 @@ void MapView::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+void MapView::setArea(std::optional<geo::GeoBox> area)
+{
+    m_area = area;
+    update();
+}
+
 void MapView::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_selecting) {
+        m_selectTo = event->pos();
+        update();
+        return;
+    }
     if (event->buttons() & Qt::LeftButton) {
         const QPoint delta = event->pos() - m_dragLastPos;
         if (!m_dragging && delta.manhattanLength() < 4)
@@ -507,6 +553,22 @@ void MapView::mouseMoveEvent(QMouseEvent *event)
 
 void MapView::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_selecting && event->button() == Qt::LeftButton) {
+        m_selecting = false;
+        m_selectTo = event->pos();
+        const QRect r = QRect(m_selectFrom, m_selectTo).normalized();
+        if (r.width() < 6 || r.height() < 6) {   // a Shift-click, not an area
+            update();
+            return;
+        }
+        const QPointF nw = screenToLonLat(r.topLeft());
+        const QPointF se = screenToLonLat(r.bottomRight());
+        m_area = geo::GeoBox{se.y(), nw.x(), nw.y(), se.x()};
+        closePanel();
+        update();
+        emit areaChosen(m_area->swLat, m_area->swLng, m_area->neLat, m_area->neLng);
+        return;
+    }
     if (event->button() == Qt::LeftButton && !m_dragging) {
         if (const geo::Cluster *c = clusterAt(event->pos()))
             activateCluster(*c, event->pos());
@@ -741,6 +803,12 @@ void MapView::keyPressEvent(QKeyEvent *event)
 {
     if (event->key() == Qt::Key_Escape && m_panel->isVisible()) {
         closePanel();
+        return;
+    }
+    if (event->key() == Qt::Key_Escape && m_area) {
+        m_area.reset();
+        update();
+        emit areaCleared();
         return;
     }
     if (event->key() == Qt::Key_Backspace && m_panel->isVisible() && m_panelTaxon

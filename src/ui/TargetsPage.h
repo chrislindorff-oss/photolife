@@ -12,6 +12,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QStringListModel;
 class QTreeWidget;
 
 namespace pl {
@@ -35,6 +36,9 @@ signals:
     // Show this taxon in the reference tree.
     void showTaxon(qint64 inatId);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void findPlace();
     void find();
@@ -43,6 +47,7 @@ private:
     Application &m_app;
     int m_projectId = 0;
     QLineEdit *m_where = nullptr;
+    QStringListModel *m_savedNames = nullptr;   // saved places, for m_where's completer
     QLabel *m_place = nullptr;
     QSpinBox *m_radius = nullptr;
     QComboBox *m_month = nullptr;

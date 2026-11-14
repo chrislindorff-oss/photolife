@@ -174,6 +174,10 @@ public:
     // Life list trips: each "name\tfrom\tto\tplace words" (ISO dates).
     QStringList lifeListTrips() const;
     void setLifeListTrips(const QStringList &trips);
+    // Places saved from the map (geo::parseSavedPlaces()): place:Name in the
+    // library search, a trip's place, Targets.
+    QStringList savedPlaces() const;
+    void setSavedPlaces(const QStringList &places);
     QStringList lifeListHiddenColumns() const;
     void setLifeListHiddenColumns(const QStringList &keys);
     bool lifeListThumbnails() const;

@@ -3,6 +3,7 @@
 #include "catalogue/UntreedMatchStore.h"
 #include "coverage/CoverageCalculator.h"
 #include "coverage/LifeList.h"
+#include "geo/SavedPlaces.h"
 #include "libsync/PhotoSyncService.h"
 #include "settings/Settings.h"
 #include "sync/SyncService.h"
@@ -170,6 +171,12 @@ private:
     // Review → Needs Identifying → Suggest Names: iNaturalist's suggestion
     // for each run of shots becomes the photos' guess.
     void suggestNames(const QList<qint64> &captureIds);
+    // The map's area (Shift-drag, or a saved place): the map and Photos of
+    // Tree Selection narrow to it. nullopt clears it.
+    void setMapArea(std::optional<geo::GeoBox> area, const QString &name);
+    void fillPlacesMenu(QMenu *menu);
+    void saveMapAreaAsPlace();
+    QList<geo::SavedPlace> savedPlaces() const;
     void addWatchedFolder();
     // Adds `dir` to the library (a new library folder, unless it's in one
     // already) and scans it; `afterScan` runs once that scan is done.
@@ -472,6 +479,8 @@ private:
     QStackedWidget *m_photoStack = nullptr;
     QWidget *m_libraryPage = nullptr;   // the To do chips over m_photoStack
     TodoFilterBar *m_libraryTodo = nullptr;
+    TodoFilterBar *m_treeTodo = nullptr;   // over Photos of Tree Selection
+    QString m_mapAreaName;                 // the saved place the map's area is, if any
     QStackedWidget *m_centralStack = nullptr;
     QMenu *m_viewMenu = nullptr;
     QActionGroup *m_viewModeGroup = nullptr;

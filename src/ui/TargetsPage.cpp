@@ -5,12 +5,19 @@
 #include "coverage/LifeList.h"
 #include "db/Database.h"
 #include "geo/LatLon.h"
+#include "geo/SavedPlaces.h"
 #include "net/GeocodeClient.h"
 #include "settings/Settings.h"
 #include "taxonomy/TaxonomyStore.h"
 #include "ui/Theme.h"
 
 #include <QCheckBox>
+#include <QCompleter>
+#include <QEvent>
+#include <QStringListModel>
+#include <QtMath>
+
+#include <cmath>
 #include <QComboBox>
 #include <QDate>
 #include <QDesktopServices>
@@ -43,8 +50,20 @@ TargetsPage::TargetsPage(Application &app, QWidget *parent) : QWidget(parent), m
                              this);
     intro->setWordWrap(true);
     m_where = new QLineEdit(this);
-    m_where->setPlaceholderText(tr("A place (Anakie, Victoria) or coordinates (-37.90, 144.22)"));
+    m_where->setPlaceholderText(tr("A place (Anakie, Victoria), coordinates (-37.90, 144.22), or a saved place"));
+    m_where->setToolTip(tr("Places saved from the Map tab (Places → Save Area as Place…) are offered as you type: "
+                           "Targets then looks around the middle of the area, as far as its corners."));
     m_where->setClearButtonEnabled(true);
+    {
+        auto *completer = new QCompleter(this);
+        completer->setCaseSensitivity(Qt::CaseInsensitive);
+        auto *names = new QStringListModel(completer);
+        completer->setModel(names);
+        m_where->setCompleter(completer);
+        // Saved places may change while this page is open: refreshed on focus.
+        m_where->installEventFilter(this);
+        m_savedNames = names;
+    }
     connect(m_where, &QLineEdit::returnPressed, this, &TargetsPage::findPlace);
     m_place = new QLabel(this);
     m_place->setObjectName(QStringLiteral("muted"));
@@ -118,11 +137,37 @@ void TargetsPage::setProject(int projectId)
     m_status->setText(projectId > 0 ? QString() : tr("Select a reference tree."));
 }
 
+bool TargetsPage::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_where && event->type() == QEvent::FocusIn) {
+        QStringList names;
+        for (const geo::SavedPlace &p : geo::parseSavedPlaces(m_app.settings().savedPlaces()))
+            names << p.name;
+        m_savedNames->setStringList(names);
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void TargetsPage::findPlace()
 {
-    const QString text = m_where->text().trimmed();
+    QString text = m_where->text().trimmed();
     if (text.isEmpty()) {
         m_place->setText(tr("Type a place, or paste coordinates."));
+        return;
+    }
+    // A place saved from the map: its middle, out to its corners.
+    if (text.startsWith(QLatin1String("place:"), Qt::CaseInsensitive))
+        text = text.mid(6).trimmed();
+    if (const auto saved = geo::findSavedPlace(geo::parseSavedPlaces(m_app.settings().savedPlaces()), text)) {
+        const geo::GeoBox &b = saved->box;
+        const double midLat = (b.swLat + b.neLat) / 2.0;
+        const double midLng = (b.swLng + b.neLng) / 2.0;
+        const double northKm = std::abs(b.neLat - b.swLat) * 111.32;
+        const double eastKm = std::abs(b.neLng - b.swLng) * 111.32 * std::cos(qDegreesToRadians(midLat));
+        m_radius->setValue(qBound(1, int(std::ceil(std::hypot(northKm, eastKm) / 2.0)), m_radius->maximum()));
+        m_at = QPointF(midLat, midLng);
+        m_place->setText(tr("%1 (saved place)").arg(saved->name));
+        find();
         return;
     }
     if (const std::optional<QPointF> at = geo::parseLatLon(text)) {

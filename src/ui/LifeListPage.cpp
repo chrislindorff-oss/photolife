@@ -10,9 +10,11 @@
 #include "collection/ContactSheetWriter.h"
 #include "scan/Exif.h"
 #include "settings/Settings.h"
+#include "geo/SavedPlaces.h"
 #include "ui/CaptureDelegate.h"
 
 #include <QCheckBox>
+#include <QCompleter>
 #include <QLocale>
 #include <QSaveFile>
 #include <QRegularExpression>
@@ -353,8 +355,17 @@ coverage::LifeListFilter LifeListPage::periodFilter() const
     }
     if (key.startsWith(QLatin1String("trip:"))) {
         const QString trip = m_app.settings().lifeListTrips().value(key.mid(5).toInt());
-        return {QDate::fromString(trip.section(QLatin1Char('\t'), 1, 1), Qt::ISODate),
-                QDate::fromString(trip.section(QLatin1Char('\t'), 2, 2), Qt::ISODate), trip.section(QLatin1Char('\t'), 3, 3)};
+        coverage::LifeListFilter filter{QDate::fromString(trip.section(QLatin1Char('\t'), 1, 1), Qt::ISODate),
+                                        QDate::fromString(trip.section(QLatin1Char('\t'), 2, 2), Qt::ISODate),
+                                        trip.section(QLatin1Char('\t'), 3, 3), std::nullopt};
+        // place:Name -- an area saved from the map -- rather than words.
+        const geo::PlaceQuery query =
+            geo::extractPlace(filter.place, geo::parseSavedPlaces(m_app.settings().savedPlaces()));
+        if (query.place) {
+            filter.area = query.place->box;
+            filter.place = query.rest;
+        }
+        return filter;
     }
     return {};
 }
@@ -531,7 +542,17 @@ void LifeListPage::editTrips()
         d->setDisplayFormat(QStringLiteral("d MMM yyyy"));
     }
     auto *place = new QLineEdit(&dialog);
-    place->setPlaceholderText(tr("optional: words in the places, e.g. Grampians"));
+    place->setPlaceholderText(tr("optional: words in the places, e.g. Grampians, or place:Name"));
+    place->setToolTip(tr("Words that must all be in a photo's place -- or place: and the name of an area "
+                         "saved from the Map tab (Places → Save Area as Place…), for the photos inside it."));
+    {
+        QStringList saved;
+        for (const geo::SavedPlace &p : geo::parseSavedPlaces(m_app.settings().savedPlaces()))
+            saved << QStringLiteral("place:") + p.name;
+        auto *completer = new QCompleter(saved, place);
+        completer->setCaseSensitivity(Qt::CaseInsensitive);
+        place->setCompleter(completer);
+    }
     auto *add = new QPushButton(tr("Add Trip"), &dialog);
     auto *remove = new QPushButton(tr("Remove"), &dialog);
     add->setAutoDefault(false);

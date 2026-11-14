@@ -41,6 +41,7 @@ private slots:
     void applyGpsPatchesRowInPlaceWithoutReset();
     void gpsFilterKeepsOnlyPhotosWithOrWithoutALocation();
     void todoFilterShowsPhotosNeedingAnyOfTheTicked();
+    void areaFilterKeepsPhotosInsideTheBox();
     void confirmedOrAutoStatusFilterIncludesBothStatuses();
     void searchMatchesEveryWordAnywhere();
     void duplicatesAreFilesWithTheSameContent();
@@ -506,6 +507,27 @@ void TestCaptureListModel::todoFilterShowsPhotosNeedingAnyOfTheTicked()
     QCOMPARE(shown(), (QStringList{QStringLiteral("crow")}));
     QVERIFY(apply(0));
     QCOMPARE(shown(), (QStringList{QStringLiteral("crow"), QStringLiteral("crow2")}));
+}
+
+void TestCaptureListModel::areaFilterKeepsPhotosInsideTheBox()
+{
+    QSqlQuery(QSqlDatabase::database(m_db->connectionName(), false))
+        .exec(QStringLiteral("UPDATE capture SET latitude = -37.88, longitude = 144.20 WHERE base_name = 'crow'"));
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    model.reload();
+    QCOMPARE(model.rowCount(), 2);
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    model.setAreaFilter(geo::GeoBox{-38.0, 144.0, -37.8, 144.4});
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));   // the orchid has no location
+    spy.clear();
+    model.setAreaFilter(geo::GeoBox{-36.0, 145.0, -35.0, 146.0});
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.rowCount(), 0);
+    spy.clear();
+    model.setAreaFilter(std::nullopt);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(model.rowCount(), 2);
 }
 
 void TestCaptureListModel::applyGpsPatchesRowInPlaceWithoutReset()

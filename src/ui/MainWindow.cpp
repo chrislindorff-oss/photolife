@@ -92,6 +92,7 @@
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/TodoFilterBar.h"
+#include "geo/SavedPlaces.h"
 #include "inat/RunSuggester.h"
 #include "ui/InatTokenGetter.h"
 #include "ui/ServerDialogs.h"
@@ -1508,7 +1509,14 @@ void MainWindow::buildToolBar()
     connect(m_librarySearch, &QLineEdit::textChanged, searchTimer, qOverload<>(&QTimer::start));
     connect(searchTimer, &QTimer::timeout, this, [this] {
         const QString text = m_librarySearch->text().simplified();
-        m_model->setSearch(text);
+        // place:Name -- a place saved from the map -- narrows to its area.
+        const geo::PlaceQuery query = geo::extractPlace(text, savedPlaces());
+        m_model->setAreaFilter(query.place ? std::optional<geo::GeoBox>(query.place->box) : std::nullopt);
+        m_model->setSearch(query.rest);
+        if (!query.unknown.isEmpty())
+            statusBar()->showMessage(tr("No saved place called \u201c%1\u201d. Save one from the Map tab's "
+                                        "Places menu.").arg(query.unknown),
+                                     8000);
         if (!text.isEmpty() && !m_viewLibraryAction->isChecked())
             m_viewLibraryAction->trigger();
         updateEmptyState();
@@ -5101,6 +5109,8 @@ QWidget *MainWindow::buildBrowsePage()
     // To do chips: within the tree selection, so no "Not in a tree".
     auto *todo = new TodoFilterBar(false, this);
     connect(todo, &TodoFilterBar::flagsChanged, this, [this](int flags) { m_taxonModel->setTodoFilter(flags); });
+    connect(todo, &TodoFilterBar::areaChipCleared, this, [this] { setMapArea(std::nullopt, QString()); });
+    m_treeTodo = todo;
 
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
@@ -5119,7 +5129,98 @@ QWidget *MainWindow::buildMapPage()
     m_mapView->setShowLocality(m_app.settings().showMapLocality());
     connect(m_mapView, &MapView::captureActivated, this,
             [this](const QModelIndex &i) { openViewer(m_taxonModel, i); });
+    // Shift-drag an area: the map and Photos of Tree Selection narrow to it.
+    connect(m_mapView, &MapView::areaChosen, this, [this](double s, double w, double n, double e) {
+        setMapArea(geo::GeoBox{s, w, n, e}, QString());
+    });
+    connect(m_mapView, &MapView::areaCleared, this, [this] { setMapArea(std::nullopt, QString()); });
+    m_mapView->setPlacesMenu([this](QMenu *menu) { fillPlacesMenu(menu); });
     return m_mapView;
+}
+
+QList<geo::SavedPlace> MainWindow::savedPlaces() const
+{
+    return geo::parseSavedPlaces(m_app.settings().savedPlaces());
+}
+
+void MainWindow::setMapArea(std::optional<geo::GeoBox> area, const QString &name)
+{
+    m_mapAreaName = area ? name : QString();
+    m_taxonModel->setAreaFilter(area);
+    m_mapView->setArea(area);
+    m_treeTodo->setAreaChip(!area ? QString()
+                            : name.isEmpty() ? tr("Map area")
+                                             : tr("Map area: %1").arg(name));
+    if (area)
+        statusBar()->showMessage(tr("Showing only the photos in the area, here and in Photos of Tree Selection. "
+                                    "Esc on the map, or the Map area chip, shows them all again."),
+                                 10000);
+}
+
+void MainWindow::fillPlacesMenu(QMenu *menu)
+{
+    const QList<geo::SavedPlace> places = savedPlaces();
+    for (const geo::SavedPlace &p : places) {
+        menu->addAction(p.name, this, [this, p] {
+            setMapArea(p.box, p.name);
+            m_mapView->fitTo(p.box.swLng, p.box.swLat, p.box.neLng, p.box.neLat);
+        });
+    }
+    if (!places.isEmpty())
+        menu->addSeparator();
+    QAction *save = menu->addAction(tr("Save Area as Place…"), this, &MainWindow::saveMapAreaAsPlace);
+    save->setEnabled(m_mapView->area().has_value());
+    QAction *clear = menu->addAction(tr("Clear Area") + QStringLiteral("\tEsc"), this,
+                                     [this] { setMapArea(std::nullopt, QString()); });
+    clear->setEnabled(m_mapView->area().has_value());
+    if (!places.isEmpty()) {
+        QMenu *remove = menu->addMenu(tr("Delete Place"));
+        for (const geo::SavedPlace &p : places) {
+            remove->addAction(p.name, this, [this, name = p.name] {
+                if (QMessageBox::question(this, tr("Delete Place"),
+                                          tr("Delete the saved place \u201c%1\u201d? Trips using it go back to "
+                                             "matching place names.").arg(name))
+                    != QMessageBox::Yes)
+                    return;
+                QList<geo::SavedPlace> kept = savedPlaces();
+                kept.removeIf([&](const geo::SavedPlace &q) { return q.name == name; });
+                m_app.settings().setSavedPlaces(geo::formatSavedPlaces(kept));
+                if (m_mapAreaName == name)
+                    setMapArea(m_mapView->area(), QString());
+            });
+        }
+    }
+    menu->addSeparator();
+    menu->addAction(tr("Shift-drag on the map to choose an area"))->setEnabled(false);
+}
+
+void MainWindow::saveMapAreaAsPlace()
+{
+    const std::optional<geo::GeoBox> area = m_mapView->area();
+    if (!area)
+        return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("Save Area as Place"),
+                                               tr("A name for this area, e.g. Anakie Gorge. Search for it with "
+                                                  "place:Name, or use it as a trip's place."),
+                                               QLineEdit::Normal, m_mapAreaName, &ok)
+                             .simplified()
+                             .remove(QLatin1Char('"'));
+    if (!ok || name.isEmpty())
+        return;
+    const QList<geo::SavedPlace> places = savedPlaces();
+    if (const auto existing = geo::findSavedPlace(places, name);
+        existing && existing->name.compare(m_mapAreaName, Qt::CaseInsensitive) != 0
+        && QMessageBox::question(this, tr("Save Area as Place"),
+                                 tr("There's already a place called \u201c%1\u201d. Replace it with this area?")
+                                     .arg(existing->name))
+               != QMessageBox::Yes)
+        return;
+    m_app.settings().setSavedPlaces(geo::formatSavedPlaces(geo::withSavedPlace(places, {name, *area})));
+    setMapArea(area, name);
+    statusBar()->showMessage(tr("Saved \u201c%1\u201d. Search the library for place:%1, or use it as a trip's place.")
+                                 .arg(name),
+                             10000);
 }
 
 QWidget *MainWindow::buildBestShotsPage()
@@ -6287,7 +6388,7 @@ void MainWindow::updateEmptyState()
 
     const int count = m_model->captureCount();
     const bool filtered = !m_model->statusFilter().isEmpty() || !m_model->search().isEmpty()
-                          || m_model->todoFilter() != 0;
+                          || m_model->todoFilter() != 0 || m_model->areaFilter().has_value();
     if (count > 0) {
         stack->setCurrentIndex(1);
     } else if (filtered) {
