@@ -7,6 +7,9 @@
 #include "db/CatalogueDescriptor.h"
 #include "pl/Version.h"
 #include "settings/Settings.h"
+#include "settings/SecretStore.h"
+
+#include <QFile>
 
 using namespace pl;
 
@@ -17,6 +20,7 @@ class TestSettings : public QObject
 private slots:
     void initTestCase();
     void init();
+    void cleanup() { Settings::setSecretStore(nullptr); }
     void watchedRootsRoundTrip();
     void settingsFileIsOwnerOnly();
     void databasePathDefaultsToAppData();
@@ -34,6 +38,10 @@ private slots:
     void captureCaptionFieldsRoundTrip();
     void treePanelShownOnlyWhereTheTreeIsUsed();
     void inatSettingsDefaultEmptyAndRoundTrip();
+    void secretsGoToTheKeychainNotTheFile();
+    void secretsMoveFromTheFileWithABackup();
+    void withoutAKeychainSecretsStayInTheFile();
+    void removingAServerRemovesItsSecrets();
 
 private:
     // Wipes any values a previous test wrote to the (test-mode) store.
@@ -362,6 +370,99 @@ void TestSettings::photoStorageRoundTrip()
     const auto again = s.profile(s.saveServerProfile(some));
     QVERIFY(!again->photosAllTrees);
     QCOMPARE(again->photoTrees, (QList<int>{3, 7}));
+}
+
+namespace {
+Settings::CatalogueProfile clubProfile()
+{
+    Settings::CatalogueProfile club;
+    club.server = true;
+    club.name = QStringLiteral("Club");
+    club.pg.pgHost = QStringLiteral("db.example.com");
+    club.pg.pgDbName = QStringLiteral("club");
+    club.pg.pgUser = QStringLiteral("alice");
+    club.pg.pgPassword = QStringLiteral("pg-secret");
+    club.s3.secretKey = QStringLiteral("s3-secret");
+    club.drive.clientSecret = QStringLiteral("drive-secret");
+    club.drive.refreshToken = QStringLiteral("drive-refresh");
+    return club;
+}
+} // namespace
+
+void TestSettings::secretsGoToTheKeychainNotTheFile()
+{
+    MemorySecretStore keychain;
+    Settings::setSecretStore(&keychain);
+    Settings s;
+    s.setInatApiToken(QStringLiteral("eyJ.token"));
+    const QString id = s.saveServerProfile(clubProfile());
+    QCOMPARE(Settings().inatApiToken(), QStringLiteral("eyJ.token"));
+    const Settings::CatalogueProfile back = *Settings().profile(id);
+    QCOMPARE(back.pg.pgPassword, QStringLiteral("pg-secret"));
+    QCOMPARE(back.s3.secretKey, QStringLiteral("s3-secret"));
+    QCOMPARE(back.drive.clientSecret, QStringLiteral("drive-secret"));
+    QCOMPARE(back.drive.refreshToken, QStringLiteral("drive-refresh"));
+    QVERIFY(!s.secretsInFile());
+    QSettings raw;
+    QVERIFY(!raw.contains(QStringLiteral("inat/apiToken")));
+    QVERIFY(!raw.contains(QStringLiteral("servers/%1/pg/password").arg(id)));
+    QCOMPARE(keychain.values().value(QStringLiteral("servers/%1/pg/password").arg(id)), QStringLiteral("pg-secret"));
+    // Clearing one removes it from the keychain.
+    s.setInatApiToken(QString());
+    QVERIFY(!keychain.values().contains(QStringLiteral("inat/apiToken")));
+    QVERIFY(Settings().inatApiToken().isEmpty());
+}
+
+void TestSettings::secretsMoveFromTheFileWithABackup()
+{
+    // Written before there was a keychain: in the file.
+    QString id;
+    {
+        Settings s;
+        s.setInatApiToken(QStringLiteral("eyJ.token"));
+        id = s.saveServerProfile(clubProfile());
+        QVERIFY(s.secretsInFile());
+    }
+    MemorySecretStore keychain;
+    Settings::setSecretStore(&keychain);
+    Settings s;
+    QString backup;
+    QCOMPARE(s.moveSecretsToKeychain(&backup), 5);
+    QVERIFY(!s.secretsInFile());
+    QCOMPARE(s.inatApiToken(), QStringLiteral("eyJ.token"));
+    QCOMPARE(s.profile(id)->pg.pgPassword, QStringLiteral("pg-secret"));
+    // The file as it was, for an older PhotoLife: owner-only.
+    QVERIFY(QFile::exists(backup));
+    QSettings old(backup, QSettings::NativeFormat);
+    QCOMPARE(old.value(QStringLiteral("inat/apiToken")).toString(), QStringLiteral("eyJ.token"));
+#ifndef Q_OS_WIN
+    QCOMPARE(QFile::permissions(backup) & (QFileDevice::ReadGroup | QFileDevice::ReadOther), QFileDevice::Permissions());
+#endif
+    QCOMPARE(s.moveSecretsToKeychain(), 0);   // nothing left to move
+    QFile::remove(backup);
+}
+
+void TestSettings::withoutAKeychainSecretsStayInTheFile()
+{
+    MemorySecretStore none(false);
+    Settings::setSecretStore(&none);
+    Settings s;
+    s.setInatApiToken(QStringLiteral("eyJ.token"));
+    QCOMPARE(Settings().inatApiToken(), QStringLiteral("eyJ.token"));
+    QVERIFY(s.secretsInFile());
+    QCOMPARE(s.moveSecretsToKeychain(), -1);
+    QVERIFY(none.values().isEmpty());
+}
+
+void TestSettings::removingAServerRemovesItsSecrets()
+{
+    MemorySecretStore keychain;
+    Settings::setSecretStore(&keychain);
+    Settings s;
+    const QString id = s.saveServerProfile(clubProfile());
+    QCOMPARE(keychain.values().size(), 4);
+    s.removeServerProfile(id);
+    QVERIFY(keychain.values().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestSettings)

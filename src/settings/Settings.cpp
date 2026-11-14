@@ -1,5 +1,7 @@
 #include "settings/Settings.h"
 
+#include "settings/SecretStore.h"
+
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -114,6 +116,106 @@ QString serverKey(const QString &id, const QString &key)
 
 } // namespace
 
+namespace {
+SecretStore *g_secrets = nullptr;
+const char *const kServerSecretKeys[] = {"pg/password", "photos/s3/secretKey", "photos/drive/clientSecret",
+                                         "photos/drive/refreshToken"};
+} // namespace
+
+void Settings::setSecretStore(SecretStore *store)
+{
+    g_secrets = store;
+}
+
+SecretStore *Settings::secretStore()
+{
+    return g_secrets;
+}
+
+QString Settings::secretValue(const QString &key) const
+{
+    if (g_secrets) {
+        if (const std::optional<QString> v = g_secrets->read(key))
+            return *v;
+    }
+    return m_settings.value(key).toString();
+}
+
+void Settings::setSecretValue(const QString &key, const QString &value)
+{
+    if (g_secrets && g_secrets->available() && g_secrets->write(key, value)) {
+        m_settings.remove(key);
+        return;
+    }
+    if (value.isEmpty())
+        m_settings.remove(key);
+    else
+        m_settings.setValue(key, value);
+}
+
+QStringList Settings::secretKeys() const
+{
+    QStringList keys{QLatin1String(kInatApiToken), QLatin1String(kPgPassword)};
+    m_settings.beginGroup(QLatin1String(kServersGroup));
+    const QStringList ids = m_settings.childGroups();
+    m_settings.endGroup();
+    for (const QString &id : ids) {
+        for (const char *key : kServerSecretKeys)
+            keys << serverKey(id, QLatin1String(key));
+    }
+    return keys;
+}
+
+bool Settings::secretsInFile() const
+{
+    const QStringList keys = secretKeys();
+    return std::any_of(keys.cbegin(), keys.cend(),
+                       [this](const QString &k) { return !m_settings.value(k).toString().isEmpty(); });
+}
+
+int Settings::moveSecretsToKeychain(QString *backupPath)
+{
+    if (!g_secrets || !g_secrets->available())
+        return -1;
+    QStringList inFile;
+    for (const QString &k : secretKeys()) {
+        if (!m_settings.value(k).toString().isEmpty())
+            inFile << k;
+    }
+    if (inFile.isEmpty())
+        return 0;
+    // A copy of the file as it was, in case of a step back to an older PhotoLife.
+    m_settings.sync();
+    const QString backup = m_settings.fileName() + QStringLiteral(".bak");
+    QFile::remove(backup);
+    if (!QFile::copy(m_settings.fileName(), backup))
+        return 0;   // no backup, no move
+    QFile::setPermissions(backup, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    if (backupPath)
+        *backupPath = backup;
+    int moved = 0;
+    for (const QString &k : std::as_const(inFile)) {
+        const QString value = m_settings.value(k).toString();
+        if (g_secrets->write(k, value) && g_secrets->read(k) == value) {
+            m_settings.remove(k);
+            ++moved;
+        }
+    }
+    m_settings.sync();
+    return moved;
+}
+
+bool Settings::keychainNoteShown() const
+{
+    return m_settings.value(QStringLiteral("secrets/keychainNoteShown"), false).toBool();
+}
+
+void Settings::setKeychainNoteShown(bool shown)
+{
+    m_settings.setValue(QStringLiteral("secrets/keychainNoteShown"), shown);
+}
+
+
 QString Settings::activeServerId() const
 {
     const QString id = m_settings.value(QLatin1String(kActiveProfile)).toString();
@@ -150,7 +252,7 @@ std::optional<Settings::CatalogueProfile> Settings::profile(const QString &id) c
     p.pg.pgPort = v("pg/port", 5432).toInt();
     p.pg.pgDbName = v("pg/dbName").toString();
     p.pg.pgUser = v("pg/user").toString();
-    p.pg.pgPassword = v("pg/password").toString();
+    p.pg.pgPassword = secretValue(serverKey(id, QStringLiteral("pg/password")));
     p.pg.pgSslMode = v("pg/sslMode", QStringLiteral("require")).toString();
     p.userName = v("userName").toString();
     p.libraryRoot = v("libraryRoot").toString();
@@ -160,11 +262,11 @@ std::optional<Settings::CatalogueProfile> Settings::profile(const QString &id) c
     p.s3.bucket = v("photos/s3/bucket").toString();
     p.s3.prefix = v("photos/s3/prefix").toString();
     p.s3.accessKey = v("photos/s3/accessKey").toString();
-    p.s3.secretKey = v("photos/s3/secretKey").toString();   // plain text, like pg/password
+    p.s3.secretKey = secretValue(serverKey(id, QStringLiteral("photos/s3/secretKey")));
     p.drive.clientId = v("photos/drive/clientId").toString();
-    p.drive.clientSecret = v("photos/drive/clientSecret").toString();
+    p.drive.clientSecret = secretValue(serverKey(id, QStringLiteral("photos/drive/clientSecret")));
     p.drive.folderId = v("photos/drive/folder").toString();
-    p.drive.refreshToken = v("photos/drive/refreshToken").toString();   // plain text too
+    p.drive.refreshToken = secretValue(serverKey(id, QStringLiteral("photos/drive/refreshToken")));
     p.drive.account = v("photos/drive/account").toString();
     p.photosAllTrees = v("photos/allTrees", true).toBool();
     p.photosWhenDeletedHere = v("photos/whenDeletedHere", QStringLiteral("ask")).toString();
@@ -218,7 +320,7 @@ QString Settings::saveServerProfile(const CatalogueProfile &p)
     set("pg/port", p.pg.pgPort);
     set("pg/dbName", p.pg.pgDbName);
     set("pg/user", p.pg.pgUser);
-    set("pg/password", p.pg.pgPassword);
+    setSecretValue(serverKey(id, QStringLiteral("pg/password")), p.pg.pgPassword);
     set("pg/sslMode", p.pg.pgSslMode);
     set("userName", p.userName.trimmed());
     set("libraryRoot", p.libraryRoot.trimmed());
@@ -228,11 +330,11 @@ QString Settings::saveServerProfile(const CatalogueProfile &p)
     set("photos/s3/bucket", p.s3.bucket.trimmed());
     set("photos/s3/prefix", p.s3.prefix.trimmed());
     set("photos/s3/accessKey", p.s3.accessKey.trimmed());
-    set("photos/s3/secretKey", p.s3.secretKey);
+    setSecretValue(serverKey(id, QStringLiteral("photos/s3/secretKey")), p.s3.secretKey);
     set("photos/drive/clientId", p.drive.clientId.trimmed());
-    set("photos/drive/clientSecret", p.drive.clientSecret.trimmed());
+    setSecretValue(serverKey(id, QStringLiteral("photos/drive/clientSecret")), p.drive.clientSecret.trimmed());
     set("photos/drive/folder", libsync::DriveConfig::folderIdFrom(p.drive.folderId));
-    set("photos/drive/refreshToken", p.drive.refreshToken);
+    setSecretValue(serverKey(id, QStringLiteral("photos/drive/refreshToken")), p.drive.refreshToken);
     set("photos/drive/account", p.drive.account);
     set("photos/allTrees", p.photosAllTrees);
     set("photos/whenDeletedHere", p.photosWhenDeletedHere);
@@ -249,6 +351,10 @@ void Settings::removeServerProfile(const QString &id)
         return;
     if (m_settings.value(QLatin1String(kActiveProfile)).toString() == id)
         setActiveProfile(QString::fromLatin1(kLocalProfileId));
+    if (g_secrets && g_secrets->available()) {
+        for (const char *key : kServerSecretKeys)
+            g_secrets->write(serverKey(id, QLatin1String(key)), QString());
+    }
     m_settings.remove(QStringLiteral("%1/%2").arg(QLatin1String(kServersGroup), id));
 }
 
@@ -283,7 +389,7 @@ bool Settings::migrateProfiles()
         p.pg.pgPort = m_settings.value(QLatin1String(kPgPort), 5432).toInt();
         p.pg.pgDbName = m_settings.value(QLatin1String(kPgDbName)).toString();
         p.pg.pgUser = m_settings.value(QLatin1String(kPgUser)).toString();
-        p.pg.pgPassword = m_settings.value(QLatin1String(kPgPassword)).toString();
+        p.pg.pgPassword = secretValue(QLatin1String(kPgPassword));
         p.pg.pgSslMode = m_settings.value(QLatin1String(kPgSslMode), QStringLiteral("require")).toString();
         p.name = p.pg.pgDbName.isEmpty() ? host : p.pg.pgDbName;
         p.userName = m_settings.value(QLatin1String(kSyncUserName)).toString();
@@ -335,7 +441,7 @@ void Settings::setCatalogueDescriptor(const CatalogueDescriptor &descriptor)
         m_settings.setValue(QLatin1String(kPgPort), descriptor.pgPort);
         m_settings.setValue(QLatin1String(kPgDbName), descriptor.pgDbName);
         m_settings.setValue(QLatin1String(kPgUser), descriptor.pgUser);
-        m_settings.setValue(QLatin1String(kPgPassword), descriptor.pgPassword);
+        setSecretValue(QLatin1String(kPgPassword), descriptor.pgPassword);
         m_settings.setValue(QLatin1String(kPgSslMode), descriptor.pgSslMode);
     } else {
         setDatabasePath(descriptor.sqlitePath);
@@ -551,7 +657,7 @@ void Settings::setInatUsername(const QString &username)
 
 QString Settings::inatApiToken() const
 {
-    return m_settings.value(QLatin1String(kInatApiToken)).toString();
+    return secretValue(QLatin1String(kInatApiToken));
 }
 
 QDateTime Settings::sourceSyncedAt(const QString &source) const
@@ -568,7 +674,7 @@ void Settings::setSourceSyncedAt(const QString &source, const QDateTime &when)
 
 void Settings::setInatApiToken(const QString &token)
 {
-    m_settings.setValue(QLatin1String(kInatApiToken), token);
+    setSecretValue(QLatin1String(kInatApiToken), token);
 }
 
 QString Settings::exportDestFolder() const

@@ -1407,14 +1407,24 @@ take. Everyone chooses for themselves; it changes nothing for the others.</p>
       missing.</li>
 </ul>
 <p>Cloudflare R2 has no charge for downloads, so it suits a library several people
-download in full. The access key and secret are stored in your OS settings, not
-encrypted, like the catalogue password.</p>
+download in full. The secret key is kept in your system keychain, like the catalogue
+password (see <a href="#files">Where PhotoLife keeps things</a>).</p>
 
 <h2 id="files">Where PhotoLife keeps things</h2>
 <p>The catalogue database, thumbnail cache, reference-photo cache and map-tile cache
 live in your user data folder (<tt>~/.local/share/PhotoLife</tt> on Linux,
 <tt>%LOCALAPPDATA%\PhotoLife</tt> on Windows). Deleting that folder resets PhotoLife
 without affecting a single photo in your library.</p>
+<p><b>Passwords and tokens</b> &mdash; your iNaturalist token, server catalogue
+passwords, and the photo storage's secret key and Google Drive sign-in &mdash; are kept
+in the system keychain (GNOME Keyring or KWallet on Linux, Credential Manager on
+Windows), not in PhotoLife's settings file. The first time this version starts, any it
+finds in the settings file move there, and the file as it was is kept beside it as
+<tt>PhotoLife.conf.bak</tt> (readable only by you), in case you go back to an older
+version. If there's no keychain to use, they stay in the settings file, which only you
+can read, and PhotoLife says so once. A settings file copied to another computer arrives
+without them: PhotoLife asks for a server catalogue's password the first time it starts
+there.</p>
 
 <h2 id="raw">RAW files</h2>
 <p>When a shot has both a RAW and a JPEG, PhotoLife shows the JPEG. For a RAW with no

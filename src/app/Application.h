@@ -12,6 +12,7 @@ namespace pl {
 
 class Database;
 class Settings;
+class SecretStore;
 class MainWindow;
 
 namespace scan {
@@ -63,6 +64,12 @@ class Application : public QObject
 public:
     Application();
     ~Application() override;
+
+    // The system keychain (nullptr: built without it, or a test run), and
+    // what was moved into it from the settings file at this start-up.
+    SecretStore *secretStore() const { return m_secrets.get(); }
+    int secretsMoved() const { return m_secretsMoved; }
+    QString secretsBackup() const { return m_secretsBackup; }
 
     // Sets application metadata, installs logging, loads settings, opens and
     // migrates the catalogue database. Returns false (and logs) on failure.
@@ -123,6 +130,9 @@ signals:
     void inatApiTokenChanged(const QString &token);
 
 private:
+    std::unique_ptr<SecretStore> m_secrets;   // before m_settings: it outlives it
+    int m_secretsMoved = 0;                   // into the keychain at this start-up
+    QString m_secretsBackup;
     std::unique_ptr<Settings> m_settings;
     std::unique_ptr<Database> m_database;
     std::unique_ptr<thumb::ThumbnailCache> m_thumbnails;

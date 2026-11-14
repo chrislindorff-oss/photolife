@@ -17,6 +17,8 @@
 
 namespace pl {
 
+class SecretStore;
+
 // Thin typed wrapper over QSettings (native format, per-user).
 class Settings
 {
@@ -131,6 +133,27 @@ public:
     // the file is already per-user.
     void protectFile();
     ~Settings();
+
+    // --- secrets ------------------------------------------------------------
+    // Passwords and tokens (the iNaturalist token, Postgres passwords, the S3
+    // secret key, Google Drive's client secret and refresh token) go to the
+    // system keychain when one is set -- shared by every Settings -- and
+    // available; otherwise, or until moved, they stay in the file. nullptr:
+    // the file only (tests, or a build without QtKeychain).
+    static void setSecretStore(SecretStore *store);
+    static SecretStore *secretStore();
+    // Every secret's key: the Local ones and each server profile's.
+    QStringList secretKeys() const;
+    // Secrets still in the file.
+    bool secretsInFile() const;
+    // Moves the file's secrets into the keychain, each read back before it's
+    // removed from the file. A copy of the file is kept first, as
+    // <file>.bak (owner-only), at `backupPath`. Returns how many moved; -1
+    // when there's no keychain to move them to.
+    int moveSecretsToKeychain(QString *backupPath = nullptr);
+    // The note that the keychain wasn't there (once).
+    bool keychainNoteShown() const;
+    void setKeychainNoteShown(bool shown);
 
     QByteArray mainWindowGeometry() const;
     void setMainWindowGeometry(const QByteArray &geometry);
@@ -341,6 +364,10 @@ private:
     // server its own group.
     QString photoOfDayKey(const char *name) const;   // per catalogue
     QString profileKey(const QString &serverKey, const QString &localKey) const;
+    // A secret: from the keychain, else the file.
+    QString secretValue(const QString &key) const;
+    // To the keychain when it takes it (and out of the file), else the file.
+    void setSecretValue(const QString &key, const QString &value);
 
     mutable QSettings m_settings;
 };

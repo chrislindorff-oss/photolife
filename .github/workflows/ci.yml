@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qt6-base-dev qt6-base-dev-tools qt6-base-private-dev libqt6sql6-sqlite libqt6sql6-psql \
-            ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev libexiv2-dev
+            ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev libexiv2-dev libsecret-1-dev
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_COLOR_DIAGNOSTICS=OFF
@@ -77,7 +77,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qt6-base-dev qt6-base-dev-tools qt6-base-private-dev libqt6sql6-sqlite libqt6sql6-psql \
-            ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev libexiv2-dev
+            ninja-build libgl-dev libraw-dev libjpeg-turbo8-dev libexiv2-dev libsecret-1-dev
 
       - name: Configure
         run: >
@@ -118,7 +118,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libraw-dev libjpeg-turbo8-dev libexiv2-dev
+          sudo apt-get install -y --no-install-recommends libraw-dev libjpeg-turbo8-dev libexiv2-dev libsecret-1-dev
 
       # Qt is installed as the msvc2019_64 build below, and vcpkg's default
       # triplet builds exiv2 with MSVC too -- without this, CMake falls back

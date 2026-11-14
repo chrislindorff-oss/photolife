@@ -1,4 +1,6 @@
 #include "app/Application.h"
+
+#include "settings/SecretStore.h"
 #include "app/StorageStats.h"
 #include <QtConcurrent>
 
@@ -41,7 +43,10 @@ namespace pl {
 
 Application::Application() = default;
 
-Application::~Application() = default;
+Application::~Application()
+{
+    Settings::setSecretStore(nullptr);
+}
 
 bool Application::initialize(const Database::ProgressCallback &onProgress,
                               std::optional<CatalogueDescriptor> descriptorOverride)
@@ -59,7 +64,19 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
     qInfo("%s %s starting", kAppName, kAppVersion);
     qInfo() << "Data directory:" << dataDir;
 
+    // Passwords and tokens in the system keychain (not for test runs, which
+    // set PHOTOLIFE_NO_KEYCHAIN: they mustn't touch the real one).
+    if (!qEnvironmentVariableIsSet("PHOTOLIFE_NO_KEYCHAIN"))
+        m_secrets = makeSystemSecretStore();
+    Settings::setSecretStore(m_secrets.get());
     m_settings = std::make_unique<Settings>();
+    if (m_secrets) {
+        if (const int moved = m_settings->moveSecretsToKeychain(&m_secretsBackup); moved > 0) {
+            m_secretsMoved = moved;
+            qInfo() << "Moved" << moved << "password(s) and token(s) into the system keychain; the settings file "
+                                           "as it was is kept as" << m_secretsBackup;
+        }
+    }
     if (m_settings->migrateProfiles())
         qInfo() << "Settings moved to catalogue profiles; active:" << m_settings->activeProfile().name;
     // A server's working copy lives in its own folder (data/servers/<id>/).

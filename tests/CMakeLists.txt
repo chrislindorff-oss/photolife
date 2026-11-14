@@ -6,7 +6,8 @@ function(photolife_test name)
     target_link_libraries(${name} PRIVATE photolife_core Qt6::Test)
     add_test(NAME ${name} COMMAND ${name})
     # Headless: no X11/Wayland on CI, and QImage IO needs a QPA plugin.
-    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # PHOTOLIFE_NO_KEYCHAIN: tests never touch the real system keychain.
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;PHOTOLIFE_NO_KEYCHAIN=1")
 endfunction()
 
 photolife_test(tst_database)

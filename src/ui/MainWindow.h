@@ -171,6 +171,14 @@ private:
     // Review → Needs Identifying → Suggest Names: iNaturalist's suggestion
     // for each run of shots becomes the photos' guess.
     void suggestNames(const QList<qint64> &captureIds);
+    // At start-up: say secrets moved to the keychain, or (once) that there's
+    // no keychain; ask for a server password this computer doesn't have.
+    void checkSecretsAtStart();
+    // A server profile with no password here (a copied configuration): ask.
+    void askForMissingServerPassword();
+    // Secrets moved into the keychain this start-up, or (once) that it
+    // couldn't be reached.
+    void showSecretsNotice();
     // The status bar's "N new photos not matched yet — Match Now": photos the
     // folder watcher brought in (never matched), matched on a click.
     QList<qint64> neverMatchedCaptures() const;

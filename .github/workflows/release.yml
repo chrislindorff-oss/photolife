@@ -24,7 +24,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libraw-dev libjpeg-turbo8-dev libexiv2-dev ninja-build libgl-dev libfuse2 file curl
+            libraw-dev libjpeg-turbo8-dev libexiv2-dev libsecret-1-dev ninja-build libgl-dev libfuse2 file curl
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4

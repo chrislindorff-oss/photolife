@@ -92,6 +92,7 @@
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/TodoFilterBar.h"
+#include "settings/SecretStore.h"
 #include "geo/SavedPlaces.h"
 #include "inat/RunSuggester.h"
 #include "ui/InatTokenGetter.h"
@@ -383,12 +384,14 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
     connect(m_inatImportService, &inat::InatImportService::finished, this,
             &MainWindow::onInatImportFinished);
 
+    QTimer::singleShot(0, this, &MainWindow::showSecretsNotice);
     buildMenus();
     buildCentralWidget();
     applyCaptionFields(m_app.settings().captureCaptionFields());
     buildReferenceTreeDock();
     buildGuideDock();
     restoreLayout();
+    QTimer::singleShot(0, this, &MainWindow::checkSecretsAtStart);
 
     connect(m_builder, &taxonomy::ProjectBuilder::progress, this,
             [this](const QString &phase, int done, int total) {
@@ -7051,6 +7054,81 @@ void MainWindow::showCatalogueSettings()
     dialog.exec();
 }
 
+void MainWindow::askForMissingServerPassword()
+{
+    Settings &settings = m_app.settings();
+    Settings::CatalogueProfile profile = settings.activeProfile();
+    if (!profile.server || !profile.pg.pgPassword.isEmpty())
+        return;
+    bool ok = false;
+    const QString password = QInputDialog::getText(
+        this, tr("Server Password"),
+        tr("The password for \u201c%1\u201d isn't on this computer yet. Passwords are kept in the system "
+           "keychain, so a configuration copied from another computer comes without them.\n\nPassword for %2 "
+           "on %3:")
+            .arg(profile.name, profile.pg.pgUser, profile.pg.pgHost),
+        QLineEdit::Password, QString(), &ok);
+    if (!ok || password.isEmpty())
+        return;
+    profile.pg.pgPassword = password;
+    settings.saveServerProfile(profile);
+    m_app.configureSync();
+}
+
+void MainWindow::showSecretsNotice()
+{
+    Settings &settings = m_app.settings();
+    if (m_app.secretsMoved() > 0) {
+        statusBar()->showMessage(tr("Your passwords and tokens are now kept in the system keychain. The old "
+                                    "settings file is kept as %1.")
+                                     .arg(QDir::toNativeSeparators(m_app.secretsBackup())),
+                                 15000);
+        return;
+    }
+    // Built with the keychain, but it couldn't be reached: say so, once.
+    SecretStore *store = m_app.secretStore();
+    if (!store || settings.keychainNoteShown() || !settings.secretsInFile() || store->available())
+        return;
+    settings.setKeychainNoteShown(true);
+    QMessageBox::information(
+        this, tr("System Keychain"),
+        tr("PhotoLife couldn't reach the system keychain, so your passwords and tokens stay in its settings file, "
+           "which only you can read.\n\nOnce a keychain is available (GNOME Keyring or KWallet, unlocked), "
+           "they're moved into it the next time PhotoLife starts."));
+}
+
+void MainWindow::checkSecretsAtStart()
+{
+    Settings &settings = m_app.settings();
+    if (m_app.secretsMoved() > 0)
+        statusBar()->showMessage(tr("Your passwords and tokens are now kept in the system keychain. The settings "
+                                    "file as it was is kept as %1.")
+                                     .arg(QDir::toNativeSeparators(m_app.secretsBackup())),
+                                 15000);
+    // No keychain to keep them in: they stay in the settings file -- said once.
+    SecretStore *store = m_app.secretStore();
+    if (store && !store->available() && settings.secretsInFile() && !settings.keychainNoteShown()) {
+        settings.setKeychainNoteShown(true);
+        QMessageBox::information(this, tr("Passwords"),
+                                 tr("PhotoLife couldn't reach the system keychain, so your passwords and tokens "
+                                    "stay in its settings file, which only you can read. They'll move to the "
+                                    "keychain by themselves once it's available."));
+    }
+    // A server catalogue whose password isn't on this computer (a settings
+    // file copied from another): ask for it now, before anything connects.
+    if (settings.syncEnabled() && settings.activeProfile().pg.pgPassword.isEmpty()) {
+        QMessageBox box(QMessageBox::Information, tr("Server Password"),
+                        tr("The password for the shared catalogue \u201c%1\u201d isn't on this computer yet "
+                           "(passwords are kept in each computer's own keychain). Enter it to connect.")
+                            .arg(settings.activeProfile().name),
+                        QMessageBox::Cancel, this);
+        QPushButton *enter = box.addButton(tr("Enter Password…"), QMessageBox::AcceptRole);
+        box.exec();
+        if (box.clickedButton() == enter)
+            editServerSettings();
+    }
+}
+
 void MainWindow::editServerSettings()
 {
     auto &settings = m_app.settings();
@@ -7413,10 +7491,18 @@ void MainWindow::setupSync()
     });
     // A server catalogue opened for the first time has an empty working copy:
     // offer to download (or start) it. Otherwise just look at the server.
+    // First, a configuration copied from another computer arrives without its
+    // password (that stayed in the other computer's keychain): ask for it.
     if (!QFile::exists(sync::SyncService::basePath(m_app.settings().databasePath())))
-        QTimer::singleShot(0, this, &MainWindow::setUpSharedCatalogue);
+        QTimer::singleShot(0, this, [this] {
+            askForMissingServerPassword();
+            setUpSharedCatalogue();
+        });
     else
-        QTimer::singleShot(0, this, [this] { runSync(Op::Check, false); });
+        QTimer::singleShot(0, this, [this] {
+            askForMissingServerPassword();
+            runSync(Op::Check, false);
+        });
 
     connect(m_reviewPane, &ReviewPane::editRequested, this, [this] { ensureCanEdit(); });
     setupPhotoSync();

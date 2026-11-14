@@ -108,6 +108,7 @@ qt_add_library(photolife_core STATIC
     scan/ScanService.h      scan/ScanService.cpp
     scan/ScanTypes.h
     settings/Settings.h     settings/Settings.cpp
+    settings/SecretStore.h  settings/SecretStore.cpp
     sync/ChangeSummary.h    sync/ChangeSummary.cpp
     sync/CatalogueSync.h    sync/CatalogueSync.cpp
     sync/SyncService.h      sync/SyncService.cpp
@@ -242,6 +243,40 @@ set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(QXlsx)
 target_link_libraries(photolife_core PRIVATE QXlsx::QXlsx)
 target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_EXIV2)
+
+# QtKeychain keeps the passwords and tokens in the system keychain (GNOME
+# Keyring / KWallet, macOS Keychain, Windows Credential Manager) rather than
+# in PhotoLife.conf. Fetched and built statically, like QXlsx. On Linux it
+# needs libsecret's headers (libsecret-1-dev) for GNOME Keyring; without
+# them it's built without, and PhotoLife keeps secrets in the config file.
+option(PHOTOLIFE_USE_KEYCHAIN "Keep secrets in the system keychain (QtKeychain)" ON)
+if(PHOTOLIFE_USE_KEYCHAIN)
+    if(UNIX AND NOT APPLE)
+        find_package(Qt6 COMPONENTS DBus REQUIRED)
+        pkg_check_modules(LIBSECRET QUIET libsecret-1)
+        if(LIBSECRET_FOUND)
+            set(LIBSECRET_SUPPORT ON CACHE BOOL "" FORCE)
+        else()
+            set(LIBSECRET_SUPPORT OFF CACHE BOOL "" FORCE)
+            message(WARNING "libsecret-1 not found (install libsecret-1-dev): QtKeychain is built without "
+                            "GNOME Keyring support, so on GNOME-based desktops secrets stay in PhotoLife.conf.")
+        endif()
+    endif()
+    set(BUILD_WITH_QT6 ON CACHE BOOL "" FORCE)
+    set(BUILD_TRANSLATIONS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TEST_APPLICATION OFF CACHE BOOL "" FORCE)
+    set(PHOTOLIFE_SAVED_SHARED_LIBS ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    FetchContent_Declare(qtkeychain
+        GIT_REPOSITORY https://github.com/frankosterfeld/qtkeychain.git
+        GIT_TAG        0.17.0
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(qtkeychain)
+    set(BUILD_SHARED_LIBS ${PHOTOLIFE_SAVED_SHARED_LIBS})
+    target_link_libraries(photolife_core PRIVATE qt6keychain)
+    target_compile_definitions(photolife_core PRIVATE PHOTOLIFE_HAVE_KEYCHAIN)
+    message(STATUS "QtKeychain 0.17.0: secrets in the system keychain")
+endif()
 
 # Warnings on, for this project's own code (PRIVATE: not for what links to it).
 # Unused parameters are routine in Qt overrides; a struct initialised with only
