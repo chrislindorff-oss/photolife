@@ -171,6 +171,7 @@ qt_add_library(photolife_core STATIC
     ui/ReferencePhotoDelegate.h ui/ReferencePhotoDelegate.cpp
     ui/ReferencePhotoDialog.h ui/ReferencePhotoDialog.cpp
     ui/ReviewPane.h         ui/ReviewPane.cpp
+    ui/TodoFilterBar.h      ui/TodoFilterBar.cpp
     ui/ServerBar.h          ui/ServerBar.cpp
     ui/ServerDialogs.h      ui/ServerDialogs.cpp
     ui/StatisticsPage.h     ui/StatisticsPage.cpp

@@ -97,6 +97,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     auto makeBucketButton = [this](int bucket) {
         auto *btn = new QToolButton(this);
         btn->setCheckable(true);
+        btn->setProperty("chip", true);   // the list on show is marked (theme.qss)
         connect(btn, &QToolButton::clicked, this, [this, bucket] { setBucket(bucket); });
         return btn;
     };

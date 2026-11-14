@@ -113,6 +113,7 @@ class TaxonColumnView;
 class MapView;
 class ReferencePhotoDialog;
 class ReviewPane;
+class TodoFilterBar;
 
 class MainWindow : public QMainWindow
 {
@@ -469,6 +470,8 @@ private:
     QLabel *m_statusLabel = nullptr;
     QTabWidget *m_tabs = nullptr;
     QStackedWidget *m_photoStack = nullptr;
+    QWidget *m_libraryPage = nullptr;   // the To do chips over m_photoStack
+    TodoFilterBar *m_libraryTodo = nullptr;
     QStackedWidget *m_centralStack = nullptr;
     QMenu *m_viewMenu = nullptr;
     QActionGroup *m_viewModeGroup = nullptr;

@@ -40,6 +40,7 @@ private slots:
     void captionLocalityShownOnlyWhenEnabledAndCached();
     void applyGpsPatchesRowInPlaceWithoutReset();
     void gpsFilterKeepsOnlyPhotosWithOrWithoutALocation();
+    void todoFilterShowsPhotosNeedingAnyOfTheTicked();
     void confirmedOrAutoStatusFilterIncludesBothStatuses();
     void searchMatchesEveryWordAnywhere();
     void duplicatesAreFilesWithTheSameContent();
@@ -455,6 +456,56 @@ void TestCaptureListModel::gpsFilterKeepsOnlyPhotosWithOrWithoutALocation()
     model.setGpsFilter(CaptureListModel::GpsFilter::Any);
     QVERIFY(spy.wait(2000));
     QCOMPARE(names(model), (QStringList{QStringLiteral("Corvus mellori")}));
+}
+
+void TestCaptureListModel::todoFilterShowsPhotosNeedingAnyOfTheTicked()
+{
+    QSqlDatabase db = QSqlDatabase::database(m_db->connectionName(), false);
+    // crow: in the bird tree, located, not on iNat -> to upload.
+    // orchid: named but in no tree, no location.
+    // crow2: located and already on iNaturalist -> nothing to do.
+    // mystery: never matched, no location.
+    addCaptureMatchedTo(QStringLiteral("crow2"), 901);
+    QSqlQuery(db).exec(QStringLiteral("UPDATE capture SET latitude = -37.8, longitude = 144.9 "
+                                      "WHERE base_name IN ('crow', 'crow2')"));
+    QSqlQuery(db).exec(QStringLiteral("UPDATE capture SET inat_observation_id = 555 WHERE base_name = 'crow2'"));
+    QSqlQuery(db).exec(QStringLiteral("INSERT INTO capture (folder_id, base_name) VALUES (1, 'mystery')"));
+
+    CaptureListModel model(*m_db, *m_thumbs, this);
+    model.reload();
+    QCOMPARE(model.rowCount(), 4);
+
+    auto shown = [&] {
+        QStringList out;
+        for (int r = 0; r < model.rowCount(); ++r)
+            out << model.index(r, 0).data(CaptureListModel::DisplayNameRole).toString();
+        out.sort();
+        return out;
+    };
+    QSignalSpy spy(&model, &QAbstractItemModel::modelReset);
+    auto apply = [&](int flags) {
+        spy.clear();
+        model.setTodoFilter(flags);
+        return spy.wait(2000);
+    };
+    QVERIFY(apply(CaptureListModel::TodoUnnamed));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("mystery")}));
+    QVERIFY(apply(CaptureListModel::TodoToUpload));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("crow")}));
+    QVERIFY(apply(CaptureListModel::TodoNoLocation));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("mystery"), QStringLiteral("orchid")}));
+    QVERIFY(apply(CaptureListModel::TodoNotInTree));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("orchid")}));
+    // Several: any of them.
+    QVERIFY(apply(CaptureListModel::TodoUnnamed | CaptureListModel::TodoToUpload));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("crow"), QStringLiteral("mystery")}));
+    // With the tree's scope: only what's in it.
+    spy.clear();
+    model.setProjectScope(m_birdProject);
+    QVERIFY(spy.wait(2000));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("crow")}));
+    QVERIFY(apply(0));
+    QCOMPARE(shown(), (QStringList{QStringLiteral("crow"), QStringLiteral("crow2")}));
 }
 
 void TestCaptureListModel::applyGpsPatchesRowInPlaceWithoutReset()

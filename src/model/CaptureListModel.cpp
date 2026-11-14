@@ -295,6 +295,34 @@ void CaptureListModel::setGpsFilter(GpsFilter filter)
     reloadAsync();
 }
 
+void CaptureListModel::setTodoFilter(int flags)
+{
+    if (m_todoFilter == flags)
+        return;
+    m_todoFilter = flags;
+    reloadAsync();
+}
+
+QString CaptureListModel::todoClause(int flags)
+{
+    const QString named = QStringLiteral("match_status IN ('auto', 'confirmed') AND matched_id IS NOT NULL");
+    QStringList any;
+    if (flags & TodoUnnamed)   // rejected ones are decided: there's nothing to name them
+        any << QStringLiteral("(match_status IS NULL OR match_status = 'pending' OR matched_id IS NULL) "
+                              "AND (match_status IS NULL OR match_status <> 'rejected')");
+    if (flags & TodoToUpload)
+        any << named + QStringLiteral(" AND latitude IS NOT NULL AND longitude IS NOT NULL "
+                                      "AND inat_observation_id IS NULL");
+    if (flags & TodoNoLocation)
+        any << QStringLiteral("latitude IS NULL OR longitude IS NULL");
+    if (flags & TodoNotInTree)
+        any << named + QStringLiteral(" AND NOT EXISTS (SELECT 1 FROM project_taxon pt "
+                                      "WHERE pt.taxon_id = matched_id)");
+    if (any.isEmpty())
+        return {};
+    return QStringLiteral("((") + any.join(QStringLiteral(") OR (")) + QStringLiteral("))");
+}
+
 void CaptureListModel::setSearch(const QString &text)
 {
     const QString simplified = text.simplified();
@@ -379,7 +407,7 @@ void CaptureListModel::reload()
 
     if (m_db.isOpen()) {
         const QueryParams params{m_statusFilter, m_taxonScope, m_projectScope, m_bestShotOnly,
-                                 m_taxonSet, m_gpsFilter, m_search};
+                                 m_taxonSet, m_gpsFilter, m_search, m_todoFilter};
         m_rows = fetchRows(QSqlDatabase::database(m_db.connectionName(), false), params);
         for (int i = 0; i < m_rows.size(); ++i) {
             if (!m_rows[i].previewHash.isEmpty())
@@ -407,7 +435,8 @@ void CaptureListModel::reloadAsync()
     ensureWorker();
     const quint64 generation = ++m_generation;
     emit requestFetch(generation, QueryParams{m_statusFilter, m_taxonScope, m_projectScope,
-                                              m_bestShotOnly, m_taxonSet, m_gpsFilter, m_search});
+                                              m_bestShotOnly, m_taxonSet, m_gpsFilter, m_search,
+                                              m_todoFilter});
 }
 
 void CaptureListModel::onRowsReady(quint64 generation, QList<Row> rows)
@@ -499,6 +528,8 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             clauses << QStringLiteral("(latitude IS NOT NULL AND longitude IS NOT NULL)");
         else if (params.gpsFilter == GpsFilter::Without)
             clauses << QStringLiteral("(latitude IS NULL OR longitude IS NULL)");
+        if (const QString todo = todoClause(params.todo); !todo.isEmpty())
+            clauses << todo;
 
         // Last: its values are bound after the scope's.
         QStringList searchBinds;
@@ -524,7 +555,7 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             "    (SELECT r.ext FROM rendition r WHERE r.capture_id = c.id "
             "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_ext, "
             "    m.status AS match_status, m.taxon_id AS matched_id, t.name AS matched_name, "
-            "    c.latitude, c.longitude, "
+            "    c.latitude, c.longitude, c.inat_observation_id, "
             "    EXISTS(SELECT 1 FROM best_shot bs WHERE bs.capture_id = c.id) AS is_best_shot, "
             "    g.locality AS locality, t.inat_id AS matched_taxon_inat_id, "
             "    (SELECT r.kind FROM rendition r WHERE r.capture_id = c.id "

@@ -91,6 +91,7 @@
 #include "ui/ReferencePhotoDialog.h"
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
+#include "ui/TodoFilterBar.h"
 #include "inat/RunSuggester.h"
 #include "ui/InatTokenGetter.h"
 #include "ui/ServerDialogs.h"
@@ -4883,6 +4884,20 @@ void MainWindow::buildCentralWidget()
     m_photoStack->addWidget(emptyPage);     // index 0
     m_photoStack->addWidget(m_grid);        // index 1
 
+    // All Library Photos: the To do chips above the grid.
+    m_libraryTodo = new TodoFilterBar(true, this);
+    connect(m_libraryTodo, &TodoFilterBar::flagsChanged, this, [this](int flags) {
+        m_model->setTodoFilter(flags);
+    });
+    // Filters and searches reload in the background: the page (grid, or
+    // "nothing matches") follows once the rows are in.
+    connect(m_model, &QAbstractItemModel::modelReset, this, &MainWindow::updateEmptyState);
+    m_libraryPage = new QWidget(this);
+    auto *libraryLayout = new QVBoxLayout(m_libraryPage);
+    libraryLayout->setContentsMargins(4, 4, 4, 0);
+    libraryLayout->addWidget(m_libraryTodo);
+    libraryLayout->addWidget(m_photoStack, 1);
+
     m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), m_app.inat(),
                                   m_app.photoCache(), this);
     connect(m_reviewPane, &ReviewPane::inatMatchRequested, this, &MainWindow::matchReviewPhotosWithInat);
@@ -4974,7 +4989,7 @@ void MainWindow::buildCentralWidget()
 
     m_centralStack = new QStackedWidget(this);
     m_centralStack->addWidget(m_tabs);        // Reference Tree mode
-    m_centralStack->addWidget(m_photoStack);  // All Library Photos mode
+    m_centralStack->addWidget(m_libraryPage);  // All Library Photos mode
     m_centralStack->addWidget(m_reviewPane);  // Review Unmatched mode
     m_centralStack->addWidget(m_inatView);    // iNaturalist mode
     m_organiseView = new OrganiseView(m_app, this);
@@ -5008,7 +5023,7 @@ void MainWindow::buildCentralWidget()
         });
     };
     showView(m_viewTreeAction, m_tabs);
-    showView(m_viewLibraryAction, m_photoStack);
+    showView(m_viewLibraryAction, m_libraryPage);
     showView(m_viewReviewAction, m_reviewPane);
     showView(m_viewInatAction, m_inatView);
     showView(m_viewOrganiseAction, m_organiseView);
@@ -5083,9 +5098,14 @@ QWidget *MainWindow::buildBrowsePage()
     connect(m_taxonGrid, &QAbstractItemView::doubleClicked, this,
             [this](const QModelIndex &i) { openViewer(m_taxonModel, i); });
 
+    // To do chips: within the tree selection, so no "Not in a tree".
+    auto *todo = new TodoFilterBar(false, this);
+    connect(todo, &TodoFilterBar::flagsChanged, this, [this](int flags) { m_taxonModel->setTodoFilter(flags); });
+
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
     layout->addLayout(header);
+    layout->addWidget(todo);
     layout->addWidget(m_taxonGrid, 1);
     return page;
 }
@@ -6266,13 +6286,16 @@ void MainWindow::updateEmptyState()
         return;
 
     const int count = m_model->captureCount();
-    const bool filtered = !m_model->statusFilter().isEmpty() || !m_model->search().isEmpty();
+    const bool filtered = !m_model->statusFilter().isEmpty() || !m_model->search().isEmpty()
+                          || m_model->todoFilter() != 0;
     if (count > 0) {
         stack->setCurrentIndex(1);
     } else if (filtered) {
         m_emptyGuideButton->hide();
         m_emptyHint->setText(m_model->search().isEmpty()
-                                 ? tr("No captures match this filter.")
+                                 ? (m_model->todoFilter() != 0 && m_model->statusFilter().isEmpty()
+                                        ? tr("Nothing to do here: no photos need that.")
+                                        : tr("No captures match this filter."))
                                  : tr("No photos match \u201c%1\u201d%2.")
                                        .arg(m_model->search(), m_model->statusFilter().isEmpty()
                                                                    ? QString()

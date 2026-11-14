@@ -123,6 +123,21 @@ public:
     void setGpsFilter(GpsFilter filter);
     GpsFilter gpsFilter() const { return m_gpsFilter; }
 
+    // To do: only photos still needing something, by kind; several kinds
+    // show photos needing any of them. Combines with the other filters.
+    enum TodoFlag {
+        TodoNone = 0,
+        TodoUnnamed = 1,      // no species yet: never matched, or waiting in Review
+        TodoToUpload = 2,     // named and located, but no iNaturalist observation
+        TodoNoLocation = 4,   // no coordinates
+        TodoNotInTree = 8,    // named, but its taxon isn't in any reference tree
+    };
+    void setTodoFilter(int flags);
+    int todoFilter() const { return m_todoFilter; }
+    // The WHERE clause for `flags` over fetchRows()'s columns (empty: none);
+    // exposed for tests.
+    static QString todoClause(int flags);
+
     // Search: only photos where every word (case aside) is in the photo's
     // name, its taxon's scientific or common name, its file name, folder,
     // place or date ("2025-10"). Empty: no search. Combines with the rest.
@@ -188,6 +203,7 @@ public:
         QList<qint64> taxonSet;   // empty = disabled; see setTaxonSetScope()
         GpsFilter gpsFilter = GpsFilter::Any;
         QString search;   // words, each matching a name, file, folder, place or date
+        int todo = 0;     // TodoFlag bits
     };
 
 signals:
@@ -218,6 +234,7 @@ private:
     int m_projectScope = 0;
     bool m_bestShotOnly = false;
     GpsFilter m_gpsFilter = GpsFilter::Any;
+    int m_todoFilter = 0;
     QString m_search;
     QList<qint64> m_taxonSet;
     int m_captionFields = CaptionName;
