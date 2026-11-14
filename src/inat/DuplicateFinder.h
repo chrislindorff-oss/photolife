@@ -27,6 +27,7 @@ struct ExistingObservation
     QString taxonName;                 // as shown
     QDate date;
     QDateTime time;                    // clock time where it was seen; invalid when not known
+    QDateTime timeEntered;             // the time as entered, when it differs (see Observation)
     std::optional<double> latitude;
     std::optional<double> longitude;
     QString placeGuess;

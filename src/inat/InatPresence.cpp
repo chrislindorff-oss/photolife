@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace pl::inat {
 
@@ -132,8 +133,13 @@ PresenceHit PresenceMatcher::compare(const PresencePhoto &photo, const ExistingO
     // When: both timed, within 12 hours (close: an hour); otherwise the same day.
     bool close = false;
     QString when;
-    if (photo.taken.isValid() && obs.time.isValid()) {
-        hit.secondsApart = std::abs(clockSecondsBetween(photo.taken, obs.time));
+    if (photo.taken.isValid() && (obs.time.isValid() || obs.timeEntered.isValid())) {
+        // iNaturalist's time, or the time as entered (a camera's clock sent
+        // with the wrong zone): whichever is closer.
+        hit.secondsApart = std::numeric_limits<qint64>::max();
+        for (const QDateTime &t : {obs.time, obs.timeEntered})
+            if (t.isValid())
+                hit.secondsApart = std::min(hit.secondsApart, std::abs(clockSecondsBetween(photo.taken, t)));
         if (hit.secondsApart > kWindowSeconds)
             return hit;
         close = hit.secondsApart <= kCloseSeconds;
@@ -267,8 +273,8 @@ bool cacheObservations(const QString &connectionName, const QString &login,
         QSqlQuery ins(db);
         ins.prepare(QStringLiteral(
             "INSERT INTO inat_my_observation (id, login, taxon_inat_id, taxon_ancestor_ids, taxon_name, observed_on, "
-            "time_observed, latitude, longitude, place_guess, preview_url, fetched_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+            "time_observed, latitude, longitude, place_guess, preview_url, fetched_at, time_entered) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
         ins.addBindValue(o.id);
         ins.addBindValue(login);
         ins.addBindValue(o.taxonInatId > 0 ? QVariant(o.taxonInatId) : QVariant());
@@ -284,6 +290,8 @@ bool cacheObservations(const QString &connectionName, const QString &login,
         ins.addBindValue(o.placeGuess);
         ins.addBindValue(o.photos.isEmpty() ? QString() : o.photos.first().previewUrl);
         ins.addBindValue(when);
+        ins.addBindValue(o.timeEntered.isValid() ? o.timeEntered.toString(QStringLiteral("yyyy-MM-ddTHH:mm:ss"))
+                                                 : QString());
         if (!ins.exec()) {
             db.rollback();
             return false;
@@ -306,7 +314,8 @@ QList<ExistingObservation> cachedObservations(const QString &connectionName, con
     QSqlQuery q(dbFor(connectionName));
     q.setForwardOnly(true);
     q.prepare(QStringLiteral("SELECT id, taxon_inat_id, taxon_ancestor_ids, taxon_name, observed_on, time_observed, "
-                             "latitude, longitude, place_guess, preview_url FROM inat_my_observation WHERE login = ?"));
+                             "latitude, longitude, place_guess, preview_url, time_entered FROM inat_my_observation "
+                             "WHERE login = ?"));
     q.addBindValue(login);
     if (!q.exec())
         return out;
@@ -328,6 +337,7 @@ QList<ExistingObservation> cachedObservations(const QString &connectionName, con
         e.placeGuess = q.value(8).toString();
         if (const QString url = q.value(9).toString(); !url.isEmpty())
             e.photoUrls << url;
+        e.timeEntered = QDateTime::fromString(q.value(10).toString(), Qt::ISODate);
         out << e;
     }
     return out;

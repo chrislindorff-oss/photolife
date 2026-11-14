@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QTimeZone>
 
 #include <limits>
@@ -172,6 +173,21 @@ pl::taxonomy::Observation parseObservation(const QJsonObject &obj)
                                                    Qt::ISODate);
         at.isValid())
         o.timeObserved = QDateTime(at.date(), at.time(), QTimeZone::utc());   // "UTC": no zone rules
+    {
+        // "2015-09-09T13:17:45+00:00", "2026-10-18 12:53:00": the date and
+        // time as written, any zone ignored.
+        static const QRegularExpression entered(
+            QStringLiteral(R"(^(\d{4}-\d{2}-\d{2})[T ](\d{1,2}:\d{2}(?::\d{2})?))"));
+        const QRegularExpressionMatch m = entered.match(obj.value(QStringLiteral("observed_on_string")).toString().trimmed());
+        if (m.hasMatch()) {
+            const QDate d = QDate::fromString(m.captured(1), Qt::ISODate);
+            QTime t = QTime::fromString(m.captured(2), QStringLiteral("H:mm:ss"));
+            if (!t.isValid())
+                t = QTime::fromString(m.captured(2), QStringLiteral("H:mm"));
+            if (d.isValid() && t.isValid())
+                o.timeEntered = QDateTime(d, t, QTimeZone::utc());   // "UTC": no zone rules
+        }
+    }
     o.placeGuess = obj.value(QStringLiteral("place_guess")).toString();
     o.qualityGrade = obj.value(QStringLiteral("quality_grade")).toString();
     o.communityTaxonId = optId(obj.value(QStringLiteral("community_taxon_id"))).value_or(0);

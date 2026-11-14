@@ -81,6 +81,7 @@ private slots:
     void missingLocationsLeanOnTheSpecies();
     void farOrOtherDaysAreNoMatch();
     void theBestMatchWins();
+    void theTimeAsEnteredCountsToo();
 
     void checkReadsMarksAndLinks();
     void laterChecksReadOnlyNewObservations();
@@ -179,6 +180,18 @@ void TestInatPresence::theBestMatchWins()
     const PresenceHit hit = matcher.best(photo(101, QStringLiteral("2025-10-18T10:05:00")));
     QCOMPARE(hit.confidence, PresenceConfidence::High);
     QCOMPARE(hit.observationId, qint64(12));   // the closer in time of the two High ones
+}
+
+void TestInatPresence::theTimeAsEnteredCountsToo()
+{
+    // A camera's 13:17 sent as +00:00: iNaturalist shows it as 23:17 in
+    // Melbourne, but the time as entered is still the camera's.
+    ExistingObservation e = obs(10, 101, QStringLiteral("2015-09-09T23:17:45"));
+    QCOMPARE(judge(photo(101, QStringLiteral("2015-09-09T13:20:00")), e), PresenceConfidence::Medium);
+    e.timeEntered = QDateTime::fromString(QStringLiteral("2015-09-09T13:17:45"), Qt::ISODate);
+    const PresenceHit hit = PresenceMatcher({e}).best(photo(101, QStringLiteral("2015-09-09T13:20:00")));
+    QCOMPARE(hit.confidence, PresenceConfidence::High);
+    QCOMPARE(hit.secondsApart, qint64(135));
 }
 
 // --- the check against the catalogue -----------------------------------------

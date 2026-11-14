@@ -11,6 +11,8 @@ namespace pl::scan {
 //
 //   <name>[ (organ/colour)][_organ] - <locality> <d-m-yyyy>[ (n)][_suffix].<ext>
 //
+// (or <yyyy-mm-dd>, as PhotoLife's own renaming writes the date)
+//
 // e.g. "Diuris pardina (bud) - 401 Fulbrooks Road, Dadswells Bridge 28-9-2020 (1)"
 //   -> name "Diuris pardina", organs {"bud"},
 //      locality "401 Fulbrooks Road, Dadswells Bridge", date 2020-09-28, seq 1
@@ -22,7 +24,7 @@ struct ParsedFilename
     QString name;            // name portion, trimmed; may be empty
     QStringList organTags;   // lower-cased organ/phenology/colour tags, in order
     QString locality;        // free text between the separator and the date
-    QDate capturedOn;        // invalid QDate when no d-m-yyyy was present
+    QDate capturedOn;        // invalid QDate when no d-m-yyyy (or yyyy-mm-dd) was present
     int sequence = 0;        // the trailing "(n)" duplicate counter, 0 if absent
 
     bool operator==(const ParsedFilename &) const = default;

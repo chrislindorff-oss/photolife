@@ -54,6 +54,15 @@ const QRegularExpression &trailingDateRe()
     return re;
 }
 
+// The same with a yyyy-mm-dd date, as PhotoLife's own renaming writes it
+// ("Billardiera cymosa - Meningie, South Australia, 2026-10-22 (2)").
+const QRegularExpression &trailingIsoDateRe()
+{
+    static const QRegularExpression re(QStringLiteral(
+        R"((?<!\d)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)\s*(?:\((\d+)\))?\s*(?:_\S+)?\s*$)"));
+    return re;
+}
+
 // A bare " (n)" counter at the end, used when there is no date.
 const QRegularExpression &trailingSeqRe()
 {
@@ -171,6 +180,7 @@ ParsedFilename parseStem(const QString &stem)
     // Date (and duplicate counter) from the end of the remainder.
     QString localityPart = rest;
     const QRegularExpressionMatch date = trailingDateRe().match(rest);
+    const QRegularExpressionMatch iso = date.hasMatch() ? QRegularExpressionMatch() : trailingIsoDateRe().match(rest);
     if (date.hasMatch()) {
         out.capturedOn = makeDate(date.captured(1).toInt(),
                                   date.captured(2).toInt(),
@@ -178,6 +188,11 @@ ParsedFilename parseStem(const QString &stem)
         if (!date.captured(4).isEmpty())
             out.sequence = date.captured(4).toInt();
         localityPart = rest.left(date.capturedStart());
+    } else if (iso.hasMatch() && QDate(iso.captured(1).toInt(), iso.captured(2).toInt(), iso.captured(3).toInt()).isValid()) {
+        out.capturedOn = QDate(iso.captured(1).toInt(), iso.captured(2).toInt(), iso.captured(3).toInt());
+        if (!iso.captured(4).isEmpty())
+            out.sequence = iso.captured(4).toInt();
+        localityPart = rest.left(iso.capturedStart());
     } else {
         const QRegularExpressionMatch seq = trailingSeqRe().match(rest);
         if (seq.hasMatch()) {

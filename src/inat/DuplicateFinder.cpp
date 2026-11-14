@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace pl::inat {
 
@@ -54,6 +55,7 @@ ExistingObservation ExistingObservation::fromInat(const taxonomy::Observation &o
                                               : QStringLiteral("%1 · %2").arg(o.taxonCommonName, o.taxonName);
     e.date = QDate::fromString(o.observedOn.left(10), Qt::ISODate);
     e.time = o.timeObserved;
+    e.timeEntered = o.timeEntered;
     if (!e.date.isValid() && e.time.isValid())
         e.date = e.time.date();
     e.latitude = o.latitude;
@@ -102,8 +104,13 @@ QList<DuplicateHit> find(const ProposedObservation &proposed, const QList<Existi
 
         DuplicateHit hit;
         QString when;
-        if (hasTime && e.time.isValid()) {
-            hit.secondsApart = std::abs(clockSecondsBetween(at, e.time));
+        if (hasTime && (e.time.isValid() || e.timeEntered.isValid())) {
+            // iNaturalist's time, or the time as entered (a camera's clock
+            // sent with the wrong zone): whichever is closer.
+            hit.secondsApart = std::numeric_limits<qint64>::max();
+            for (const QDateTime &t : {e.time, e.timeEntered})
+                if (t.isValid())
+                    hit.secondsApart = std::min(hit.secondsApart, std::abs(clockSecondsBetween(at, t)));
             if (hit.secondsApart > kTimeWindowSeconds)
                 continue;
             when = apart(hit.secondsApart);

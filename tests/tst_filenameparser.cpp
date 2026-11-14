@@ -24,6 +24,7 @@ private slots:
     void uncertaintyMarkersAreLeftInName();
     void baseNameStripsOnlyFinalExtension();
     void emptyStem();
+    void isoDateAsPhotoLifeWritesIt();
 };
 
 void TestFilenameParser::canonicalFloraName()
@@ -148,6 +149,20 @@ void TestFilenameParser::cameraFileNames()
     for (const char *name : {"Emu_0001", "Crimson Rosella", "Eastern Rosella - Stawell 1-9-2024",
                              "Diuris pardina", "Rosella, Crimson", ""})
         QVERIFY2(!isCameraFileName(QLatin1String(name)), name);
+}
+
+void TestFilenameParser::isoDateAsPhotoLifeWritesIt()
+{
+    const ParsedFilename p = parseStem(QStringLiteral("Billardiera cymosa - Meningie, South Australia, 2026-10-22 (2)"));
+    QCOMPARE(p.name, QStringLiteral("Billardiera cymosa"));
+    QCOMPARE(p.locality, QStringLiteral("Meningie, South Australia"));
+    QCOMPARE(p.capturedOn, QDate(2026, 10, 22));
+    QCOMPARE(p.sequence, 2);
+    QCOMPARE(parseStem(QStringLiteral("Brown Honeyeater - Hervey Bay, Queensland, 2026-06-06")).capturedOn,
+             QDate(2026, 6, 6));
+    // Not a date: left in the locality.
+    const ParsedFilename bad = parseStem(QStringLiteral("Robin - Somewhere 2026-13-40"));
+    QVERIFY(!bad.capturedOn.isValid());
 }
 
 QTEST_APPLESS_MAIN(TestFilenameParser)

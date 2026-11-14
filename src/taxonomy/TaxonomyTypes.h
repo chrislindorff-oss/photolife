@@ -129,6 +129,12 @@ struct Observation
     // When, as the clock read where it was seen (the offset dropped, so it
     // compares with a photo's EXIF time); invalid when only a date was given.
     QDateTime timeObserved;
+    // The time as it was entered (observed_on_string), read as the clock
+    // reads -- whatever zone it was tagged with; invalid when it isn't a
+    // plain date and time. iNaturalist shifts a time tagged with the wrong
+    // zone (a camera's clock sent as +00:00) into the observation's own, so
+    // this is what a photo's EXIF time matches.
+    QDateTime timeEntered;
     std::optional<double> latitude;
     std::optional<double> longitude;
     QString placeGuess;               // iNat's own free-text place description, may be empty
