@@ -945,6 +945,16 @@ void Settings::setInatRenameWithCommonName(bool on)
     m_settings.setValue(QStringLiteral("inat/renameWithCommonName"), on);
 }
 
+bool Settings::organiseRenameInPlace() const
+{
+    return m_settings.value(QStringLiteral("organise/renameInPlace"), false).toBool();
+}
+
+void Settings::setOrganiseRenameInPlace(bool on)
+{
+    m_settings.setValue(QStringLiteral("organise/renameInPlace"), on);
+}
+
 bool Settings::organiseRenameOnOrganise() const
 {
     return m_settings.value(QStringLiteral("organise/renameOnOrganise"), false).toBool();

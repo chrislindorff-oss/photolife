@@ -663,6 +663,29 @@ bool OrganiseSession::saveProgress() const
     return file.commit();
 }
 
+bool OrganiseSession::carryProgressTo(const QHash<QString, QString> &oldToNew)
+{
+    if (oldToNew.isEmpty() || m_folder.isEmpty())
+        return true;
+    const QString path = QDir(m_folder).filePath(QLatin1String(kProgressFile));
+    QFile in(path);
+    if (!in.open(QIODevice::ReadOnly))
+        return true;   // nothing kept: nothing to carry
+    QJsonObject root = QJsonDocument::fromJson(in.readAll()).object();
+    in.close();
+    QJsonObject shots = root.value(QStringLiteral("shots")).toObject();
+    for (auto it = oldToNew.cbegin(); it != oldToNew.cend(); ++it) {
+        if (shots.contains(it.key()))
+            shots.insert(it.value(), shots.value(it.key()));   // a rename keeps size and date
+    }
+    root.insert(QStringLiteral("shots"), shots);
+    QSaveFile out(path);
+    if (!out.open(QIODevice::WriteOnly))
+        return false;
+    out.write(QJsonDocument(root).toJson());
+    return out.commit();
+}
+
 void OrganiseSession::loadProgress()
 {
     const QJsonObject root = applyProgress(0);

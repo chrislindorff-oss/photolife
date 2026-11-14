@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -38,7 +39,10 @@ public:
         QStringList failures;   // "<file>: <why>"
     };
 
-    static Result execute(const QString &folder, const QList<ShotMove> &shots);
+    // `renamed`, when given: each shot's old base name -> the one it has now
+    // (with any " (2)"), for the shots that got a new one.
+    static Result execute(const QString &folder, const QList<ShotMove> &shots,
+                          QHash<QString, QString> *renamed = nullptr);
 
     // What undo() would put back: the most recent organise in the folder.
     struct UndoPreview

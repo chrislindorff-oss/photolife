@@ -132,7 +132,8 @@ QStringList targetNames(const ShotMove &shot, const QDir &dest)
 
 } // namespace
 
-OrganiseMover::Result OrganiseMover::execute(const QString &folder, const QList<ShotMove> &shots)
+OrganiseMover::Result OrganiseMover::execute(const QString &folder, const QList<ShotMove> &shots,
+                                             QHash<QString, QString> *renamed)
 {
     Result result;
     const QDir root(folder);
@@ -163,8 +164,16 @@ OrganiseMover::Result OrganiseMover::execute(const QString &folder, const QList<
             log.moves.append({from, to, shot.baseName});
             any = true;
         }
-        if (any)
+        if (any) {
             ++result.moved;
+            if (renamed && !names.isEmpty()) {
+                // The stem the files got: the first one's name, less what followed the base name.
+                const QString tail = QFileInfo(shot.files.first()).fileName().mid(shot.baseName.size());
+                const QString stem = names.first().left(names.first().size() - tail.size());
+                if (stem != shot.baseName)
+                    renamed->insert(shot.baseName, stem);
+            }
+        }
         writeLog(logPath, batches);   // after each shot: an interrupted run is still undoable
     }
     if (log.moves.isEmpty() && log.createdFolders.isEmpty()) {

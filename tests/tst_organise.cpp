@@ -94,6 +94,7 @@ private slots:
     void notesAreWrittenIntoThePhotos();
     void gpxTrackChoiceIsKeptWithTheFolder();
     void organiseRenamesShotsTogetherAndUndoPutsNamesBack();
+    void renamingOnlyLeavesThePhotosWhereTheyAre();
     void neverOverwrites();
     void undoTakesBackOneWholeOrganiseAtATime();
 };
@@ -866,6 +867,73 @@ void TestOrganise::organiseRenamesShotsTogetherAndUndoPutsNamesBack()
                           "DSC_0004.NEF"})
         QVERIFY2(dir.exists(QLatin1String(f)), f);
     QVERIFY(!dir.exists(QStringLiteral("Scarlet Robin")));
+}
+
+void TestOrganise::renamingOnlyLeavesThePhotosWhereTheyAre()
+{
+    QTemporaryDir tmp;
+    const QDir dir(tmp.path());
+    writeShot(dir, QStringLiteral("DSC_0001.NEF"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0001.JPG"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0001.NEF.xmp"), 1000);
+    writeShot(dir, QStringLiteral("DSC_0002.NEF"), 2000);
+    writeShot(dir, QStringLiteral("DSC_0003.JPG"), 3000);   // a reject: left alone
+    OrganiseSession s;
+    s.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    s.setName(0, QStringLiteral("Scarlet Robin"));
+    s.setBest(1, true);
+    s.setRejected(2, true);
+    QVERIFY(s.saveProgress());
+    // As Organise does it: the named runs' shots into no folder, with new names; rejects not moved.
+    const QString base = QStringLiteral("Scarlet Robin - Anakie, Victoria, 2025-10-18");
+    QList<ShotMove> moves;
+    for (const FolderMove &f : s.plan().folders)
+        for (int i : f.items)
+            moves.append({s.items().at(i).baseName, s.items().at(i).files, QString(), base});
+    QHash<QString, QString> renamed;
+    const OrganiseMover::Result r = OrganiseMover::execute(tmp.path(), moves, &renamed);
+    QVERIFY2(r.failures.isEmpty(), qPrintable(r.failures.join(QLatin1Char('\n'))));
+    QCOMPARE(r.moved, 2);
+    // Still here, renamed, the shot's files together; the second numbered.
+    for (const QString &n : {base + QStringLiteral(".NEF"), base + QStringLiteral(".JPG"), base + QStringLiteral(".NEF.xmp"),
+                             base + QStringLiteral(" (2).NEF"), QStringLiteral("DSC_0003.JPG")})
+        QVERIFY2(dir.exists(n), qPrintable(n));
+    QVERIFY(!dir.exists(QStringLiteral("DSC_0001.NEF")));
+    QCOMPARE(dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot), QStringList());   // no folders made
+    QCOMPARE(renamed.value(QStringLiteral("DSC_0001")), base);
+    QCOMPARE(renamed.value(QStringLiteral("DSC_0002")), base + QStringLiteral(" (2)"));
+
+    // Opened again, the photos keep their names, best shot and reject.
+    QVERIFY(s.carryProgressTo(renamed));
+    OrganiseSession again;
+    again.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    again.loadProgress();
+    QCOMPARE(again.count(), 3);
+    int robin = -1, second = -1;
+    for (int i = 0; i < again.count(); ++i) {
+        if (again.items().at(i).baseName == base)
+            robin = i;
+        if (again.items().at(i).baseName == base + QStringLiteral(" (2)"))
+            second = i;
+    }
+    QVERIFY(robin >= 0 && second >= 0);
+    QCOMPARE(again.nameAt(robin), QStringLiteral("Scarlet Robin"));
+    QVERIFY(again.isBest(second));
+    QCOMPARE(again.runName(second), QStringLiteral("Scarlet Robin"));
+
+    // Undo: the old names back, and with them the progress.
+    const OrganiseMover::UndoPreview preview = OrganiseMover::previewUndo(tmp.path());
+    QCOMPARE(preview.shots, 2);
+    QCOMPARE(preview.folders.size(), 1);
+    const OrganiseMover::Result back = OrganiseMover::undo(tmp.path());
+    QVERIFY(back.failures.isEmpty());
+    for (const char *f : {"DSC_0001.NEF", "DSC_0001.JPG", "DSC_0001.NEF.xmp", "DSC_0002.NEF", "DSC_0003.JPG"})
+        QVERIFY2(dir.exists(QLatin1String(f)), f);
+    OrganiseSession undone;
+    undone.setItems(tmp.path(), OrganiseSession::scanFolder(tmp.path()));
+    undone.loadProgress();
+    QCOMPARE(undone.nameAt(0), QStringLiteral("Scarlet Robin"));
+    QVERIFY(undone.isRejected(2));
 }
 
 void TestOrganise::neverOverwrites()

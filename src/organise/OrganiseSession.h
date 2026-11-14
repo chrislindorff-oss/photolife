@@ -189,6 +189,11 @@ public:
     void loadProgress();
     void clearProgress();
 
+    // Shots renamed where they are (Organise's Rename only): their saved
+    // progress -- names, rejects, best shots, notes -- copied to their new
+    // base names, kept under the old ones too so an undo finds it again.
+    bool carryProgressTo(const QHash<QString, QString> &oldToNew);
+
     // The folder's GPS track (GPX Track…): the .gpx file photos are geotagged
     // from, and the correction added to the photos' times before they're
     // matched to it (a camera clock that was off, or set to another time

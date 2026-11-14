@@ -2404,31 +2404,42 @@ void OrganiseView::commit()
     if (!plan.rejects.isEmpty())
         lines << tr("%1 — %Ln photo(s)", nullptr, int(plan.rejects.size()))
                      .arg(QLatin1String(organise::OrganiseSession::kRejectsFolder));
-    QMessageBox box(QMessageBox::Question, tr("Organise into Folders"),
-                    tr("Move %Ln photo(s) into %1 folder(s) inside %2?", nullptr,
-                       plan.photos() + int(plan.rejects.size()))
-                        .arg(plan.folders.size() + (plan.rejects.isEmpty() ? 0 : 1))
-                        .arg(QDir::toNativeSeparators(m_session.folder())),
-                    QMessageBox::NoButton, this);
     const int bestCount = int(m_session.bestShots().size());
-    const QString unnamedNote =
-        (plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr, plan.unnamed)
-                          : QString())
-        + (bestCount > 0 ? tr("%Ln best shot(s) are rated 5 stars (in the JPEG, or an .xmp sidecar "
-                              "beside a RAW) so the library takes them as Best Shots. ",
-                              nullptr, bestCount)
-                         : QString());
-    box.setInformativeText(unnamedNote
-                           + tr("File names are kept, RAW and JPEG and sidecar files move together, "
-                                "nothing is overwritten, and Undo Organise puts all of it back."));
-    box.setDetailedText(lines.join(QLatin1Char('\n')));
-
-    // Renaming too: "Scarlet Robin - Anakie, Victoria, 2025-10-18".
-    QList<int> named;   // the photos going into named folders
+    const QString extrasNote =
+        bestCount > 0 ? tr("%Ln best shot(s) are rated 5 stars (in the JPEG, or an .xmp sidecar "
+                           "beside a RAW) so the library takes them as Best Shots. ",
+                           nullptr, bestCount)
+                      : QString();
+    QList<int> named;   // the photos going into named folders (or renamed)
     for (const organise::FolderMove &f : plan.folders)
         named += f.items;
-    const QString keptInfo = box.informativeText();
-    auto *rename = new QCheckBox(&box);
+    const int toFind = int(placesToFind(named).size());
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Organise into Folders"));
+    auto *question = new QLabel(&dialog);
+    question->setWordWrap(true);
+    QFont bigger = question->font();
+    bigger.setBold(true);
+    question->setFont(bigger);
+    auto *info = new QLabel(&dialog);
+    info->setWordWrap(true);
+    auto *details = new QPlainTextEdit(lines.join(QLatin1Char('\n')), &dialog);
+    details->setReadOnly(true);
+    details->setMaximumHeight(120);
+    details->hide();
+    auto *showDetails = new QPushButton(tr("Show Folders…"), &dialog);
+    showDetails->setAutoDefault(false);
+    showDetails->setCheckable(true);
+    connect(showDetails, &QPushButton::toggled, details, &QWidget::setVisible);
+
+    // Renaming too: "Scarlet Robin - Anakie, Victoria, 2025-10-18" -- in the
+    // species folders, or right here (rename only).
+    auto *rename = new QCheckBox(&dialog);
+    auto *inPlace = new QCheckBox(tr("Rename only — leave them in this folder (no species folders)"), &dialog);
+    inPlace->setToolTip(tr("The named photos get their new names where they are; nothing is moved, and rejects "
+                           "and photos before the first name are left as they are. Undo Organise puts the old "
+                           "names back."));
     if (!plan.folders.isEmpty()) {
         const organise::FolderMove &first = plan.folders.first();
         const organise::Item &it = m_session.items().at(first.items.first());
@@ -2436,43 +2447,100 @@ void OrganiseView::commit()
         const QString example = organise::OrganiseSession::renamedBase(
             first.folderName, it.hasGps() && known.isEmpty() ? tr("Town, State") : known, it.taken);
         rename->setText(tr("Also rename the photos, e.g. \u201c%1\u201d").arg(example));
-        rename->setToolTip(tr("Named for their folder, where they were taken (from their GPS) and "
+        rename->setToolTip(tr("Named for their taxon, where they were taken (from their GPS) and "
                               "the date. RAW, JPEG and sidecar files keep their extensions; Undo "
                               "Organise puts the old names back."));
         rename->setChecked(m_app.settings().organiseRenameOnOrganise());
-        box.setCheckBox(rename);
-        const int toFind = int(placesToFind(named).size());
-        const auto explain = [&box, keptInfo, unnamedNote, toFind, this](bool on) {
-            if (!on) {
-                box.setInformativeText(keptInfo);
-                return;
-            }
-            QString text = unnamedNote
-                           + tr("The photos in named folders are renamed (rejects keep their names); "
-                                "RAW and JPEG and sidecar files move together, nothing is "
-                                "overwritten, and Undo Organise puts all of it back, old names too.");
-            if (toFind > 0)
-                text += QStringLiteral("\n\n")
-                        + tr("Where %Ln spot(s) are will be looked up on OpenStreetMap first "
-                             "(about a second each; needs the internet).",
-                             nullptr, toFind);
-            box.setInformativeText(text);
-        };
-        connect(rename, &QCheckBox::toggled, &box, explain);
-        explain(rename->isChecked());
+        inPlace->setChecked(m_app.settings().organiseRenameInPlace());
+    } else {
+        rename->hide();
+        inPlace->hide();
     }
-    QPushButton *go = box.addButton(tr("Organise"), QMessageBox::AcceptRole);
-    box.addButton(QMessageBox::Cancel);
-    box.setDefaultButton(go);
-    box.exec();
-    if (box.clickedButton() != go)
+    auto *buttons = new QDialogButtonBox(&dialog);
+    QPushButton *go = buttons->addButton(tr("Organise"), QDialogButtonBox::AcceptRole);
+    buttons->addButton(QDialogButtonBox::Cancel);
+    go->setDefault(true);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    const QString folderText = QDir::toNativeSeparators(m_session.folder());
+    const int moving = plan.photos() + int(plan.rejects.size());
+    const int folderCount = int(plan.folders.size()) + (plan.rejects.isEmpty() ? 0 : 1);
+    const auto explain = [=, this](bool) {
+        // Rename only means renaming.
+        if (inPlace->isChecked() && !rename->isChecked())
+            rename->setChecked(true);
+        const bool renameOnly = inPlace->isChecked() && !plan.folders.isEmpty();
+        const bool renaming = rename->isChecked() && !plan.folders.isEmpty();
+        QString text;
+        if (renameOnly) {
+            question->setText(tr("Rename %Ln photo(s) in %1, leaving them where they are?", nullptr, plan.photos())
+                                  .arg(folderText));
+            text = (plan.rejects.isEmpty() && plan.unnamed == 0
+                        ? QString()
+                        : tr("Rejects and photos before the first name keep their names. "))
+                   + extrasNote
+                   + tr("RAW, JPEG and sidecar files keep their extensions and stay together, nothing is "
+                        "overwritten, and Undo Organise puts the old names back.");
+            go->setText(tr("Rename"));
+            showDetails->hide();
+            details->hide();
+        } else {
+            question->setText(tr("Move %Ln photo(s) into %1 folder(s) inside %2?", nullptr, moving)
+                                  .arg(folderCount)
+                                  .arg(folderText));
+            text = (plan.unnamed > 0 ? tr("%Ln photo(s) before the first name stay where they are. ", nullptr,
+                                          plan.unnamed)
+                                     : QString())
+                   + extrasNote
+                   + (renaming ? tr("The photos in named folders are renamed (rejects keep their names); RAW and "
+                                    "JPEG and sidecar files move together, nothing is overwritten, and Undo "
+                                    "Organise puts all of it back, old names too.")
+                               : tr("File names are kept, RAW and JPEG and sidecar files move together, nothing is "
+                                    "overwritten, and Undo Organise puts all of it back."));
+            go->setText(tr("Organise"));
+            showDetails->show();
+        }
+        if (renaming && toFind > 0)
+            text += QStringLiteral("\n\n")
+                    + tr("Where %Ln spot(s) are will be looked up on OpenStreetMap first "
+                         "(about a second each; needs the internet).",
+                         nullptr, toFind);
+        info->setText(text);
+    };
+    connect(rename, &QCheckBox::toggled, &dialog, [=](bool on) {
+        // Not renaming: not renaming only either.
+        if (!on && inPlace->isChecked())
+            inPlace->setChecked(false);
+        explain(on);
+    });
+    connect(inPlace, &QCheckBox::toggled, &dialog, explain);
+    explain(true);
+
+    auto *detailsRow = new QHBoxLayout;
+    detailsRow->addWidget(showDetails);
+    detailsRow->addStretch(1);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(question);
+    layout->addWidget(info);
+    layout->addLayout(detailsRow);
+    layout->addWidget(details);
+    layout->addSpacing(6);
+    layout->addWidget(rename);
+    layout->addWidget(inPlace);
+    layout->addWidget(buttons);
+    dialog.setMinimumWidth(560);
+    if (dialog.exec() != QDialog::Accepted)
         return;
     const bool renaming = !plan.folders.isEmpty() && rename->isChecked();
-    if (!plan.folders.isEmpty())
+    const bool renameOnly = renaming && inPlace->isChecked();
+    if (!plan.folders.isEmpty()) {
         m_app.settings().setOrganiseRenameOnOrganise(renaming);
+        m_app.settings().setOrganiseRenameInPlace(renameOnly);
+    }
     if (renaming) {
         // The places first; then on, unless cancelled.
-        findPlacesThen(named, [this, plan] { executePlan(plan, true); });
+        findPlacesThen(named, [this, plan, renameOnly] { executePlan(plan, true, renameOnly); });
         return;
     }
     executePlan(plan, false);
@@ -2567,7 +2635,7 @@ void OrganiseView::findPlacesThen(const QList<int> &rows, std::function<void()> 
     (*step)(0);
 }
 
-void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename)
+void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename, bool inPlace)
 {
     // Best shots first: rated 5 stars, so the library takes them as Best
     // Shots. A new sidecar goes with its photo.
@@ -2619,7 +2687,8 @@ void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename)
     for (const organise::FolderMove &f : plan.folders) {
         for (int i : f.items) {
             const organise::Item &it = m_session.items().at(i);
-            organise::ShotMove move{it.baseName, it.files, f.folderName, {}};
+            // Renaming only: into no folder, i.e. where it is.
+            organise::ShotMove move{it.baseName, it.files, inPlace ? QString() : f.folderName, {}};
             if (sidecars.contains(i))
                 move.files << sidecars.value(i);
             if (rename) {
@@ -2627,25 +2696,35 @@ void OrganiseView::executePlan(const organise::OrganisePlan &plan, bool rename)
                 if (it.hasGps() && m_model->unavailable.contains(placeKey(it)))
                     ++placeless;
                 move.newBaseName = organise::OrganiseSession::renamedBase(f.folderName, place, it.taken);
+                // Renaming where it is, under the name it has already: nothing to do.
+                if (inPlace && move.newBaseName == it.baseName)
+                    continue;
             }
             moves.append(move);
         }
     }
-    for (int i : plan.rejects) {
+    // Rejects go to Rejects -- unless only renaming, when nothing moves.
+    for (int i : inPlace ? QList<int>{} : plan.rejects) {
         const organise::Item &it = m_session.items().at(i);
         moves.append({it.baseName, it.files, QLatin1String(organise::OrganiseSession::kRejectsFolder)});
     }
+    // Renamed where they are, they'd come back unnamed: their names, rejects
+    // and the rest go with them to their new file names.
+    QHash<QString, QString> renamedTo;
     const QString folder = m_session.folder();
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const organise::OrganiseMover::Result result = organise::OrganiseMover::execute(folder, moves);
+    const organise::OrganiseMover::Result result = organise::OrganiseMover::execute(folder, moves, &renamedTo);
     QApplication::restoreOverrideCursor();
+    if (inPlace)
+        m_session.carryProgressTo(renamedTo);
     if (!result.failures.isEmpty())
         QMessageBox::warning(this, tr("Organise into Folders"),
                              tr("%Ln photo(s) couldn't be moved and were left where they were:\n\n%1",
                                 nullptr, int(result.failures.size()))
                                  .arg(result.failures.mid(0, 10).join(QLatin1Char('\n'))));
     emit statusMessage(
-        (rename ? tr("Organised and renamed %Ln photo(s).", nullptr, result.moved)
+        (inPlace  ? tr("Renamed %Ln photo(s) where they are.", nullptr, result.moved)
+         : rename ? tr("Organised and renamed %Ln photo(s).", nullptr, result.moved)
                 : tr("Organised %Ln photo(s) into folders.", nullptr, result.moved))
             + (placeless > 0 ? QStringLiteral(" ")
                                    + tr("%Ln couldn't have their place found, so their names have "
@@ -2669,7 +2748,9 @@ void OrganiseView::undoLast()
     QString list = QStringLiteral("<ul>");
     for (const auto &f : preview.folders)
         list += QStringLiteral("<li><b>%1</b> — %2</li>")
-                    .arg(f.name.toHtmlEscaped(), tr("%Ln photo(s)", nullptr, f.shots));
+                    .arg(f.name.isEmpty() || f.name == QLatin1String(".") ? tr("Renamed in this folder")
+                                                                         : f.name.toHtmlEscaped(),
+                         tr("%Ln photo(s)", nullptr, f.shots));
     list += QStringLiteral("</ul>");
     QString text = tr("<p>This undoes the whole <b>Organise into Folders</b> of %1 — every folder "
                       "it made, not just the last taxon named:</p>%2"

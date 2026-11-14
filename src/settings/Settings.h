@@ -307,6 +307,9 @@ public:
     void setInatUploadGeoprivacy(const QString &geoprivacy);
     // Whether Organise into Folders also renames the photos.
     bool organiseRenameOnOrganise() const;
+    // Organise into Folders' "Rename only": rename where they are, no folders.
+    bool organiseRenameInPlace() const;
+    void setOrganiseRenameInPlace(bool on);
     void setOrganiseRenameOnOrganise(bool on);
 
     // The Getting Started guide: open it at start-up while the basics aren't

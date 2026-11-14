@@ -118,7 +118,8 @@ private:
     // Organising: the places the renamed photos still need, then the moves.
     QSet<QString> placesToFind(const QList<int> &rows) const;
     void findPlacesThen(const QList<int> &rows, std::function<void()> then);
-    void executePlan(const organise::OrganisePlan &plan, bool rename);
+    // `inPlace`: rename the named photos where they are, moving nothing.
+    void executePlan(const organise::OrganisePlan &plan, bool rename, bool inPlace = false);
     void updatePreview();
     // "Photo 12 of 340" above the preview (above the grid in grid mode).
     void updatePosition();
