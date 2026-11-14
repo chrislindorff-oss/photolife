@@ -324,8 +324,11 @@ QString CaptureListModel::todoClause(int flags)
         any << QStringLiteral("(match_status IS NULL OR match_status = 'pending' OR matched_id IS NULL) "
                               "AND (match_status IS NULL OR match_status <> 'rejected')");
     if (flags & TodoToUpload)
+        // Not linked to an observation, and not marked as on iNaturalist
+        // (Already on iNaturalist?, or by hand).
         any << named + QStringLiteral(" AND latitude IS NOT NULL AND longitude IS NOT NULL "
-                                      "AND inat_observation_id IS NULL");
+                                      "AND inat_observation_id IS NULL AND NOT EXISTS (SELECT 1 FROM "
+                                      "capture_inat_status s WHERE s.capture_id = id AND s.status = 'on_inat')");
     if (flags & TodoNoLocation)
         any << QStringLiteral("latitude IS NULL OR longitude IS NULL");
     if (flags & TodoNotInTree)

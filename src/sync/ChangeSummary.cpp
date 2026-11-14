@@ -160,6 +160,13 @@ const Spec kSpecs[] = {
      "JOIN main.taxon t ON t.id = m.taxon_id WHERE m.id IN ({ADDED})",
      nullptr, nullptr, "x.source IN ('APC', 'iNaturalist')"},
     {"capture_camera", "cameraDetails", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Camera details (from EXIF)"), true},
+    {"capture_inat_status", "inatStatus",
+     QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Photos marked on iNaturalist (or not)"), false,
+     "SELECT CASE m.status WHEN 'on_inat' THEN 'on iNaturalist' WHEN 'not_on_inat' THEN 'not on iNaturalist' "
+     "  ELSE 'maybe on iNaturalist' END || ' — ' || " PHOTO("c") " "
+     "FROM main.capture_inat_status m JOIN main.capture c ON c.id = m.capture_id WHERE m.capture_id IN ({ADDED})"},
+    {"inat_my_observation", "inatObservations",
+     QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Your iNaturalist observations (details, for checks)"), true},
     {"rendition", "photoFiles", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Photo files (scan details)"), true},
     {"taxon", "taxa", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Taxa from iNaturalist"), true,
      "SELECT m.name || ' (' || m.rank || ')' FROM main.taxon m WHERE m.id IN ({ADDED})",

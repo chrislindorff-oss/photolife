@@ -8,6 +8,7 @@
 #include "inat/InatDuplicateCheck.h"
 #include "inat/ObservationUploader.h"
 #include "taxonomy/TaxonomyStore.h"
+#include "inat/InatPresence.h"
 #include "ui/UploadPhotoPicker.h"
 
 using namespace pl;
@@ -102,6 +103,12 @@ void TestUploadPhotoPicker::filtersNarrowTheList()
     QCOMPARE(found(any), (QList<int>{2, 3, 1, 5}));   // newest first, undated last; 4 has no file
 
     UploadPhotoPicker::Filter fresh;
+    QCOMPARE(found(fresh), (QList<int>{2, 1, 5}));
+    // Marked as on iNaturalist (Already on iNaturalist?, or by hand): left out too.
+    QVERIFY(inat::PresenceStore::markOnInat(m_db->connectionName(), {2}, 0, inat::PresenceConfidence::None, {},
+                                            QStringLiteral("user")));
+    QCOMPARE(found(fresh), (QList<int>{1, 5}));
+    QVERIFY(inat::PresenceStore::clearStatus(m_db->connectionName(), {2}));
     QCOMPARE(found(fresh), (QList<int>{2, 1, 5}));
 
     UploadPhotoPicker::Filter dates;

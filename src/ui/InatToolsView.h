@@ -17,6 +17,7 @@ class InatComparePage;
 class InatDownloadPage;
 class InatUploadPage;
 class InatCheckIdsPage;
+class InatPresencePage;
 
 // The iNaturalist account every iNaturalist tool acts as: a username and an
 // optional personal API token (from inaturalist.org/users/api_token), kept in
@@ -65,6 +66,7 @@ public:
     InatComparePage *comparePage() const { return m_comparePage; }
     InatUploadPage *uploadPage() const { return m_uploadPage; }
     InatCheckIdsPage *checkIdsPage() const { return m_checkIdsPage; }
+    InatPresencePage *presencePage() const { return m_presencePage; }
     void showDownloadPage();
     void showComparePage();
     void showUploadPage();
@@ -81,6 +83,7 @@ private:
     InatComparePage *m_comparePage = nullptr;
     InatUploadPage *m_uploadPage = nullptr;
     InatCheckIdsPage *m_checkIdsPage = nullptr;
+    InatPresencePage *m_presencePage = nullptr;
 };
 
 } // namespace pl

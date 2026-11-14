@@ -133,7 +133,8 @@ QList<UploadPhotoPicker::Found> UploadPhotoPicker::find(const QString &connectio
         binds << containing(filter.species.trimmed()) << containing(filter.species.trimmed());
     }
     if (filter.notOnInat)
-        clauses << QStringLiteral("c.inat_observation_id IS NULL");
+        clauses << QStringLiteral("c.inat_observation_id IS NULL AND NOT EXISTS (SELECT 1 FROM capture_inat_status s "
+                                  "WHERE s.capture_id = c.id AND s.status = 'on_inat')");
 
     QSqlQuery q(QSqlDatabase::database(connectionName, false));
     q.setForwardOnly(true);

@@ -42,6 +42,8 @@ qt_add_library(photolife_core STATIC
     inat/LibraryPresence.h inat/LibraryPresence.cpp
     inat/PhotoIdentifier.h  inat/PhotoIdentifier.cpp
     inat/RunSuggester.h     inat/RunSuggester.cpp
+    inat/InatPresence.h     inat/InatPresence.cpp
+    inat/PresenceCheck.h    inat/PresenceCheck.cpp
     inat/DuplicateFinder.h  inat/DuplicateFinder.cpp
     inat/InatDuplicateCheck.h  inat/InatDuplicateCheck.cpp
     inat/ObservationGrouper.h  inat/ObservationGrouper.cpp
@@ -176,6 +178,7 @@ qt_add_library(photolife_core STATIC
     ui/ReviewPane.h         ui/ReviewPane.cpp
     ui/TodoFilterBar.h      ui/TodoFilterBar.cpp
     ui/StackSizing.h        ui/StackSizing.cpp
+    ui/InatPresencePage.h   ui/InatPresencePage.cpp
     ui/FlowLayout.h         ui/FlowLayout.cpp
     ui/ServerBar.h          ui/ServerBar.cpp
     ui/ServerDialogs.h      ui/ServerDialogs.cpp
@@ -323,6 +326,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/022_project_taxon_kept.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/023_taxon_seen.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/024_capture_camera.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/025_inat_presence.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -347,6 +351,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/022_project_taxon_kept.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/023_taxon_seen.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/024_capture_camera.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/025_inat_presence.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

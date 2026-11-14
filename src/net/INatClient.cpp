@@ -578,7 +578,7 @@ void INatClient::fetchObservationsById(const QList<qint64> &observationIds,
 
 void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 taxonId,
                                       qint64 idAbove,
-                                      std::function<void(Outcome<ObservationPage>)> done)
+                                      std::function<void(Outcome<ObservationPage>)> done, bool photosOnly)
 {
     QUrl url(m_baseUrl + QStringLiteral("/observations"));
     QUrlQuery q;
@@ -587,7 +587,8 @@ void INatClient::fetchAllObservations(const QString &userLogin, qint64 placeId, 
         q.addQueryItem(QStringLiteral("place_id"), QString::number(placeId));
     if (taxonId > 0)
         q.addQueryItem(QStringLiteral("taxon_id"), QString::number(taxonId));
-    q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
+    if (photosOnly)
+        q.addQueryItem(QStringLiteral("photos"), QStringLiteral("true"));
     // Keyset paging (id_above, ascending ids) rather than page=N: the API
     // refuses page-number paging past 10,000 results, which a whole
     // observation history can exceed.
@@ -607,6 +608,7 @@ void INatClient::getObservationPage(const QUrl &url,
         url,
         [done = std::move(done)](HttpResponse resp) {
             Outcome<ObservationPage> out;
+            out.status = resp.status;   // 401: the token has expired
             if (!resp.error.isEmpty()) {
                 out.error = resp.error;
                 done(out);

@@ -53,9 +53,10 @@ QString TestCatalogueBackup::olderCatalogue(QTemporaryDir &dir, int *version)
             return {};
         QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
         q.exec(QStringLiteral("INSERT INTO folder (path, name, depth) VALUES ('/photos', 'photos', 0)"));
-        // Undo the latest migration (024: capture_camera).
-        q.exec(QStringLiteral("DROP TABLE capture_camera"));
-        q.exec(QStringLiteral("DELETE FROM schema_migrations WHERE version = 24"));
+        // Undo the latest migration (025: the iNaturalist presence tables).
+        q.exec(QStringLiteral("DROP TABLE capture_inat_status"));
+        q.exec(QStringLiteral("DROP TABLE inat_my_observation"));
+        q.exec(QStringLiteral("DELETE FROM schema_migrations WHERE version = 25"));
     }
     *version = versionOf(path);
     return path;

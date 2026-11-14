@@ -24,7 +24,9 @@ TodoFilterBar::TodoFilterBar(bool withNotInTree, QWidget *parent)
                               tr("No species yet: never matched, or waiting in Review Unmatched."),
                               CaptureListModel::TodoUnnamed));
     layout->addWidget(addChip(tr("To upload"),
-                              tr("Named and with a location, but not on iNaturalist yet: ready to upload."),
+                              tr("Named and with a location, but not known to be on iNaturalist. Photos you posted from the "
+                                 "iNaturalist app or website count until checked: iNaturalist Tools → Already on "
+                                 "iNaturalist? finds them, or right-click → Mark as On iNaturalist."),
                               CaptureListModel::TodoToUpload));
     layout->addWidget(addChip(tr("No location"),
                               tr("No coordinates, so they can't be mapped or uploaded yet. Set Location "

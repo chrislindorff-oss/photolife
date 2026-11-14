@@ -7,6 +7,7 @@
 #include "ui/InatDownloadPage.h"
 #include "ui/InatTokenGetter.h"
 #include "ui/InatCheckIdsPage.h"
+#include "ui/InatPresencePage.h"
 #include "ui/InatUploadPage.h"
 #include "ui/Theme.h"
 
@@ -107,6 +108,8 @@ InatToolsView::InatToolsView(Application &app, QWidget *parent)
     m_tabs->addTab(m_uploadPage, tr("Upload Observations"));
     m_checkIdsPage = new InatCheckIdsPage(app, *m_account, this);
     m_tabs->addTab(m_checkIdsPage, tr("Check Identifications"));
+    m_presencePage = new InatPresencePage(app, *m_account, this);
+    m_tabs->addTab(m_presencePage, tr("Already on iNaturalist?"));
 
     // In a scroll area, so the view never asks for more width than the main
     // window has beside its docked panels: Qt 6.4 crashes laying out the

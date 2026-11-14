@@ -92,6 +92,8 @@
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/TodoFilterBar.h"
+#include "ui/InatPresencePage.h"
+#include "inat/InatPresence.h"
 #include "ui/StackSizing.h"
 #include "ui/FlowLayout.h"
 #include "settings/SecretStore.h"
@@ -131,6 +133,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QItemSelectionModel>
 #include <QKeySequence>
@@ -3830,6 +3833,66 @@ QListView *MainWindow::makeCaptureGrid(QAbstractItemModel *model)
             m_inatView->showUploadPage();
             m_inatView->uploadPage()->addCaptures(ids);
         });
+        // Already on iNaturalist (posted from the app or website): out of
+        // To upload, remembered.
+        QMenu *onInat = menu.addMenu(tr("Already on iNaturalist"));
+        onInat->setToolTipsVisible(true);
+        const auto selectedIds = [grid] {
+            QList<int> ids;
+            for (const QModelIndex &s : grid->selectionModel()->selectedIndexes())
+                ids << s.data(model::CaptureListModel::IdRole).toInt();
+            return ids;
+        };
+        const auto afterMarking = [this] {
+            m_model->reload();
+            m_taxonModel->reload();
+            m_inatView->presencePage()->reload();
+        };
+        QAction *markOn = onInat->addAction(tr("Mark as On iNaturalist…"));
+        markOn->setToolTip(tr("They're on your iNaturalist account already: they leave To upload. Give the "
+                              "observation's number or link to link them to it."));
+        connect(markOn, &QAction::triggered, this, [this, selectedIds, afterMarking] {
+            if (!ensureCanEdit())
+                return;
+            const QList<int> ids = selectedIds();
+            bool ok = false;
+            const QString text = QInputDialog::getText(
+                this, tr("Mark as On iNaturalist"),
+                tr("%n photo(s) are on iNaturalist already. The observation's number or link (optional):",
+                   nullptr, int(ids.size())),
+                QLineEdit::Normal, QString(), &ok);
+            if (!ok)
+                return;
+            static const QRegularExpression number(QStringLiteral("(\\d{3,})\\s*/?\\s*$"));
+            const QRegularExpressionMatch m = number.match(text.trimmed());
+            const qint64 observation = m.hasMatch() ? m.captured(1).toLongLong() : 0;
+            if (!text.trimmed().isEmpty() && observation <= 0) {
+                QMessageBox::warning(this, tr("Mark as On iNaturalist"),
+                                     tr("\u201c%1\u201d isn't an observation number or link.").arg(text.trimmed()));
+                return;
+            }
+            inat::PresenceStore::markOnInat(m_app.database().connectionName(), ids, observation,
+                                            inat::PresenceConfidence::None, QString(), QStringLiteral("user"));
+            afterMarking();
+            statusBar()->showMessage(tr("%n photo(s) marked as on iNaturalist.", nullptr, int(ids.size())), 6000);
+        });
+        QAction *markNot = onInat->addAction(tr("Mark as Not on iNaturalist"));
+        markNot->setToolTip(tr("They aren't there: Already on iNaturalist? won't suggest them again."));
+        connect(markNot, &QAction::triggered, this, [this, selectedIds, afterMarking] {
+            if (!ensureCanEdit())
+                return;
+            inat::PresenceStore::markNotOnInat(m_app.database().connectionName(), selectedIds());
+            afterMarking();
+        });
+        QAction *clearMark = onInat->addAction(tr("Clear iNaturalist Mark"));
+        clearMark->setToolTip(tr("Forget what was decided about them (a photo uploaded from PhotoLife keeps its "
+                                 "observation)."));
+        connect(clearMark, &QAction::triggered, this, [this, selectedIds, afterMarking] {
+            if (!ensureCanEdit())
+                return;
+            inat::PresenceStore::clearStatus(m_app.database().connectionName(), selectedIds());
+            afterMarking();
+        });
         QAction *locate = menu.addAction(tr("Set Location on Map…"));
         locate->setToolTip(tr("Put a pin on a map where these photos were taken, or move it: written "
                               "into a JPEG, an .xmp sidecar beside a RAW, and the catalogue."));
@@ -5021,6 +5084,12 @@ void MainWindow::buildCentralWidget()
 
     m_inatView = new InatToolsView(m_app, this);
     m_inatView->uploadPage()->setEditGuard([this] { return ensureCanEdit(); });
+    m_inatView->presencePage()->setEditGuard([this] { return ensureCanEdit(); });
+    // Photos marked on iNaturalist (or not): the To upload lists follow.
+    connect(m_inatView->presencePage(), &InatPresencePage::changed, this, [this] {
+        m_model->reload();
+        m_taxonModel->reload();
+    });
     connect(m_inatView->checkIdsPage(), &InatCheckIdsPage::useInaturalistName, this,
             [this](const QList<int> &captureIds, const taxonomy::Observation &observation) {
                 if (!ensureCanEdit())

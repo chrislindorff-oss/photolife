@@ -244,9 +244,10 @@ public:
     // continue. An empty page means there are no more. `taxonId` > 0 limits
     // it to that taxon and everything beneath it (iNat's taxon_id matches
     // descendants); 0 = every taxon.
+    // `photosOnly` false: those without photos too.
     void fetchAllObservations(const QString &userLogin, qint64 placeId, qint64 taxonId,
                               qint64 idAbove,
-                              std::function<void(Outcome<ObservationPage>)> done);
+                              std::function<void(Outcome<ObservationPage>)> done, bool photosOnly = true);
 
 private:
     void getSpeciesCountsPage(const QUrl &url,
