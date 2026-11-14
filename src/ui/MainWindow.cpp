@@ -443,6 +443,7 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
             [this](match::MatchEngine::Stats s) {
                 endMatchProgress();   // before any Renamed Photos question
                 m_matchAction->setEnabled(true);
+                QTimer::singleShot(0, this, &MainWindow::updateUnmatchedHint);
                 m_model->reload();
                 m_taxonModel->reload();
                 m_bestShotModel->reload();
@@ -5057,6 +5058,60 @@ void MainWindow::buildCentralWidget()
 
     m_statusLabel = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusLabel);
+
+    // Photos the folder watcher brought in that haven't been matched yet.
+    m_unmatchedHint = new QPushButton(this);
+    m_unmatchedHint->setFlat(true);
+    m_unmatchedHint->setCursor(Qt::PointingHandCursor);
+    m_unmatchedHint->setToolTip(tr("Photos new to the library (copied in, say, with a file manager) haven't been "
+                                   "matched to their species yet. Match Now matches just those."));
+    m_unmatchedHint->hide();
+    connect(m_unmatchedHint, &QPushButton::clicked, this, &MainWindow::matchNewPhotos);
+    statusBar()->addPermanentWidget(m_unmatchedHint);
+    QTimer::singleShot(0, this, &MainWindow::updateUnmatchedHint);   // any left from last time
+}
+
+QList<qint64> MainWindow::neverMatchedCaptures() const
+{
+    QList<qint64> ids;
+    if (!m_app.database().isOpen())
+        return ids;
+    QSqlQuery q(QSqlDatabase::database(m_app.database().connectionName(), false));
+    q.setForwardOnly(true);
+    if (q.exec(QStringLiteral("SELECT c.id FROM capture c "
+                              "WHERE NOT EXISTS (SELECT 1 FROM capture_match m WHERE m.capture_id = c.id)")))
+        while (q.next())
+            ids << q.value(0).toLongLong();
+    return ids;
+}
+
+void MainWindow::updateUnmatchedHint()
+{
+    if (!m_unmatchedHint)
+        return;
+    // Not while matching (or about to): the run takes them.
+    const int n = m_app.matchService().isRunning() || m_matchAfterScanPending || !m_app.catalogueEditable()
+                      ? 0
+                      : int(neverMatchedCaptures().size());
+    m_unmatchedHint->setText(tr("%n new photo(s) not matched yet — Match Now", nullptr, n));
+    m_unmatchedHint->setVisible(n > 0);
+}
+
+void MainWindow::matchNewPhotos()
+{
+    if (!ensureCanEdit() || m_app.matchService().isRunning() || m_matchAfterScanPending)
+        return;
+    const QList<qint64> ids = neverMatchedCaptures();
+    if (ids.isEmpty()) {
+        updateUnmatchedHint();
+        return;
+    }
+    m_unmatchedHint->hide();
+    beginMatchProgress(tr("Matching the New Photos"));
+    updateTaskProgress(tr("Matching the new photos…"), 0, 0);
+    m_groupMatchName.clear();
+    m_matchingDownload = false;
+    m_app.matchService().startForCaptures(ids);
 }
 
 QWidget *MainWindow::buildBrowsePage()
@@ -6764,6 +6819,8 @@ void MainWindow::onScanFinished(const scan::ScanSummary &summary)
         // finished signal has been fully delivered.
         QTimer::singleShot(0, this, &MainWindow::runQueuedScan);
     }
+    // After whatever runs next on this scan (Add Folder's match) has started.
+    QTimer::singleShot(0, this, &MainWindow::updateUnmatchedHint);
 }
 
 void MainWindow::restoreLayout()
@@ -8310,6 +8367,7 @@ void MainWindow::applyEditability()
     const bool editable = m_app.catalogueEditable();
     m_reviewPane->setReadOnly(!editable);
     updateSyncStatus();
+    updateUnmatchedHint();
 }
 
 void MainWindow::updateSyncStatus()

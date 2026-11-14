@@ -171,6 +171,11 @@ private:
     // Review → Needs Identifying → Suggest Names: iNaturalist's suggestion
     // for each run of shots becomes the photos' guess.
     void suggestNames(const QList<qint64> &captureIds);
+    // The status bar's "N new photos not matched yet — Match Now": photos the
+    // folder watcher brought in (never matched), matched on a click.
+    QList<qint64> neverMatchedCaptures() const;
+    void updateUnmatchedHint();
+    void matchNewPhotos();
     // The map's area (Shift-drag, or a saved place): the map and Photos of
     // Tree Selection narrow to it. nullopt clears it.
     void setMapArea(std::optional<geo::GeoBox> area, const QString &name);
@@ -480,7 +485,8 @@ private:
     QWidget *m_libraryPage = nullptr;   // the To do chips over m_photoStack
     TodoFilterBar *m_libraryTodo = nullptr;
     TodoFilterBar *m_treeTodo = nullptr;   // over Photos of Tree Selection
-    QString m_mapAreaName;                 // the saved place the map's area is, if any
+    QString m_mapAreaName;
+    QPushButton *m_unmatchedHint = nullptr;                 // the saved place the map's area is, if any
     QStackedWidget *m_centralStack = nullptr;
     QMenu *m_viewMenu = nullptr;
     QActionGroup *m_viewModeGroup = nullptr;
