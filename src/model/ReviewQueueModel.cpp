@@ -82,6 +82,7 @@ QVariant ReviewQueueModel::data(const QModelIndex &index, int role) const
             .join(QLatin1Char(' '));
     case HasCandidateRole:   return row.guessInatId > 0;
     case CapturedOnRole:     return row.capturedOn;
+    case SuggestedRole:      return row.suggested;
     default:                 return {};
     }
 }
@@ -101,7 +102,7 @@ void ReviewQueueModel::reload()
             "     ORDER BY (r.kind='raw'), r.id LIMIT 1), "
             "  (SELECT r.content_hash FROM rendition r WHERE r.capture_id = c.id "
             "     ORDER BY (r.kind='raw'), r.id LIMIT 1), "
-            "  m.confidence, m.note, m.qualifier, t.name, t.inat_id, c.captured_on "
+            "  m.confidence, m.note, m.qualifier, t.name, t.inat_id, c.captured_on, m.decided_by "
             "FROM capture c JOIN folder f ON f.id = c.folder_id "
             "LEFT JOIN capture_match m ON m.id = ("
             "   SELECT id FROM capture_match WHERE capture_id = c.id "
@@ -125,6 +126,7 @@ void ReviewQueueModel::reload()
             row.guessName = q.value(10).toString();
             row.guessInatId = q.value(11).toLongLong();
             row.capturedOn = QDate::fromString(q.value(12).toString().left(10), Qt::ISODate);
+            row.suggested = q.value(13).toString() == QLatin1String("vision");
             if (!row.previewHash.isEmpty())
                 m_rowsByHash[row.previewHash].append(int(m_rows.size()));
             m_rows.append(std::move(row));

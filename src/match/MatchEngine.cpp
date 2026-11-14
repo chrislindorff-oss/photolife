@@ -544,6 +544,21 @@ MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<
             "DELETE FROM capture_match WHERE capture_id = ? AND decided_by = 'engine'"));
         del.addBindValue(qlonglong(id));
         del.exec();
+        // An iNaturalist suggestion (Suggest Names) stays as the guess unless
+        // the name now gives the answer: a confident match replaces it, and
+        // the same taxon found by name takes its place.
+        if (outcome.status == QLatin1String("auto") || outcome.taxonId > 0) {
+            const bool confident = outcome.status == QLatin1String("auto");
+            QSqlQuery vision(db);
+            vision.prepare(confident ? QStringLiteral("DELETE FROM capture_match WHERE capture_id = ? "
+                                                      "AND decided_by = 'vision'")
+                                     : QStringLiteral("DELETE FROM capture_match WHERE capture_id = ? "
+                                                      "AND decided_by = 'vision' AND taxon_id = ?"));
+            vision.addBindValue(qlonglong(id));
+            if (!confident)
+                vision.addBindValue(qlonglong(outcome.taxonId));
+            vision.exec();
+        }
 
         QSqlQuery ins(db);
         ins.prepare(QStringLiteral(

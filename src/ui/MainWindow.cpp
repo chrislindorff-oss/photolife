@@ -91,6 +91,8 @@
 #include "ui/ReferencePhotoDialog.h"
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
+#include "inat/RunSuggester.h"
+#include "ui/InatTokenGetter.h"
 #include "ui/ServerDialogs.h"
 #include "ui/StatisticsPage.h"
 #include "ui/StorageDialog.h"
@@ -4884,6 +4886,7 @@ void MainWindow::buildCentralWidget()
     m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), m_app.inat(),
                                   m_app.photoCache(), this);
     connect(m_reviewPane, &ReviewPane::inatMatchRequested, this, &MainWindow::matchReviewPhotosWithInat);
+    connect(m_reviewPane, &ReviewPane::suggestNamesRequested, this, &MainWindow::suggestNames);
     connect(m_reviewPane, &ReviewPane::organiseFolderRequested, this, [this](const QString &folder) {
         if (!QFileInfo(folder).isDir()) {
             statusBar()->showMessage(tr("\"%1\" isn't there any more.").arg(QDir::toNativeSeparators(folder)), 8000);
@@ -6292,6 +6295,70 @@ void MainWindow::updateEmptyState()
                                               : filtered ? tr(" (filtered)") : QString())
                                : QString());
     scheduleGuideRefresh();
+}
+
+void MainWindow::suggestNames(const QList<qint64> &captureIds)
+{
+    if (captureIds.isEmpty() || !ensureCanEdit())
+        return;
+    if (m_suggester && m_suggester->isRunning())
+        return;
+    const QString token = m_app.settings().inatApiToken();
+    if (!InatTokenGetter::isUsable(token)) {
+        QMessageBox box(QMessageBox::Information, tr("Suggest Names"),
+                        token.isEmpty() ? tr("Suggesting names needs your iNaturalist token. Get one — it lasts a day.")
+                                        : tr("Your iNaturalist token has expired. Get a fresh one, then Suggest "
+                                             "Names again."),
+                        QMessageBox::Cancel, this);
+        QPushButton *get = box.addButton(tr("Get Token…"), QMessageBox::AcceptRole);
+        box.exec();
+        if (box.clickedButton() == get)
+            InatTokenGetter::start(m_app);
+        return;
+    }
+    m_app.inat().setAccessToken(token);
+    if (!m_suggester) {
+        m_suggester = new inat::RunSuggester(m_app.inat(), m_app.photoIdentifier(), m_app.database().connectionName(),
+                                             this);
+        connect(m_suggester, &inat::RunSuggester::progress, this, [this](int done, int total) {
+            updateTaskProgress(tr("Asking iNaturalist about run %1 of %2…").arg(qMin(done + 1, total)).arg(total),
+                               done, total);
+        });
+        connect(m_suggester, &inat::RunSuggester::finished, this, [this](const inat::RunSuggester::Result &r) {
+            endTaskProgress();
+            m_reviewPane->setSuggesting(false);
+            m_reviewPane->reload();
+            updateReviewTabText();
+            QString text = r.photos > 0
+                               ? tr("%n photo(s) have a suggested name and are now under To Confirm.", nullptr, r.photos)
+                               : tr("No names were suggested.");
+            if (r.noSuggestion > 0)
+                text += QLatin1Char(' ') + tr("iNaturalist had no suggestion for %n run(s).", nullptr, r.noSuggestion);
+            if (r.failed > 0)
+                text += QLatin1Char(' ') + tr("%n run(s) couldn't be identified: %1", nullptr, r.failed).arg(r.error);
+            if (r.status == 401) {
+                QMessageBox box(QMessageBox::Information, tr("Suggest Names"),
+                                text + QStringLiteral("\n\n")
+                                    + tr("iNaturalist didn't accept the token — it has probably expired. Get a "
+                                         "fresh one, then Suggest Names again for the rest."),
+                                QMessageBox::Close, this);
+                QPushButton *get = box.addButton(tr("Get Token…"), QMessageBox::AcceptRole);
+                box.exec();
+                if (box.clickedButton() == get)
+                    InatTokenGetter::start(m_app);
+                return;
+            }
+            if (r.status == 403 || r.status == 429)
+                text += QLatin1Char(' ') + tr("iNaturalist refused or is busy (it may be limiting requests); "
+                                              "try the rest later.");
+            else if (r.cancelled)
+                text += QLatin1Char(' ') + tr("Stopped.");
+            statusBar()->showMessage(text, 15000);
+        });
+    }
+    m_reviewPane->setSuggesting(true);
+    beginTaskProgress(tr("Suggest Names"), [this] { m_suggester->cancel(); });
+    m_suggester->start(captureIds);
 }
 
 void MainWindow::addWatchedFolder()

@@ -157,6 +157,20 @@ bool MatchReviewer::confirm(qint64 captureId, qint64 taxonInatId, bool learnAlia
     if (targetInat <= 0)
         return fail(QStringLiteral("no taxon to confirm — reassign it first"));
 
+    // Confirming iNaturalist's suggestion (Suggest Names) says nothing about
+    // the photo's name -- often just its camera's, or its unsorted folder's --
+    // so that isn't learned as another name for the taxon.
+    if (learnAliasToo) {
+        QSqlQuery vision(db);
+        vision.prepare(QStringLiteral(
+            "SELECT 1 FROM capture_match m JOIN taxon t ON t.id = m.taxon_id "
+            "WHERE m.capture_id = ? AND m.decided_by = 'vision' AND t.inat_id = ?"));
+        vision.addBindValue(qlonglong(captureId));
+        vision.addBindValue(qlonglong(targetInat));
+        if (vision.exec() && vision.next())
+            learnAliasToo = false;
+    }
+
     if (!writeDecision(captureId, targetInat, QStringLiteral("confirmed"), rank, {}))
         return false;
 

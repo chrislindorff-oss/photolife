@@ -39,6 +39,7 @@ qt_add_library(photolife_core STATIC
     inat/InatObservationFetcher.h inat/InatObservationFetcher.cpp
     inat/LibraryPresence.h inat/LibraryPresence.cpp
     inat/PhotoIdentifier.h  inat/PhotoIdentifier.cpp
+    inat/RunSuggester.h     inat/RunSuggester.cpp
     inat/DuplicateFinder.h  inat/DuplicateFinder.cpp
     inat/InatDuplicateCheck.h  inat/InatDuplicateCheck.cpp
     inat/ObservationGrouper.h  inat/ObservationGrouper.cpp

@@ -85,6 +85,9 @@ public:
     using EnsureKnown = std::function<void(const pl::taxonomy::Taxon &, std::function<void()>)>;
     void setIdentify(std::function<IdentifyPanel *()> makePanel, EnsureKnown ensureKnown);
 
+    // While Suggest Names runs, its button is off.
+    void setSuggesting(bool running);
+
 signals:
     void queueChanged();   // a decision was applied; refresh coverage / other views
     void editRequested();
@@ -94,6 +97,8 @@ signals:
                             const QStringList &nameTexts);
     // "Open Folder in Organise": name the photos of `folder` there.
     void organiseFolderRequested(const QString &folder);
+    // "Suggest Names": ask iNaturalist about these photos, a run at a time.
+    void suggestNamesRequested(const QList<qint64> &captureIds);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -198,6 +203,8 @@ private:
     QPushButton *m_confirmButton;
     QPushButton *m_rejectButton = nullptr;
     QPushButton *m_organiseButton = nullptr;
+    QPushButton *m_suggestButton = nullptr;
+    bool m_suggesting = false;
     QLineEdit *m_search;
     QLabel *m_bulkLabel;
     QPushButton *m_bulkButton;

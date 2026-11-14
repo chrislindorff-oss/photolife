@@ -14,6 +14,8 @@
 #include "ui/Theme.h"
 
 #include <QFileInfo>
+
+#include <algorithm>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QButtonGroup>
@@ -301,10 +303,21 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     m_organiseButton->setToolTip(tr("Name this folder's photos in Organise, a run of shots at a "
                                     "time; organising them into species folders matches them."));
     connect(m_organiseButton, &QPushButton::clicked, this, &ReviewPane::organiseCurrentFolder);
+    m_suggestButton = new QPushButton(tr("Suggest Names"), this);
+    m_suggestButton->setToolTip(tr("Ask iNaturalist's computer vision about the selected photos: "
+                                   "one photo per run of shots (taken within 30 seconds of each "
+                                   "other). Its top suggestion becomes their guess, and they move "
+                                   "to To Confirm for you to check. Nothing is posted."));
+    connect(m_suggestButton, &QPushButton::clicked, this, [this] {
+        const QList<qint64> ids = selectedCaptureIds();
+        if (!ids.isEmpty() && editAllowed())
+            emit suggestNamesRequested(ids);
+    });
     auto *bulk = new QHBoxLayout;
     bulk->addWidget(m_bulkLabel);
     bulk->addStretch(1);
     bulk->addWidget(m_recursiveCheck);
+    bulk->addWidget(m_suggestButton);
     bulk->addWidget(m_organiseButton);
     bulk->addWidget(m_ignoreFolderButton);
     bulk->addWidget(m_bulkButton);
@@ -515,6 +528,13 @@ void ReviewPane::groupMenu(const QModelIndex &group, const QPoint &globalPos)
         });
     }
     menu.addAction(tr("Select All %1").arg(ids.size()), this, [this, group] { selectGroup(group); });
+    if (m_queueGroup->groupBy() == ReviewQueueGroupModel::GroupBy::FolderAndDate) {
+        QAction *suggest = menu.addAction(tr("Suggest Names for These %1").arg(ids.size()), this, [this, ids] {
+            if (editAllowed())
+                emit suggestNamesRequested(ids);
+        });
+        suggest->setEnabled(!m_suggesting);
+    }
     menu.addSeparator();
     const QString folder = members.first().data(ReviewQueueModel::FolderPathRole).toString();
     menu.addAction(tr("Open Folder in Organise"), this, [this, folder] { emit organiseFolderRequested(folder); });
@@ -550,6 +570,16 @@ void ReviewPane::updateDecisionButtons()
     const int n = int(selectedCaptureIds().size());
     m_confirmButton->setText(n > 1 ? tr("&Confirm %1").arg(n) : tr("&Confirm"));
     m_rejectButton->setText(n > 1 ? tr("&Reject %1").arg(n) : tr("&Reject"));
+    const bool identifying = m_queueProxy->bucket() == ReviewQueueFilterProxy::Bucket::NoCandidate;
+    m_suggestButton->setVisible(identifying);
+    m_suggestButton->setText(n > 1 ? tr("Suggest Names for %1").arg(n) : tr("Suggest Name"));
+    m_suggestButton->setEnabled(n > 0 && !m_suggesting);
+}
+
+void ReviewPane::setSuggesting(bool running)
+{
+    m_suggesting = running;
+    updateDecisionButtons();
 }
 
 void ReviewPane::decideEach(const QList<qint64> &captureIds, const std::function<bool(qint64)> &decide)
@@ -760,7 +790,11 @@ void ReviewPane::showCurrent()
     const QString guessName = idx.data(ReviewQueueModel::GuessNameRole).toString();
     const double conf = idx.data(ReviewQueueModel::ConfidenceRole).toDouble();
     const QString note = idx.data(ReviewQueueModel::NoteRole).toString();
-    if (!guessName.isEmpty())
+    if (!guessName.isEmpty() && idx.data(ReviewQueueModel::SuggestedRole).toBool())
+        m_guess->setText(tr("iNaturalist suggests: <b>%1</b>  ·  %2%")
+                             .arg(guessName.toHtmlEscaped())
+                             .arg(qRound(conf * 100)));
+    else if (!guessName.isEmpty())
         m_guess->setText(tr("Engine's guess: <b>%1</b>  ·  %2% confidence")
                              .arg(guessName.toHtmlEscaped())
                              .arg(int(conf * 100)));
@@ -779,7 +813,26 @@ void ReviewPane::showCurrent()
     rescalePhotos();
 
     const auto guessInat = idx.data(ReviewQueueModel::GuessInatIdRole).toLongLong();
-    populateCandidates(m_finder.forCapture(currentCaptureId()), guessInat);
+    QList<pl::match::TaxonCandidate> candidates = m_finder.forCapture(currentCaptureId());
+    // iNaturalist's suggestion isn't from the name, so it's not among them: on top.
+    if (guessInat > 0 && std::none_of(candidates.cbegin(), candidates.cend(),
+                                      [&](const auto &c) { return c.inatId == guessInat; })) {
+        pl::match::TaxonCandidate c;
+        c.inatId = guessInat;
+        c.name = guessName;
+        QSqlQuery t(QSqlDatabase::database(m_db.connectionName(), false));
+        t.prepare(QStringLiteral("SELECT rank, common_name FROM taxon WHERE inat_id = ?"));
+        t.addBindValue(guessInat);
+        if (t.exec() && t.next()) {
+            c.rank = t.value(0).toString();
+            c.commonName = t.value(1).toString();
+        }
+        c.matchedVia = idx.data(ReviewQueueModel::SuggestedRole).toBool() ? tr("iNaturalist suggestion")
+                                                                          : QString();
+        c.score = conf;
+        candidates.prepend(c);
+    }
+    populateCandidates(candidates, guessInat);
     m_confirmButton->setEnabled(m_candidates->count() > 0 || guessInat > 0);
 
     const bool recursive = m_recursiveCheck->isChecked();

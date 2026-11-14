@@ -39,6 +39,7 @@ public:
         SearchTextRole,   // name + folder + guess, joined, for the filter box
         HasCandidateRole, // true if the engine found any taxon candidate at all
         CapturedOnRole,   // QDate the photo was taken (invalid when unknown)
+        SuggestedRole,    // true when the guess is iNaturalist's (Suggest Names)
     };
 
     ReviewQueueModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
@@ -72,6 +73,7 @@ private:
         QString note;
         QString qualifier;
         QDate capturedOn;
+        bool suggested = false;
     };
 
     void onThumbnailReady(const QString &contentHash, int longestEdge);

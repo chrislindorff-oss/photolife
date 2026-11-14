@@ -97,6 +97,7 @@ namespace geo {
 class LocalityFetcher;
 }
 namespace inat {
+class RunSuggester;
 class InatImportService;
 struct ImportItem;
 struct SavedFile;
@@ -165,6 +166,9 @@ private:
     void showStorageUsage();
     void showCatalogueSettings();
 
+    // Review → Needs Identifying → Suggest Names: iNaturalist's suggestion
+    // for each run of shots becomes the photos' guess.
+    void suggestNames(const QList<qint64> &captureIds);
     void addWatchedFolder();
     // Adds `dir` to the library (a new library folder, unless it's in one
     // already) and scans it; `afterScan` runs once that scan is done.
@@ -594,6 +598,7 @@ private:
     QAction *m_scanAction = nullptr;
     QAction *m_cancelAction = nullptr;
     QAction *m_addFolderAction = nullptr;
+    inat::RunSuggester *m_suggester = nullptr;
     QAction *m_manageFoldersAction = nullptr;
 
     model::TaxonomyTreeModel *m_treeModel = nullptr;
