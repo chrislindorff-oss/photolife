@@ -1,5 +1,7 @@
 #include "ui/OrganiseView.h"
 
+#include "ui/FlowLayout.h"
+
 #include "app/Application.h"
 #include "db/Database.h"
 #include "geo/LocalityStore.h"
@@ -722,10 +724,12 @@ OrganiseView::OrganiseView(Application &app, QWidget *parent) : QWidget(parent),
                                         "computer vision suggestions — checked by you first."));
     connect(m_identifyRunsButton, &QPushButton::clicked, this, &OrganiseView::identifyRuns);
 
-    auto *bar = new QHBoxLayout;
+    // Wraps onto a second line when the window is narrow, rather than
+    // making the window wider than the screen.
+    auto *bar = new FlowLayout;
     bar->addWidget(fromCard);
     bar->addWidget(open);
-    bar->addWidget(m_folderLabel, 1);
+    bar->addWidget(m_folderLabel);
     bar->addWidget(m_counts);
     bar->addSpacing(12);
     bar->addWidget(m_filmstripButton);

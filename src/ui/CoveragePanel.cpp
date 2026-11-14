@@ -88,6 +88,10 @@ CoveragePanel::CoveragePanel(QWidget *parent)
     layout->addStretch(1);
 
     clear();
+    // Wrapping, so the summary never makes the Reference Trees panel (and
+    // with it the window) wider: it takes the panel's width instead.
+    for (QLabel *label : findChildren<QLabel *>())
+        label->setWordWrap(true);
 }
 
 void CoveragePanel::clear()

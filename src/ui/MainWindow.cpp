@@ -92,6 +92,8 @@
 #include "ui/RenameFilesDialog.h"
 #include "ui/ReviewPane.h"
 #include "ui/TodoFilterBar.h"
+#include "ui/StackSizing.h"
+#include "ui/FlowLayout.h"
 #include "settings/SecretStore.h"
 #include "db/CatalogueBackup.h"
 #include "geo/SavedPlaces.h"
@@ -129,6 +131,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QScrollArea>
 #include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLabel>
@@ -178,6 +181,41 @@
 #include "db/Database.h"
 
 namespace pl {
+namespace {
+
+// Keeps the coverage summary's scroll area as tall as the summary needs at
+// the area's width (its lines wrap), up to a cap: watches the viewport's
+// resizes.
+class CoverageHeightKeeper : public QObject
+{
+public:
+    CoverageHeightKeeper(QScrollArea *area, QWidget *content)
+        : QObject(area), m_area(area), m_content(content)
+    {
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest) {
+            const int width = m_area->viewport()->width();
+            const int needed = m_content->hasHeightForWidth() ? m_content->heightForWidth(width)
+                                                              : m_content->sizeHint().height();
+            const int wanted = std::min(needed, kMaxHeight);
+            if (needed > 0 && m_area->minimumHeight() != wanted)
+                m_area->setMinimumHeight(wanted);
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    static constexpr int kMaxHeight = 320;
+    QScrollArea *m_area;
+    QWidget *m_content;
+};
+
+} // namespace
+
 namespace {
 
 // m_projectCombo item data: the project's own name, without the display-only
@@ -1786,6 +1824,7 @@ void MainWindow::buildReferenceTreeDock()
     m_columnView->card()->setParent(columnsPage);
     columnsLayout->addWidget(m_columnView->card());
     m_treeStack->addWidget(columnsPage);
+    sizeStackToCurrentPage(m_treeStack);   // Tree view: the Columns page's width doesn't count
     // While a filter narrows the tree, say so above it -- the group counts
     // and the coverage box otherwise read as if nothing were hidden.
     m_treeFilterBanner = new QLabel(treeBox);
@@ -1820,22 +1859,34 @@ void MainWindow::buildReferenceTreeDock()
 
     auto *split = new QSplitter(Qt::Vertical, panel);
     split->addWidget(treeBox);
-    split->addWidget(m_coveragePanel);
+    // In a scroll area: its lines wrap to the panel's width, and the area
+    // gives them the height that takes (a splitter alone wouldn't), scrolling
+    // when the panel is short.
+    auto *coverageScroll = new QScrollArea(panel);
+    coverageScroll->setWidget(m_coveragePanel);
+    coverageScroll->setWidgetResizable(true);
+    coverageScroll->setFrameShape(QFrame::NoFrame);
+    coverageScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // As tall as its lines need at this width (so it isn't squeezed into
+    // scrolling), up to 320 px.
+    coverageScroll->viewport()->installEventFilter(new CoverageHeightKeeper(coverageScroll, m_coveragePanel));
+    split->addWidget(coverageScroll);
     split->setStretchFactor(0, 4);
     split->setStretchFactor(1, 1);
 
     layout->addWidget(m_projectCombo);
     layout->addWidget(m_treeSearch);
-    auto *filterRow = new QHBoxLayout;
+    // These rows wrap when the panel is narrow (FlowLayout).
+    auto *filterRow = new FlowLayout;
     filterRow->addWidget(m_photographedOnly);
     filterRow->addWidget(m_showSeen);
-    filterRow->addStretch(1);
+    filterRow->addStretch();
     filterRow->addWidget(m_coverageFilterCombo);
     layout->addLayout(filterRow);
-    auto *treeButtons = new QHBoxLayout;
+    auto *treeButtons = new FlowLayout;
     treeButtons->addWidget(m_rankFilterButton);
     treeButtons->addWidget(m_expandAllButton);
-    treeButtons->addStretch(1);
+    treeButtons->addStretch();
     treeButtons->addWidget(m_treeModeButton);
     treeButtons->addWidget(m_columnsModeButton);
     layout->addLayout(treeButtons);
@@ -5054,6 +5105,11 @@ void MainWindow::buildCentralWidget()
         }
     });
     m_centralStack->addWidget(m_organiseView);   // Organise mode
+    // Each view needs only its own minimum width, not the widest view's --
+    // so showing the Reference Trees panel (F9) doesn't widen the window.
+    sizeStackToCurrentPage(m_centralStack);
+    sizeStackToCurrentPage(m_tabs);
+    sizeStackToCurrentPage(m_photoStack);
     setCentralWidget(m_centralStack);
 
     const auto showView = [this](QAction *action, QWidget *page) {

@@ -9,6 +9,7 @@
 #include "taxonomy/TaxonomyStore.h"
 #include "taxonomy/TaxonomyTypes.h"
 #include "thumb/ThumbnailCache.h"
+#include "ui/FlowLayout.h"
 #include "ui/IdentifyPanel.h"
 #include "ui/ImageViewer.h"
 #include "ui/Theme.h"
@@ -53,7 +54,7 @@ using model::ReviewQueueFilterProxy;
 using model::ReviewQueueGroupModel;
 using model::ReviewQueueModel;
 constexpr int kQueueThumb = 128;   // longest edge of each queue-list thumbnail
-constexpr int kMinPhoto = 180;     // each comparison photo's minimum box
+constexpr int kMinPhoto = 150;     // each comparison photo's minimum box
 constexpr int kMaxPhoto = 420;     // and its maximum, so the candidate list keeps room
 
 void boldize(QLabel *label)
@@ -141,7 +142,7 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     m_queueView->setExpandsOnDoubleClick(true);
     m_queueView->setUniformRowHeights(false);   // compact name-only headers, tall photo rows
     m_queueView->setIconSize(QSize(kQueueThumb, kQueueThumb));
-    m_queueView->setMinimumWidth(320);
+    m_queueView->setMinimumWidth(260);
     // Several photos can be picked (Ctrl/Shift-click) for matching with one
     // iNaturalist observation; the form shows the current one.
     m_queueView->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -199,6 +200,9 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     boldize(m_yourPhotoTitle);
     m_refPhotoTitle = new QLabel(tr("iNaturalist reference"), this);
     boldize(m_refPhotoTitle);
+    // A long name wraps rather than widening the photos' column (and the window).
+    m_yourPhotoTitle->setWordWrap(true);
+    m_refPhotoTitle->setWordWrap(true);
 
     m_thumb = makePhoto();
 
@@ -266,13 +270,13 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     connect(skipBtn, &QPushButton::clicked, this, &ReviewPane::skip);
     connect(m_undoButton, &QPushButton::clicked, this, &ReviewPane::undo);
 
-    auto *actions = new QHBoxLayout;
+    auto *actions = new FlowLayout;
     actions->addWidget(m_confirmButton);
     actions->addWidget(rejectBtn);
     actions->addWidget(genusBtn);
     actions->addWidget(notTaxonBtn);
     actions->addWidget(skipBtn);
-    actions->addStretch(1);
+    actions->addStretch();
     actions->addWidget(m_undoButton);
 
     auto shortcut = [this](QKeySequence seq, void (ReviewPane::*slot)()) {
@@ -314,9 +318,10 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
         if (!ids.isEmpty() && editAllowed())
             emit suggestNamesRequested(ids);
     });
-    auto *bulk = new QHBoxLayout;
+    // Wraps onto a second line when the window is narrow.
+    auto *bulk = new FlowLayout;
+    m_bulkLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);   // pushes the buttons right
     bulk->addWidget(m_bulkLabel);
-    bulk->addStretch(1);
     bulk->addWidget(m_recursiveCheck);
     bulk->addWidget(m_suggestButton);
     bulk->addWidget(m_organiseButton);
