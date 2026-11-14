@@ -4884,6 +4884,15 @@ void MainWindow::buildCentralWidget()
     m_reviewPane = new ReviewPane(m_app.database(), m_app.thumbnails(), m_app.inat(),
                                   m_app.photoCache(), this);
     connect(m_reviewPane, &ReviewPane::inatMatchRequested, this, &MainWindow::matchReviewPhotosWithInat);
+    connect(m_reviewPane, &ReviewPane::organiseFolderRequested, this, [this](const QString &folder) {
+        if (!QFileInfo(folder).isDir()) {
+            statusBar()->showMessage(tr("\"%1\" isn't there any more.").arg(QDir::toNativeSeparators(folder)), 8000);
+            return;
+        }
+        m_viewOrganiseAction->setChecked(true);
+        if (QDir::cleanPath(m_organiseView->folder()) != QDir::cleanPath(folder))
+            m_organiseView->openFolder(folder);
+    });
     m_reviewPane->setIdentify([this] { return new IdentifyPanel(m_app); },
                               [this](const taxonomy::Taxon &taxon, std::function<void()> then) {
                                   withTaxonKnown(taxon.inatId, taxon.name, tr("Identify with iNaturalist"),

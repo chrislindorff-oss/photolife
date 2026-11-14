@@ -25,6 +25,7 @@
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QItemSelection>
 #include <QItemSelectionModel>
 #include <QKeySequence>
 #include <QLabel>
@@ -97,36 +98,32 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
         connect(btn, &QToolButton::clicked, this, [this, bucket] { setBucket(bucket); });
         return btn;
     };
-    m_bucketAllButton = makeBucketButton(int(ReviewQueueFilterProxy::Bucket::All));
-    m_bucketNoCandidateButton =
-        makeBucketButton(int(ReviewQueueFilterProxy::Bucket::NoCandidate));
-    m_bucketNeedsReviewButton =
-        makeBucketButton(int(ReviewQueueFilterProxy::Bucket::NeedsReview));
-    m_bucketAllButton->setToolTip(tr("Show every unmatched photo"));
-    m_bucketNoCandidateButton->setToolTip(
-        tr("The engine found no candidate taxon anywhere in the cached library for these"));
-    m_bucketNeedsReviewButton->setToolTip(
-        tr("The engine found a candidate, but confidence was too low to auto-confirm"));
-    m_bucketAllButton->setChecked(true);
+    m_bucketConfirmButton = makeBucketButton(int(ReviewQueueFilterProxy::Bucket::NeedsReview));
+    m_bucketIdentifyButton = makeBucketButton(int(ReviewQueueFilterProxy::Bucket::NoCandidate));
+    m_bucketConfirmButton->setToolTip(
+        tr("Photos the engine has a guess for, waiting for a yes or no. They're grouped by the "
+           "guess: click a group's heading to select it all, then Confirm."));
+    m_bucketIdentifyButton->setToolTip(
+        tr("Photos with no guess at all, usually named only by the camera. They're grouped by "
+           "folder and day: name them here, with Identify, or open the folder in Organise."));
+    m_bucketConfirmButton->setChecked(true);
     m_bucketGroup = new QButtonGroup(this);
     m_bucketGroup->setExclusive(true);
-    m_bucketGroup->addButton(m_bucketAllButton);
-    m_bucketGroup->addButton(m_bucketNoCandidateButton);
-    m_bucketGroup->addButton(m_bucketNeedsReviewButton);
+    m_bucketGroup->addButton(m_bucketConfirmButton);
+    m_bucketGroup->addButton(m_bucketIdentifyButton);
     auto *bucketButtons = new QHBoxLayout;
     bucketButtons->setContentsMargins(0, 0, 0, 0);
-    bucketButtons->addWidget(m_bucketAllButton);
-    bucketButtons->addWidget(m_bucketNoCandidateButton);
-    bucketButtons->addWidget(m_bucketNeedsReviewButton);
+    bucketButtons->addWidget(m_bucketConfirmButton);
+    bucketButtons->addWidget(m_bucketIdentifyButton);
     bucketButtons->addStretch(1);
 
     auto *collapseBtn = new QToolButton(this);
     collapseBtn->setText(tr("Collapse all"));
-    collapseBtn->setToolTip(tr("Collapse every group of same-named photos"));
+    collapseBtn->setToolTip(tr("Collapse every group"));
     connect(collapseBtn, &QToolButton::clicked, this, &ReviewPane::collapseAllGroups);
     auto *expandBtn = new QToolButton(this);
     expandBtn->setText(tr("Expand all"));
-    expandBtn->setToolTip(tr("Expand every group of same-named photos"));
+    expandBtn->setToolTip(tr("Expand every group"));
     connect(expandBtn, &QToolButton::clicked, this, &ReviewPane::expandAllGroups);
     auto *groupButtons = new QHBoxLayout;
     groupButtons->setContentsMargins(0, 0, 0, 0);
@@ -147,6 +144,13 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     m_queueView->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(m_queueView->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this] { showCurrent(); });
+    connect(m_queueView->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            [this] { updateDecisionButtons(); });
+    // A group's heading selects its photos, so one decision covers them all.
+    connect(m_queueView, &QAbstractItemView::clicked, this, [this](const QModelIndex &idx) {
+        if (m_queueGroup->isGroup(idx))
+            selectGroup(idx);
+    });
     connect(m_queueView, &QAbstractItemView::doubleClicked, this,
             [this](const QModelIndex &idx) {
                 if (!m_queueGroup->isGroup(idx))
@@ -165,8 +169,12 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     m_queueView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_queueView, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
         const QModelIndex idx = m_queueView->indexAt(pos);
-        if (!idx.isValid() || m_queueGroup->isGroup(idx))
+        if (!idx.isValid())
             return;
+        if (m_queueGroup->isGroup(idx)) {
+            groupMenu(idx, m_queueView->viewport()->mapToGlobal(pos));
+            return;
+        }
         // Right-click doesn't extend a selection: on a photo outside it, act on that alone.
         if (!m_queueView->selectionModel()->isSelected(idx))
             m_queueView->setCurrentIndex(idx);
@@ -233,16 +241,18 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     connect(m_useTreeTaxon, &QPushButton::clicked, this, &ReviewPane::useTreeTaxon);
 
     m_confirmButton = new QPushButton(tr("&Confirm"), this);
-    auto *rejectBtn = new QPushButton(tr("&Reject"), this);
+    m_rejectButton = new QPushButton(tr("&Reject"), this);
+    auto *rejectBtn = m_rejectButton;
     auto *genusBtn = new QPushButton(tr("&Genus only"), this);
     auto *notTaxonBtn = new QPushButton(tr("&Not a taxon"), this);
     auto *skipBtn = new QPushButton(tr("&Skip"), this);
     m_undoButton = new QPushButton(tr("&Undo"), this);
     m_confirmButton->setDefault(true);
-    m_confirmButton->setToolTip(tr("Confirm (Ctrl+Enter)"));
-    rejectBtn->setToolTip(tr("Reject (Ctrl+Backspace)"));
-    genusBtn->setToolTip(tr("Genus only (Ctrl+G)"));
-    notTaxonBtn->setToolTip(tr("Not a taxon (Ctrl+Shift+N)"));
+    m_confirmButton->setToolTip(tr("Confirm (Ctrl+Enter). With several photos selected, all of "
+                                   "them are confirmed as the taxon chosen below."));
+    rejectBtn->setToolTip(tr("Reject (Ctrl+Backspace) — every selected photo"));
+    genusBtn->setToolTip(tr("Genus only (Ctrl+G) — every selected photo"));
+    notTaxonBtn->setToolTip(tr("Not a taxon (Ctrl+Shift+N) — every selected photo"));
     skipBtn->setToolTip(tr("Skip (Ctrl+Right)"));
     m_undoButton->setToolTip(tr("Undo the last decision (Ctrl+Z)"));
     m_undoButton->setEnabled(false);
@@ -287,10 +297,15 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     connect(m_bulkButton, &QPushButton::clicked, this, &ReviewPane::applyToFolder);
     m_ignoreFolderButton = new QPushButton(tr("Ignore Folder…"), this);
     connect(m_ignoreFolderButton, &QPushButton::clicked, this, &ReviewPane::ignoreFolder);
+    m_organiseButton = new QPushButton(tr("Open Folder in Organise"), this);
+    m_organiseButton->setToolTip(tr("Name this folder's photos in Organise, a run of shots at a "
+                                    "time; organising them into species folders matches them."));
+    connect(m_organiseButton, &QPushButton::clicked, this, &ReviewPane::organiseCurrentFolder);
     auto *bulk = new QHBoxLayout;
     bulk->addWidget(m_bulkLabel);
     bulk->addStretch(1);
     bulk->addWidget(m_recursiveCheck);
+    bulk->addWidget(m_organiseButton);
     bulk->addWidget(m_ignoreFolderButton);
     bulk->addWidget(m_bulkButton);
 
@@ -360,7 +375,14 @@ ReviewPane::ReviewPane(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
     layout->setContentsMargins(4, 4, 4, 4);
     layout->addWidget(split);
 
+    m_queueProxy->setBucket(ReviewQueueFilterProxy::Bucket::NeedsReview);
+    m_queueGroup->setGroupBy(ReviewQueueGroupModel::GroupBy::Guess);
     reload();
+    // Nothing to confirm but photos to name: start on those.
+    if (visibleQueueCount() == 0 && m_queue->noCandidateCount() > 0) {
+        m_bucketIdentifyButton->setChecked(true);
+        setBucket(int(ReviewQueueFilterProxy::Bucket::NoCandidate));
+    }
 }
 
 void ReviewPane::reload()
@@ -379,6 +401,9 @@ void ReviewPane::selectCapture(const QModelIndex &leaf)
         m_queueView->expand(group);
     m_queueView->setCurrentIndex(leaf);
     m_queueView->scrollTo(leaf);
+    // The first of a group: its heading in view too, so it's clear what it's in.
+    if (const QModelIndex group = m_queueGroup->groupParentOf(leaf); group.isValid() && leaf.row() == 0)
+        m_queueView->scrollTo(group);
 }
 
 void ReviewPane::restoreGroupExpansion()
@@ -449,8 +474,117 @@ void ReviewPane::photoMenu(const QModelIndex &leaf, const QPoint &globalPos)
         emit inatMatchRequested(ids, paths, names);   // the window checks it may edit
     });
     menu.addSeparator();
+    const QString folder = leaf.data(ReviewQueueModel::FolderPathRole).toString();
+    menu.addAction(tr("Open Folder in Organise"), this, [this, folder] { emit organiseFolderRequested(folder); });
     menu.addAction(tr("View Full Size"), this, [this, leaf] { openViewerAt(leaf); });
     menu.exec(globalPos);
+}
+
+void ReviewPane::selectGroup(const QModelIndex &group)
+{
+    const QModelIndexList members = m_queueGroup->groupMembers(group);
+    if (members.isEmpty())
+        return;
+    m_queueView->expand(group);
+    QItemSelection selection;
+    for (const QModelIndex &m : members)
+        selection.select(m, m);
+    QItemSelectionModel *sel = m_queueView->selectionModel();
+    sel->setCurrentIndex(members.first(), QItemSelectionModel::NoUpdate);
+    sel->select(selection, QItemSelectionModel::ClearAndSelect);
+    m_queueView->scrollTo(members.first());
+    showCurrent();
+}
+
+void ReviewPane::groupMenu(const QModelIndex &group, const QPoint &globalPos)
+{
+    const QModelIndexList members = m_queueGroup->groupMembers(group);
+    if (members.isEmpty())
+        return;
+    QList<qint64> ids;
+    for (const QModelIndex &m : members)
+        ids << m.data(ReviewQueueModel::CaptureIdRole).toLongLong();
+    QMenu menu(this);
+    const qint64 guess = members.first().data(ReviewQueueModel::GuessInatIdRole).toLongLong();
+    const QString guessName = members.first().data(ReviewQueueModel::GuessNameRole).toString();
+    if (m_queueGroup->groupBy() == ReviewQueueGroupModel::GroupBy::Guess && guess > 0) {
+        menu.addAction(tr("Confirm All %1 as %2").arg(ids.size()).arg(guessName), this, [this, ids, guess] {
+            if (!editAllowed())
+                return;
+            decideEach(ids, [this, guess](qint64 cid) { return m_reviewer.confirm(cid, guess); });
+        });
+    }
+    menu.addAction(tr("Select All %1").arg(ids.size()), this, [this, group] { selectGroup(group); });
+    menu.addSeparator();
+    const QString folder = members.first().data(ReviewQueueModel::FolderPathRole).toString();
+    menu.addAction(tr("Open Folder in Organise"), this, [this, folder] { emit organiseFolderRequested(folder); });
+    menu.exec(globalPos);
+}
+
+void ReviewPane::organiseCurrentFolder()
+{
+    const QModelIndex idx = m_queueView->currentIndex();
+    const QString folder = idx.isValid() ? idx.data(ReviewQueueModel::FolderPathRole).toString() : QString();
+    if (!folder.isEmpty())
+        emit organiseFolderRequested(folder);
+}
+
+QList<qint64> ReviewPane::selectedCaptureIds() const
+{
+    QList<qint64> ids;
+    for (const QModelIndex &i : m_queueView->selectionModel()->selectedIndexes()) {
+        if (m_queueGroup->isGroup(i))
+            continue;
+        const qint64 id = i.data(ReviewQueueModel::CaptureIdRole).toLongLong();
+        if (id > 0 && !ids.contains(id))
+            ids << id;
+    }
+    const qint64 current = currentCaptureId();
+    if (current > 0 && !ids.contains(current))
+        ids = {current};
+    return ids;
+}
+
+void ReviewPane::updateDecisionButtons()
+{
+    const int n = int(selectedCaptureIds().size());
+    m_confirmButton->setText(n > 1 ? tr("&Confirm %1").arg(n) : tr("&Confirm"));
+    m_rejectButton->setText(n > 1 ? tr("&Reject %1").arg(n) : tr("&Reject"));
+}
+
+void ReviewPane::decideEach(const QList<qint64> &captureIds, const std::function<bool(qint64)> &decide)
+{
+    QList<qint64> decided;
+    for (qint64 cid : captureIds) {
+        if (decide(cid))
+            decided << cid;
+    }
+    if (!decided.isEmpty())
+        afterDecisions(decided);
+}
+
+bool ReviewPane::askConfirmMany(const QList<qint64> &captureIds, qint64 taxonInatId)
+{
+    if (captureIds.size() < 2 || taxonInatId <= 0)
+        return true;
+    // Only worth asking when some had another guess: one taxon is going on all.
+    int differing = 0;
+    for (const QModelIndex &i : m_queueView->selectionModel()->selectedIndexes()) {
+        if (!m_queueGroup->isGroup(i) && i.data(ReviewQueueModel::GuessInatIdRole).toLongLong() != taxonInatId)
+            ++differing;
+    }
+    if (differing == 0)
+        return true;
+    const QListWidgetItem *item = m_candidates->currentItem();
+    const QString name = item ? item->text().section(QStringLiteral("  ·  "), 0, 0).section(QStringLiteral("   ["), 0, 0)
+                              : QString();
+    return QMessageBox::question(
+               this, tr("Confirm %1 Photos").arg(captureIds.size()),
+               tr("Confirm all %1 selected photos as %2?\n\n%3 of them had a different guess, or none.")
+                   .arg(captureIds.size())
+                   .arg(name)
+                   .arg(differing))
+        == QMessageBox::Yes;
 }
 
 bool ReviewPane::eventFilter(QObject *watched, QEvent *event)
@@ -589,10 +723,14 @@ void ReviewPane::showCurrent()
     const bool have = idx.isValid() && !m_queueGroup->isGroup(idx);
 
     if (!have) {
-        m_empty->setText(m_queue->queueCount() == 0
-                             ? tr("The review queue is empty. Run Match Library, or "
-                                  "everything is decided.")
-                             : tr("No photos match the filter."));
+        const bool identifying = m_queueProxy->bucket() == ReviewQueueFilterProxy::Bucket::NoCandidate;
+        m_empty->setText(m_queue->queueCount() == 0 ? tr("The review queue is empty. Run Match Library, or "
+                                                         "everything is decided.")
+                         : !m_photoFilter->text().isEmpty() ? tr("No photos match the filter.")
+                         : identifying ? tr("No photos need identifying: every one left has a guess "
+                                            "under To Confirm.")
+                                       : tr("No guesses left to confirm. Photos with no guess are "
+                                            "under Needs Identifying."));
         m_rightStack->setCurrentIndex(0);
         m_captureName.clear();
         m_captureFolder.clear();
@@ -605,6 +743,7 @@ void ReviewPane::showCurrent()
         m_bulkLabel->clear();
         m_bulkButton->setEnabled(false);
         m_ignoreFolderButton->setEnabled(false);
+        m_organiseButton->setEnabled(false);
         clearReferencePhoto();
         updateTreeTaxonButton();
         return;
@@ -653,8 +792,10 @@ void ReviewPane::showCurrent()
                              : QString());
     m_bulkButton->setEnabled(inFolder > 1);
     m_ignoreFolderButton->setEnabled(currentFolderId() > 0);
+    m_organiseButton->setEnabled(!folder.isEmpty());
     m_search->clear();
     updateTreeTaxonButton();
+    updateDecisionButtons();
 }
 
 void ReviewPane::populateCandidates(const QList<pl::match::TaxonCandidate> &candidates,
@@ -846,12 +987,20 @@ void ReviewPane::onRefPhotoReady(const QString &url)
     m_refCaption->setText(m_refPendingAttr);
 }
 
-void ReviewPane::afterDecision(qint64 captureId)
+void ReviewPane::afterDecisions(const QList<qint64> &captureIds)
 {
-    m_lastDecidedCaptureId = captureId;
+    m_lastDecided = captureIds;
     m_undoButton->setEnabled(true);
-    const int pos = m_queueGroup->captureNumberOf(m_queueView->currentIndex());
-    m_queue->dropCapture(captureId);   // by id on the source; proxy + group model follow
+    int pos = m_queueGroup->captureNumberOf(m_queueView->currentIndex());
+    // Several decided: carry on from the first of them in the list.
+    for (int r = 0; r < visibleQueueCount() && captureIds.size() > 1; ++r) {
+        if (captureIds.contains(visibleQueueIndex(r).data(ReviewQueueModel::CaptureIdRole).toLongLong())) {
+            pos = r;
+            break;
+        }
+    }
+    // By id on the source; proxy + group model follow.
+    m_queue->dropCaptures(QSet<qint64>(captureIds.cbegin(), captureIds.cend()));
     if (visibleQueueCount() > 0) {
         const int row = qBound(0, pos < 0 ? 0 : pos, visibleQueueCount() - 1);
         selectCapture(visibleQueueIndex(row));
@@ -864,13 +1013,16 @@ void ReviewPane::undo()
 {
     if (!editAllowed())
         return;
-    if (m_lastDecidedCaptureId <= 0)
+    if (m_lastDecided.isEmpty())
         return;
-    const qint64 cid = m_lastDecidedCaptureId;
-    m_lastDecidedCaptureId = 0;
+    const QList<qint64> ids = std::exchange(m_lastDecided, {});
     m_undoButton->setEnabled(false);
-    if (!m_reviewer.resetToPending(cid))
+    bool any = false;
+    for (qint64 id : ids)
+        any = m_reviewer.resetToPending(id) || any;
+    if (!any)
         return;
+    const qint64 cid = ids.first();
     m_queue->reload();
     for (int r = 0; r < visibleQueueCount(); ++r) {
         const QModelIndex idx = visibleQueueIndex(r);
@@ -886,6 +1038,9 @@ void ReviewPane::undo()
 void ReviewPane::setBucket(int bucket)
 {
     m_queueProxy->setBucket(ReviewQueueFilterProxy::Bucket(bucket));
+    m_queueGroup->setGroupBy(ReviewQueueFilterProxy::Bucket(bucket) == ReviewQueueFilterProxy::Bucket::NoCandidate
+                                 ? ReviewQueueGroupModel::GroupBy::FolderAndDate
+                                 : ReviewQueueGroupModel::GroupBy::Guess);
     const QModelIndex cur = m_queueView->currentIndex();
     if ((!cur.isValid() || m_queueGroup->isGroup(cur)) && visibleQueueCount() > 0)
         selectCapture(visibleQueueIndex(0));
@@ -896,9 +1051,8 @@ void ReviewPane::updateBucketButtons()
 {
     const int total = m_queue->queueCount();
     const int noCandidate = m_queue->noCandidateCount();
-    m_bucketAllButton->setText(tr("All (%1)").arg(total));
-    m_bucketNoCandidateButton->setText(tr("No candidate found (%1)").arg(noCandidate));
-    m_bucketNeedsReviewButton->setText(tr("Needs review (%1)").arg(total - noCandidate));
+    m_bucketConfirmButton->setText(tr("To Confirm (%1)").arg(total - noCandidate));
+    m_bucketIdentifyButton->setText(tr("Needs Identifying (%1)").arg(noCandidate));
 }
 
 void ReviewPane::setIdentify(std::function<IdentifyPanel *()> makePanel, EnsureKnown ensureKnown)
@@ -977,11 +1131,11 @@ void ReviewPane::confirm()
 {
     if (!editAllowed())
         return;
-    const qint64 cid = currentCaptureId();
-    if (cid <= 0)
+    const QList<qint64> ids = selectedCaptureIds();
+    const qint64 taxon = chosenTaxonInatId();
+    if (ids.isEmpty() || !askConfirmMany(ids, taxon))
         return;
-    if (m_reviewer.confirm(cid, chosenTaxonInatId()))
-        afterDecision(cid);
+    decideEach(ids, [this, taxon](qint64 cid) { return m_reviewer.confirm(cid, taxon); });
 }
 
 void ReviewPane::setTreeTaxon(qint64 inatId, const QString &name)
@@ -1004,41 +1158,35 @@ void ReviewPane::useTreeTaxon()
 {
     if (!editAllowed())
         return;
-    const qint64 cid = currentCaptureId();
-    if (cid <= 0 || m_treeTaxonInatId <= 0)
+    const QList<qint64> ids = selectedCaptureIds();
+    const qint64 taxon = m_treeTaxonInatId;
+    if (ids.isEmpty() || taxon <= 0)
         return;
-    if (m_reviewer.confirm(cid, m_treeTaxonInatId))
-        afterDecision(cid);
+    decideEach(ids, [this, taxon](qint64 cid) { return m_reviewer.confirm(cid, taxon); });
 }
 
 void ReviewPane::reject()
 {
     if (!editAllowed())
         return;
-    const qint64 cid = currentCaptureId();
-    if (cid > 0 && m_reviewer.reject(cid))
-        afterDecision(cid);
+    decideEach(selectedCaptureIds(), [this](qint64 cid) { return m_reviewer.reject(cid); });
 }
 
 void ReviewPane::genusOnly()
 {
     if (!editAllowed())
         return;
-    const qint64 cid = currentCaptureId();
-    if (cid <= 0)
-        return;
-    const qint64 genus = m_finder.folderGenusInatId(cid);
-    if (genus > 0 && m_reviewer.setGenusOnly(cid, genus))
-        afterDecision(cid);
+    decideEach(selectedCaptureIds(), [this](qint64 cid) {
+        const qint64 genus = m_finder.folderGenusInatId(cid);
+        return genus > 0 && m_reviewer.setGenusOnly(cid, genus);
+    });
 }
 
 void ReviewPane::notATaxon()
 {
     if (!editAllowed())
         return;
-    const qint64 cid = currentCaptureId();
-    if (cid > 0 && m_reviewer.markNotATaxon(cid, true))
-        afterDecision(cid);
+    decideEach(selectedCaptureIds(), [this](qint64 cid) { return m_reviewer.markNotATaxon(cid, true); });
 }
 
 void ReviewPane::skip()

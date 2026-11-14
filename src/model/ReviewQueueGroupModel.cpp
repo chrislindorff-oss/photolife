@@ -1,5 +1,11 @@
 #include "model/ReviewQueueGroupModel.h"
 
+#include "model/ReviewQueueModel.h"
+
+#include <QDate>
+#include <QFileInfo>
+#include <QLocale>
+
 namespace pl::model {
 namespace {
 // internalId of a top-level row (group header or lone capture). Child rows carry
@@ -39,6 +45,16 @@ void ReviewQueueGroupModel::setSourceModel(QAbstractItemModel *source)
     endResetModel();
 }
 
+void ReviewQueueGroupModel::setGroupBy(GroupBy groupBy)
+{
+    if (m_groupBy == groupBy)
+        return;
+    beginResetModel();
+    m_groupBy = groupBy;
+    rebuild();
+    endResetModel();
+}
+
 void ReviewQueueGroupModel::rebuild()
 {
     m_groups.clear();
@@ -48,11 +64,33 @@ void ReviewQueueGroupModel::rebuild()
     QHash<QString, int> byName;
     const int rows = m_source->rowCount();
     for (int r = 0; r < rows; ++r) {
-        const QString name = m_source->index(r, 0).data(Qt::DisplayRole).toString();
+        const QModelIndex src = m_source->index(r, 0);
+        QString name, label, tip;
+        switch (m_groupBy) {
+        case GroupBy::DisplayName:
+            name = label = src.data(Qt::DisplayRole).toString();
+            break;
+        case GroupBy::Guess:
+            name = label = src.data(ReviewQueueModel::GuessNameRole).toString();
+            if (name.isEmpty())   // no guess: by its own name, as before
+                name = label = src.data(Qt::DisplayRole).toString();
+            tip = tr("The engine guessed %1 for these photos").arg(label);
+            break;
+        case GroupBy::FolderAndDate: {
+            const QString folder = src.data(ReviewQueueModel::FolderPathRole).toString();
+            const QDate day = src.data(ReviewQueueModel::CapturedOnRole).toDate();
+            name = folder + QLatin1Char('|') + day.toString(Qt::ISODate);
+            label = QStringLiteral("%1 · %2")
+                        .arg(QFileInfo(folder).fileName(),
+                             day.isValid() ? QLocale().toString(day, QLocale::ShortFormat) : tr("no date"));
+            tip = folder;
+            break;
+        }
+        }
         const auto it = byName.constFind(name);
         if (it == byName.constEnd()) {
             byName.insert(name, int(m_groups.size()));
-            m_groups.append({name, QList<int>{r}});
+            m_groups.append({name, label, tip, QList<int>{r}});
         } else {
             m_groups[*it].sourceRows.append(r);
         }
@@ -124,10 +162,11 @@ QVariant ReviewQueueGroupModel::data(const QModelIndex &index, int role) const
         switch (role) {
         case Qt::DisplayRole:
             return QStringLiteral("%1  (%2)")
-                .arg(g.name.isEmpty() ? tr("Unnamed") : g.name)
+                .arg(g.label.isEmpty() ? tr("Unnamed") : g.label)
                 .arg(g.sourceRows.size());
         case Qt::ToolTipRole:
-            return tr("%n photo(s) to review under this name", nullptr, g.sourceRows.size());
+            return g.tip.isEmpty() ? tr("%n photo(s) to review under this name", nullptr, g.sourceRows.size())
+                                   : g.tip;
         default:
             return {};
         }
@@ -171,6 +210,17 @@ QString ReviewQueueGroupModel::groupName(const QModelIndex &index) const
     const quintptr id = index.internalId();
     const int gi = (id == kTop) ? index.row() : int(id);
     return (gi >= 0 && gi < m_groups.size()) ? m_groups[gi].name : QString();
+}
+
+QModelIndexList ReviewQueueGroupModel::groupMembers(const QModelIndex &index) const
+{
+    if (!isGroup(index))
+        return index.isValid() ? QModelIndexList{index} : QModelIndexList{};
+    QModelIndexList out;
+    const int n = int(m_groups[index.row()].sourceRows.size());
+    for (int i = 0; i < n; ++i)
+        out << createIndex(i, 0, quintptr(index.row()));
+    return out;
 }
 
 int ReviewQueueGroupModel::captureCount() const

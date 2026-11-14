@@ -1,9 +1,11 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QDate>
 #include <QHash>
 #include <QIcon>
 #include <QList>
+#include <QSet>
 #include <QString>
 
 namespace pl {
@@ -36,6 +38,7 @@ public:
         QualifierRole,
         SearchTextRole,   // name + folder + guess, joined, for the filter box
         HasCandidateRole, // true if the engine found any taxon candidate at all
+        CapturedOnRole,   // QDate the photo was taken (invalid when unknown)
     };
 
     ReviewQueueModel(pl::Database &db, pl::thumb::ThumbnailCache &thumbs,
@@ -46,6 +49,7 @@ public:
 
     void reload();
     void dropCapture(qint64 captureId);
+    void dropCaptures(const QSet<qint64> &captureIds);   // several at once: one reset
 
     int queueCount() const { return int(m_rows.size()); }
     int noCandidateCount() const;
@@ -67,6 +71,7 @@ private:
         double confidence = 0.0;
         QString note;
         QString qualifier;
+        QDate capturedOn;
     };
 
     void onThumbnailReady(const QString &contentHash, int longestEdge);

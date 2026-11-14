@@ -51,6 +51,11 @@ class ImageViewer;
 // right the selected capture with the engine's guess, ranked alternatives, a
 // taxon search box, and Confirm / Reject / Genus only / Not a taxon / Skip —
 // plus a "apply to the whole folder" bulk action.
+//
+// The queue is split in two: To Confirm (the engine has a guess; grouped by
+// the guess) and Needs Identifying (no guess at all; grouped by folder and
+// day). The decisions act on every selected photo; clicking a group header
+// selects the whole group.
 class ReviewPane : public QWidget
 {
     Q_OBJECT
@@ -87,6 +92,8 @@ signals:
     // iNaturalist (the name may have changed there) and take its data.
     void inatMatchRequested(const QList<qint64> &captureIds, const QStringList &previewPaths,
                             const QStringList &nameTexts);
+    // "Open Folder in Organise": name the photos of `folder` there.
+    void organiseFolderRequested(const QString &folder);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -113,7 +120,18 @@ private:
     qint64 currentCaptureId() const;
     int currentFolderId() const;
     qint64 chosenTaxonInatId() const;
-    void afterDecision(qint64 captureId);
+    void afterDecision(qint64 captureId) { afterDecisions({captureId}); }
+    void afterDecisions(const QList<qint64> &captureIds);
+    // The photos a decision applies to: every selected one, or just the one
+    // on show when the selection doesn't include it.
+    QList<qint64> selectedCaptureIds() const;
+    // Runs `decide` on each, then drops the ones it decided from the queue.
+    void decideEach(const QList<qint64> &captureIds, const std::function<bool(qint64)> &decide);
+    bool askConfirmMany(const QList<qint64> &captureIds, qint64 taxonInatId);
+    void selectGroup(const QModelIndex &group);
+    void groupMenu(const QModelIndex &group, const QPoint &globalPos);
+    void updateDecisionButtons();
+    void organiseCurrentFolder();
     void identifyCurrent();
     pl::inat::IdentifyRequest identifyRequest(qint64 captureId, const QString &path) const;
     // A suggestion picked for the photo on show: on top of the candidates, selected.
@@ -154,9 +172,8 @@ private:
 
     QLineEdit *m_photoFilter;
     QButtonGroup *m_bucketGroup;
-    QToolButton *m_bucketAllButton;
-    QToolButton *m_bucketNoCandidateButton;
-    QToolButton *m_bucketNeedsReviewButton;
+    QToolButton *m_bucketConfirmButton;
+    QToolButton *m_bucketIdentifyButton;
     QTreeView *m_queueView;
     QSet<QString> m_collapsedGroups;   // group names the user has collapsed, kept across reloads
     QStackedWidget *m_rightStack;      // 0 = empty message, 1 = detail form
@@ -179,6 +196,8 @@ private:
     QLabel *m_guess;
     QListWidget *m_candidates;
     QPushButton *m_confirmButton;
+    QPushButton *m_rejectButton = nullptr;
+    QPushButton *m_organiseButton = nullptr;
     QLineEdit *m_search;
     QLabel *m_bulkLabel;
     QPushButton *m_bulkButton;
@@ -188,7 +207,7 @@ private:
     qint64 m_treeTaxonInatId = 0;
     QString m_treeTaxonName;
     QPushButton *m_undoButton;
-    qint64 m_lastDecidedCaptureId = 0;
+    QList<qint64> m_lastDecided;   // what Undo puts back
     QLabel *m_empty;
     ImageViewer *m_viewer = nullptr;
 };

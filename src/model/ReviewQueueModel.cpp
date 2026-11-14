@@ -81,6 +81,7 @@ QVariant ReviewQueueModel::data(const QModelIndex &index, int role) const
         return QStringList{row.nameText, row.baseName, row.folderPath, row.guessName}
             .join(QLatin1Char(' '));
     case HasCandidateRole:   return row.guessInatId > 0;
+    case CapturedOnRole:     return row.capturedOn;
     default:                 return {};
     }
 }
@@ -100,7 +101,7 @@ void ReviewQueueModel::reload()
             "     ORDER BY (r.kind='raw'), r.id LIMIT 1), "
             "  (SELECT r.content_hash FROM rendition r WHERE r.capture_id = c.id "
             "     ORDER BY (r.kind='raw'), r.id LIMIT 1), "
-            "  m.confidence, m.note, m.qualifier, t.name, t.inat_id "
+            "  m.confidence, m.note, m.qualifier, t.name, t.inat_id, c.captured_on "
             "FROM capture c JOIN folder f ON f.id = c.folder_id "
             "LEFT JOIN capture_match m ON m.id = ("
             "   SELECT id FROM capture_match WHERE capture_id = c.id "
@@ -123,6 +124,7 @@ void ReviewQueueModel::reload()
             row.qualifier = q.value(9).toString();
             row.guessName = q.value(10).toString();
             row.guessInatId = q.value(11).toLongLong();
+            row.capturedOn = QDate::fromString(q.value(12).toString().left(10), Qt::ISODate);
             if (!row.previewHash.isEmpty())
                 m_rowsByHash[row.previewHash].append(int(m_rows.size()));
             m_rows.append(std::move(row));
@@ -147,6 +149,24 @@ void ReviewQueueModel::dropCapture(qint64 captureId)
         endRemoveRows();
         return;
     }
+}
+
+void ReviewQueueModel::dropCaptures(const QSet<qint64> &captureIds)
+{
+    if (captureIds.isEmpty())
+        return;
+    if (captureIds.size() == 1) {
+        dropCapture(*captureIds.cbegin());
+        return;
+    }
+    beginResetModel();
+    m_rows.removeIf([&](const Row &row) { return captureIds.contains(row.id); });
+    m_rowsByHash.clear();
+    for (int r = 0; r < m_rows.size(); ++r) {
+        if (!m_rows.at(r).previewHash.isEmpty())
+            m_rowsByHash[m_rows.at(r).previewHash].append(r);
+    }
+    endResetModel();
 }
 
 int ReviewQueueModel::noCandidateCount() const

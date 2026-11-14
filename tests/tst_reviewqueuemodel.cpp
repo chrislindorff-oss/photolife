@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QSignalSpy>
 
 #include <QDir>
 #include <QSortFilterProxyModel>
@@ -26,6 +27,7 @@ private slots:
     void searchTextRoleCombinesNameFolderAndGuess();
     void proxyFilterNarrowsTheQueue();
     void hasCandidateRoleDistinguishesNoMatchFromPendingMatch();
+    void dropCapturesRemovesSeveralAtOnce();
 
 private:
     QTemporaryDir m_tmp;
@@ -157,6 +159,21 @@ void TestReviewQueueModel::hasCandidateRoleDistinguishesNoMatchFromPendingMatch(
     QVERIFY(!m_model->index(unmatched).data(ReviewQueueModel::HasCandidateRole).toBool());
 
     QCOMPARE(m_model->noCandidateCount(), 1);
+}
+
+void TestReviewQueueModel::dropCapturesRemovesSeveralAtOnce()
+{
+    const int before = m_model->rowCount();
+    const qint64 a = m_model->index(rowFor(QStringLiteral("Anglesea 1-1-2020"))).data(ReviewQueueModel::CaptureIdRole).toLongLong();
+    const qint64 b = m_model->index(rowFor(QStringLiteral("Grampians"))).data(ReviewQueueModel::CaptureIdRole).toLongLong();
+    QVERIFY(a > 0 && b > 0);
+    QSignalSpy resets(m_model.get(), &QAbstractItemModel::modelReset);
+    m_model->dropCaptures({a, b});
+    QCOMPARE(resets.count(), 1);   // one reset, not one per photo
+    QCOMPARE(m_model->rowCount(), before - 2);
+    QCOMPARE(rowFor(QStringLiteral("Anglesea 1-1-2020")), -1);
+    QCOMPARE(rowFor(QStringLiteral("Grampians")), -1);
+    QVERIFY(rowFor(QStringLiteral("scribble note")) >= 0);
 }
 
 QTEST_MAIN(TestReviewQueueModel)

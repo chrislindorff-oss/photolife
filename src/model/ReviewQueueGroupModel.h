@@ -8,8 +8,9 @@
 namespace pl::model {
 
 // A two-level tree over the flat review queue (usually a QSortFilterProxyModel
-// on ReviewQueueModel): captures that share a display name are gathered under a
-// collapsible group row; a name with only one capture stays a plain top-level
+// on ReviewQueueModel): captures that share a key -- their display name, the
+// engine's guess, or their folder and day (setGroupBy) -- are gathered under a
+// collapsible group row; a key with only one capture stays a plain top-level
 // row. Leaf rows forward every role straight through to the source, so the
 // existing ReviewQueueModel::Roles keep working; group rows carry a "Name (n)"
 // label and the first member's thumbnail.
@@ -21,7 +22,16 @@ class ReviewQueueGroupModel : public QAbstractItemModel
     Q_OBJECT
 
 public:
+    enum class GroupBy {
+        DisplayName,     // same name (file or folder name)
+        Guess,           // same engine guess, for confirming many together
+        FolderAndDate,   // same folder and day taken, for photos with no guess
+    };
+
     explicit ReviewQueueGroupModel(QObject *parent = nullptr);
+
+    void setGroupBy(GroupBy groupBy);
+    GroupBy groupBy() const { return m_groupBy; }
 
     void setSourceModel(QAbstractItemModel *source);
     QAbstractItemModel *sourceModel() const { return m_source; }
@@ -37,8 +47,13 @@ public:
     // True for a top-level row that stands for >1 capture (has an expander).
     bool isGroup(const QModelIndex &index) const;
 
-    // The display name behind any row (group header, grouped leaf, or lone row).
+    // The grouping key behind any row (group header, grouped leaf, or lone
+    // row): the display name, the guess, or "folder|yyyy-MM-dd".
     QString groupName(const QModelIndex &index) const;
+
+    // Every capture leaf under a group header (the row itself for a lone row
+    // or a leaf).
+    QModelIndexList groupMembers(const QModelIndex &index) const;
 
     // Flat walk of every capture leaf, top to bottom, ignoring expansion — for
     // queue navigation (next / previous / skip).
@@ -52,7 +67,9 @@ public:
 private:
     struct Group
     {
-        QString name;
+        QString name;            // the key
+        QString label;           // what the header shows
+        QString tip;
         QList<int> sourceRows;   // >= 1; size 1 means a lone top-level row
     };
 
@@ -62,6 +79,7 @@ private:
 
     QAbstractItemModel *m_source = nullptr;
     QList<Group> m_groups;
+    GroupBy m_groupBy = GroupBy::DisplayName;
 };
 
 } // namespace pl::model
