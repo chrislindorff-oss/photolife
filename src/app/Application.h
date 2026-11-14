@@ -79,6 +79,10 @@ public:
     // `descriptorOverride`, if given, is opened instead of Settings's own
     // catalogueDescriptor() -- e.g. a caller that bailed out of a stalled
     // Postgres connect to open the local catalogue instead.
+    // Whether start-up may ask things (where to keep a catalogue backup, what
+    // to do when one fails): not for the command-line runs.
+    void setInteractive(bool interactive) { m_interactive = interactive; }
+
     bool initialize(const Database::ProgressCallback &onProgress = {},
                      std::optional<CatalogueDescriptor> descriptorOverride = {});
 
@@ -132,6 +136,9 @@ signals:
 private:
     std::unique_ptr<SecretStore> m_secrets;   // before m_settings: it outlives it
     int m_secretsMoved = 0;                   // into the keychain at this start-up
+    bool m_interactive = false;
+    // Database::BeforeUpgrade for the Local catalogue: a backup first.
+    bool backupBeforeUpgrade(const QString &connectionName, int fromVersion, int toVersion);
     QString m_secretsBackup;
     std::unique_ptr<Settings> m_settings;
     std::unique_ptr<Database> m_database;

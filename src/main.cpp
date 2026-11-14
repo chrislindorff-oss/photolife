@@ -465,6 +465,7 @@ int main(int argc, char *argv[])
     }
 
     pl::Application app;
+    app.setInteractive(interactiveGui);
     // Each callback fires between real steps (the connect attempt, then one
     // per migration) so the dialog reflects actual progress and stays
     // painted/responsive instead of freezing as a static "please wait" image

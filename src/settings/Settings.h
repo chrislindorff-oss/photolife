@@ -201,6 +201,10 @@ public:
     // library search, a trip's place, Targets.
     QStringList savedPlaces() const;
     void setSavedPlaces(const QStringList &places);
+    // Where the local catalogue is backed up before an upgrade; empty: not
+    // chosen yet (asked the first time one is due).
+    QString catalogueBackupFolder() const;
+    void setCatalogueBackupFolder(const QString &folder);
     QStringList lifeListHiddenColumns() const;
     void setLifeListHiddenColumns(const QStringList &keys);
     bool lifeListThumbnails() const;

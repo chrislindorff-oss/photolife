@@ -25,6 +25,13 @@ public:
     // keep a "please wait" UI honest instead of it looking frozen.
     using ProgressCallback = std::function<void(const QString &)>;
 
+    // Called by open() before it upgrades an existing catalogue (pending
+    // migrations, schema above 0), with the connection open: e.g. to back
+    // it up. Returning false stops the upgrade -- open() then fails and the
+    // catalogue is left as it was, still openable by the older version.
+    using BeforeUpgrade = std::function<bool(const QString &connectionName, int fromVersion, int toVersion)>;
+    void setBeforeUpgrade(BeforeUpgrade hook) { m_beforeUpgrade = std::move(hook); }
+
     // Opens (creating if needed) the catalogue described by `descriptor`,
     // applies engine-specific setup (SQLite: foreign keys + WAL; Postgres:
     // host/port/credentials), then applies any pending migrations.
@@ -91,6 +98,7 @@ private:
     QString m_connectionName;
     CatalogueDescriptor m_descriptor;
     QString m_error;
+    BeforeUpgrade m_beforeUpgrade;
 };
 
 } // namespace pl

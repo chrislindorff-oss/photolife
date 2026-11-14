@@ -896,6 +896,16 @@ void Settings::setLifeListTrips(const QStringList &trips)
     m_settings.setValue(QStringLiteral("ui/lifeListTrips"), trips);
 }
 
+QString Settings::catalogueBackupFolder() const
+{
+    return m_settings.value(QStringLiteral("catalogue/backupFolder")).toString();
+}
+
+void Settings::setCatalogueBackupFolder(const QString &folder)
+{
+    m_settings.setValue(QStringLiteral("catalogue/backupFolder"), folder);
+}
+
 QStringList Settings::savedPlaces() const
 {
     return m_settings.value(QStringLiteral("places/saved")).toStringList();

@@ -21,6 +21,7 @@ qt_add_library(photolife_core STATIC
     coverage/LifeList.h coverage/LifeList.cpp
     coverage/SeenTally.h coverage/SeenTally.cpp
     db/Database.h           db/Database.cpp
+    db/CatalogueBackup.h    db/CatalogueBackup.cpp
     db/PostgresConnectionMonitor.h db/PostgresConnectionMonitor.cpp
     geo/Distance.h
     geo/GeoBox.h            geo/GeoBox.cpp

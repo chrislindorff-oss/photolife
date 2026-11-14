@@ -344,6 +344,13 @@ bool Database::applyPendingMigrations(const ProgressCallback &onProgress)
             ++pendingCount;
     }
 
+    // An existing catalogue about to change: the caller's say first (a backup).
+    if (pendingCount > 0 && current > 0 && m_beforeUpgrade
+        && !m_beforeUpgrade(m_connectionName, current, migrations.last().version))
+        return fail(QStringLiteral("The catalogue wasn't upgraded from version %1: no backup could be made")
+                        .arg(current),
+                    {});
+
     for (const Migration &migration : migrations) {
         if (migration.version <= current)
             continue;

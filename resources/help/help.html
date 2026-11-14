@@ -1415,6 +1415,17 @@ password (see <a href="#files">Where PhotoLife keeps things</a>).</p>
 live in your user data folder (<tt>~/.local/share/PhotoLife</tt> on Linux,
 <tt>%LOCALAPPDATA%\PhotoLife</tt> on Windows). Deleting that folder resets PhotoLife
 without affecting a single photo in your library.</p>
+<p><b>Catalogue backups</b> &mdash; when a new version of PhotoLife needs to upgrade your
+catalogue (after which older versions can't open it), it backs the catalogue up first.
+The first time, it asks for a folder to keep these backups in (another drive is
+safest); press Cancel and they go beside the catalogue, in a <tt>backups</tt> folder,
+and you're asked again next time. The last 10 are kept; older ones are removed, and
+nothing else in the folder is ever touched. If a backup can't be made, the catalogue
+isn't upgraded: choose another folder, or quit and keep using the previous version.
+<b>Library &rarr; Catalogue Backup Folder&hellip;</b> shows where they go and changes it.
+To go back to a backup, quit PhotoLife and copy it over <tt>catalogue.db</tt> (it's a
+copy of the catalogue as it was). Server catalogues' working copies aren't backed up:
+they can be fetched again from the server.</p>
 <p><b>Passwords and tokens</b> &mdash; your iNaturalist token, server catalogue
 passwords, and the photo storage's secret key and Google Drive sign-in &mdash; are kept
 in the system keychain (GNOME Keyring or KWallet on Linux, Credential Manager on

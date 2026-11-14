@@ -1,6 +1,11 @@
 #include "app/Application.h"
 
 #include "settings/SecretStore.h"
+#include "db/CatalogueBackup.h"
+
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QPushButton>
 #include "app/StorageStats.h"
 #include <QtConcurrent>
 
@@ -42,6 +47,56 @@
 namespace pl {
 
 Application::Application() = default;
+
+bool Application::backupBeforeUpgrade(const QString &connectionName, int fromVersion, int toVersion)
+{
+    const QString fallback =
+        QDir(QFileInfo(m_settings->databasePath()).absolutePath()).filePath(QStringLiteral("backups"));
+    QString folder = m_settings->catalogueBackupFolder();
+    if (folder.isEmpty() && m_interactive) {
+        // The first time: where to keep them. Cancel: beside the catalogue,
+        // and asked again next time.
+        QMessageBox::information(nullptr, QObject::tr("Back Up the Catalogue"),
+                                 QObject::tr("This version of PhotoLife upgrades your catalogue, after which older "
+                                             "versions can't open it. A backup of it is made first.\n\nChoose a "
+                                             "folder for catalogue backups (another drive is safest). The last 10 "
+                                             "are kept."));
+        folder = QFileDialog::getExistingDirectory(nullptr, QObject::tr("Folder for Catalogue Backups"), fallback);
+        if (!folder.isEmpty())
+            m_settings->setCatalogueBackupFolder(folder);
+    }
+    if (folder.isEmpty())
+        folder = fallback;
+    for (;;) {
+        const CatalogueBackupResult r = backupCatalogue(connectionName, folder, fromVersion, toVersion);
+        if (r.ok) {
+            qInfo() << "Catalogue backed up before upgrading from v" << fromVersion << "to v" << toVersion << ":"
+                    << r.path << (r.removed.isEmpty() ? QString() : QStringLiteral("(%1 older removed)").arg(r.removed.size()));
+            return true;
+        }
+        qWarning() << "Catalogue backup to" << folder << "failed:" << r.error;
+        if (!m_interactive)
+            return false;
+        // Stop and say so: not upgraded, so the older PhotoLife still opens it.
+        QMessageBox box(QMessageBox::Warning, QObject::tr("Back Up the Catalogue"),
+                        QObject::tr("The catalogue couldn't be backed up to \u201c%1\u201d (%2), so it hasn't been "
+                                    "upgraded. Choose another folder, or quit: the previous version of PhotoLife can "
+                                    "still open it.")
+                            .arg(QDir::toNativeSeparators(folder), r.error),
+                        QMessageBox::NoButton);
+        QPushButton *other = box.addButton(QObject::tr("Choose Another Folder…"), QMessageBox::AcceptRole);
+        box.addButton(QObject::tr("Quit"), QMessageBox::RejectRole);
+        box.exec();
+        if (box.clickedButton() != other)
+            return false;
+        const QString chosen =
+            QFileDialog::getExistingDirectory(nullptr, QObject::tr("Folder for Catalogue Backups"), folder);
+        if (!chosen.isEmpty()) {
+            folder = chosen;
+            m_settings->setCatalogueBackupFolder(folder);
+        }
+    }
+}
 
 Application::~Application()
 {
@@ -95,6 +150,12 @@ bool Application::initialize(const Database::ProgressCallback &onProgress,
     m_database = std::make_unique<Database>();
     const CatalogueDescriptor descriptor =
         descriptorOverride ? *descriptorOverride : m_settings->catalogueDescriptor();
+    // The Local catalogue is backed up before an upgrade changes it (a
+    // server's working copy can be fetched again).
+    if (descriptor.backend == CatalogueDescriptor::Backend::Sqlite && !m_settings->activeProfile().server)
+        m_database->setBeforeUpgrade([this](const QString &connection, int from, int to) {
+            return backupBeforeUpgrade(connection, from, to);
+        });
     if (!m_database->open(descriptor, onProgress)) {
         qCritical() << "Could not open catalogue database:" << m_database->error();
         return false;

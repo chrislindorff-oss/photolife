@@ -93,6 +93,7 @@
 #include "ui/ReviewPane.h"
 #include "ui/TodoFilterBar.h"
 #include "settings/SecretStore.h"
+#include "db/CatalogueBackup.h"
 #include "geo/SavedPlaces.h"
 #include "inat/RunSuggester.h"
 #include "ui/InatTokenGetter.h"
@@ -1115,6 +1116,35 @@ void MainWindow::buildLibraryMenu(QMenu *libraryMenu)
 
     m_importLightroomAction = libraryMenu->addAction(tr("Import &Lightroom Catalog…"),
                                                      this, &MainWindow::importLightroom);
+
+    // Where the catalogue is backed up before an upgrade changes it.
+    libraryMenu->addAction(tr("Catalogue &Backup Folder…"), this, [this] {
+        Settings &settings = m_app.settings();
+        const QString fallback =
+            QDir(QFileInfo(settings.databasePath()).absolutePath()).filePath(QStringLiteral("backups"));
+        const QString current = settings.catalogueBackupFolder();
+        const QString shown = current.isEmpty() ? fallback : current;
+        const int kept = int(catalogueBackups(shown).size());
+        QMessageBox box(QMessageBox::Information, tr("Catalogue Backup Folder"),
+                        tr("Before a new version upgrades the catalogue, a backup of it is made in:\n\n%1\n\n"
+                           "%n backup(s) there now; the last 10 are kept.%2",
+                           nullptr, kept)
+                            .arg(QDir::toNativeSeparators(shown),
+                                 current.isEmpty() ? tr("\n\n(Not chosen yet: you'll be asked at the next upgrade.)")
+                                                   : QString()),
+                        QMessageBox::Close, this);
+        QPushButton *change = box.addButton(tr("Change…"), QMessageBox::AcceptRole);
+        QPushButton *open = box.addButton(tr("Show Folder"), QMessageBox::ActionRole);
+        open->setEnabled(QFileInfo(shown).isDir());
+        box.exec();
+        if (box.clickedButton() == open) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(shown));
+        } else if (box.clickedButton() == change) {
+            const QString chosen = QFileDialog::getExistingDirectory(this, tr("Folder for Catalogue Backups"), shown);
+            if (!chosen.isEmpty())
+                settings.setCatalogueBackupFolder(chosen);
+        }
+    });
 
     libraryMenu->addSeparator();
     m_scanAction = libraryMenu->addAction(tr("&Rescan Library"), this, &MainWindow::startScan);
