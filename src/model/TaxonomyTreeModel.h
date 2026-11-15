@@ -187,6 +187,7 @@ private:
     QHash<qint64, Node *> m_byId;           // live nodes by iNat id, rebuilt each rebuild()
     pl::coverage::ProjectCoverage m_coverage;
     QSet<qint64> m_markedSeen;                         // hand ticks (SeenStore)
+    QSet<qint64> m_unsortedOnly;   // photographed only in Unsorted folders
     QHash<qint64, pl::coverage::SeenState> m_seen;     // rolled up over m_flat
     std::function<bool()> m_editGuard;
     QHash<qint64, QPair<int, int>> m_filterCounts;   // inat id -> (with photos, total) under the filter

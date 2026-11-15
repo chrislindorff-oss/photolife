@@ -145,6 +145,9 @@ void CaptureDelegate::paint(QPainter *painter, const QStyleOptionViewItem &optio
         badges << QStringLiteral("GEO");
     if (isOnlineOnly(index.data(model::CaptureListModel::PreviewPathRole).toString()))
         badges << QStringLiteral("ONLINE");
+    // In an Unsorted folder, standing for a run of shots.
+    if (const int run = index.data(model::CaptureListModel::RunSizeRole).toInt(); run > 1)
+        badges << QStringLiteral("\u00d7%1").arg(run);
 
     if (!badges.isEmpty()) {
         QFont font = painter->font();

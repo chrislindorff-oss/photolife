@@ -1449,6 +1449,34 @@ take. Everyone chooses for themselves; it changes nothing for the others.</p>
 download in full. The secret key is kept in your system keychain, like the catalogue
 password (see <a href="#files">Where PhotoLife keeps things</a>).</p>
 
+<h2 id="unsorted">Unsorted folders</h2>
+<p>Folders of runs of shots you haven't culled yet can make up much of a library, though most of
+those shots will be deleted. Mark such a folder <b>Unsorted</b> (<b>Library &rarr; Manage
+Library Folders&hellip; &rarr; Mark a Folder Unsorted&hellip;</b>, or, while organising it,
+<b>Organise &rarr; Mark This Folder Unsorted</b>; its subfolders count too) and PhotoLife keeps
+one photo of each run in the catalogue &mdash; the middle shot of each burst of the same
+subject, shots up to 10 seconds apart &mdash; and only remembers the others. A kept photo shows
+<b>&times;</b> and the size of its run, e.g. <b>&times;37</b>.</p>
+<ul>
+  <li>Its species still count, on the reference trees and the life list. A species seen only in
+      Unsorted folders is shown in <i>italics</i> on the tree (its tooltip says so), and as
+      &ldquo;<i>12, unsorted</i>&rdquo; in the life list's Photos column.</li>
+  <li>Rescans skip the remembered shots, and matching and Review deal with one photo per run.</li>
+  <li>Photos you've decided something about &mdash; named, rejected, starred, a cover photo, on
+      iNaturalist or marked on or not on it &mdash; always stay catalogued.</li>
+  <li>Culling in Organise works as usual (it shows every file). Shots you delete are forgotten at
+      the next rescan; if a run's kept photo is deleted, another of its shots takes its place, so
+      the species stays.</li>
+  <li>Unsorted photos aren't offered in <b>To upload</b> or checked by <b>Already on
+      iNaturalist?</b>: cull and sort first.</li>
+  <li><b>Mark as Sorted</b> (or <b>Mark This Folder Sorted</b>) catalogues and matches every photo
+      there again.</li>
+</ul>
+<p>No file is ever changed or deleted by any of this; only the catalogue's entries are.</p>
+<p>Rescans also read each RAW photo's own time once (Nikon's embedded previews often don't have
+it), so photos are dated to the second; a file name's date keeps the day, and the camera's
+time is kept when it's on that day.</p>
+
 <h2 id="files">Where PhotoLife keeps things</h2>
 <p>The catalogue database, thumbnail cache, reference-photo cache and map-tile cache
 live in your user data folder (<tt>~/.local/share/PhotoLife</tt> on Linux,

@@ -1,5 +1,7 @@
 #include "coverage/LifeList.h"
 
+#include "scan/UnsortedFolders.h"
+
 #include "taxonomy/TaxonomyStore.h"
 
 #include <QHash>
@@ -273,6 +275,9 @@ QList<LifeListEntry> loadLifeList(const QString &connectionName, int projectId, 
             }
         }
     }
+    const QSet<qint64> unsorted = scan::Unsorted::unsortedOnlyTaxa(connectionName);
+    for (LifeListEntry &e : entries)
+        e.unsortedOnly = unsorted.contains(e.inatId);
     return entries;
 }
 

@@ -93,6 +93,7 @@
 #include "ui/ReviewPane.h"
 #include "ui/TodoFilterBar.h"
 #include "ui/InatPresencePage.h"
+#include "scan/UnsortedFolders.h"
 #include "inat/InatPresence.h"
 #include "ui/StackSizing.h"
 #include "ui/FlowLayout.h"
@@ -1435,6 +1436,52 @@ void MainWindow::buildOrganiseMenu(QMenu *menu)
     menu->addAction(tr("&Undo Organise…"), this, [this] {
         m_viewOrganiseAction->setChecked(true);
         m_organiseView->undoLast();
+    });
+    // The folder being organised: Unsorted (one photo per run catalogued) or not.
+    menu->addSeparator();
+    QAction *unsorted = menu->addAction(tr("Mark This Folder Unsorted"));
+    unsorted->setToolTip(tr("Unculled runs of shots: one photo of each run is kept in the catalogue (so its species "
+                            "count), the others only remembered. Library → Manage Library Folders lists them."));
+    connect(unsorted, &QAction::triggered, this, [this] {
+        const QString folder = m_organiseView ? QDir::cleanPath(m_organiseView->folder()) : QString();
+        if (folder.isEmpty() || !ensureCanEdit())
+            return;
+        const QString conn = m_app.database().connectionName();
+        if (scan::Unsorted::contains(scan::Unsorted::folders(conn), folder)) {
+            if (QMessageBox::question(this, tr("Mark This Folder Sorted"),
+                                      tr("Catalogue (and match) every photo in \u201c%1\u201d again?")
+                                          .arg(QDir::toNativeSeparators(folder)))
+                != QMessageBox::Yes)
+                return;
+            scan::Unsorted::unmark(conn, folder);
+            addFolderAndMatch(folder, {});
+            return;
+        }
+        if (QMessageBox::question(this, tr("Mark This Folder Unsorted"),
+                                  tr("Mark \u201c%1\u201d Unsorted? One photo per run of shots stays in the catalogue; "
+                                     "the others are only remembered (photos you've named, starred, uploaded or "
+                                     "marked are kept). No file is changed.")
+                                      .arg(QDir::toNativeSeparators(folder)))
+            != QMessageBox::Yes)
+            return;
+        const scan::Unsorted::ThinResult r = scan::Unsorted::mark(conn, folder);
+        if (!r.ok) {
+            QMessageBox::warning(this, tr("Mark This Folder Unsorted"), tr("Couldn't mark it: %1").arg(r.error));
+            return;
+        }
+        m_model->reload();
+        m_taxonModel->reload();
+        refreshCoverage();
+        statusBar()->showMessage(tr("%1 photos in %2 runs: %3 kept in the catalogue, %4 only remembered.")
+                                     .arg(r.photos).arg(r.runs).arg(r.kept).arg(r.removed),
+                                 10000);
+    });
+    connect(menu, &QMenu::aboutToShow, this, [this, unsorted] {
+        const QString folder = m_organiseView ? QDir::cleanPath(m_organiseView->folder()) : QString();
+        const bool marked = !folder.isEmpty()
+                            && scan::Unsorted::contains(scan::Unsorted::folders(m_app.database().connectionName()), folder);
+        unsorted->setEnabled(!folder.isEmpty() && folder != QStringLiteral("."));
+        unsorted->setText(marked ? tr("Mark This Folder Sorted") : tr("Mark This Folder Unsorted"));
     });
 }
 
@@ -6825,6 +6872,10 @@ void MainWindow::manageLibraryFolders()
     }
 
     LibraryFoldersDialog dialog(m_app, this);
+    // Sorted: everything there is catalogued and matched again, once the
+    // dialog is closed.
+    QStringList sorted;
+    connect(&dialog, &LibraryFoldersDialog::folderSorted, this, [&sorted](const QString &folder) { sorted << folder; });
     connect(&dialog, &LibraryFoldersDialog::librariesChanged, this, [this] {
         m_app.libraryWatcher().refresh();
         m_model->reload();
@@ -6838,6 +6889,8 @@ void MainWindow::manageLibraryFolders()
         statusBar()->showMessage(tr("Library folders updated."), 6000);
     });
     dialog.exec();
+    for (const QString &folder : std::as_const(sorted))
+        addFolderAndMatch(folder, {});
 }
 
 void MainWindow::startScan()

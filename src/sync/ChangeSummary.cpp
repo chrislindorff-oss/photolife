@@ -165,6 +165,11 @@ const Spec kSpecs[] = {
      "SELECT CASE m.status WHEN 'on_inat' THEN 'on iNaturalist' WHEN 'not_on_inat' THEN 'not on iNaturalist' "
      "  ELSE 'maybe on iNaturalist' END || ' — ' || " PHOTO("c") " "
      "FROM main.capture_inat_status m JOIN main.capture c ON c.id = m.capture_id WHERE m.capture_id IN ({ADDED})"},
+    {"unsorted_folder", "unsortedFolders", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Unsorted folders"), false,
+     "SELECT m.path || ' marked Unsorted' FROM main.unsorted_folder m WHERE m.path IN ({ADDED})", nullptr,
+     "SELECT b.path || ' no longer Unsorted' FROM base.unsorted_folder b WHERE b.path IN ({REMOVED})"},
+    {"unsorted_photo", "unsortedPhotos",
+     QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Shots in Unsorted folders (remembered, not catalogued)"), true},
     {"inat_my_observation", "inatObservations",
      QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Your iNaturalist observations (details, for checks)"), true},
     {"rendition", "photoFiles", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Photo files (scan details)"), true},

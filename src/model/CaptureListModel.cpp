@@ -3,6 +3,8 @@
 #include "geo/SavedPlaces.h"
 
 #include "db/Database.h"
+
+#include <QCoreApplication>
 #include "thumb/ThumbnailCache.h"
 
 #include <QPainter>
@@ -121,6 +123,7 @@ QHash<int, QByteArray> CaptureListModel::roleNames() const
         {MatchStatusRole, "matchStatus"},
         {MatchedNameRole, "matchedName"},
         {MatchedCommonNameRole, "matchedCommonName"},
+        {RunSizeRole, "runSize"},
         {DisplayNameRole, "displayName"},
         {ExtRole, "ext"},
         {HasGpsRole, "hasGps"},
@@ -180,6 +183,11 @@ QVariant CaptureListModel::data(const QModelIndex &index, int role) const
                                 .arg(row.latitude, 0, 'f', 5)
                                 .arg(row.longitude, 0, 'f', 5)
                           : QStringLiteral("\nGPS: no");
+        if (row.runExtra > 0)
+            tip += QCoreApplication::translate("pl::model::CaptureListModel",
+                                               "\nUnsorted: 1 of %1 shots in this run (the others aren't catalogued "
+                                               "until the folder is sorted)")
+                       .arg(row.runExtra + 1);
         return tip;
     }
     case Qt::DecorationRole: {
@@ -224,6 +232,8 @@ QVariant CaptureListModel::data(const QModelIndex &index, int role) const
         return row.matchedTaxonInatId;
     case PreviewIsRawRole:
         return row.previewIsRaw;
+    case RunSizeRole:
+        return row.runExtra > 0 ? row.runExtra + 1 : 0;
     case MatchedCommonNameRole:
         return row.matchedCommonName;
     default:
@@ -328,7 +338,9 @@ QString CaptureListModel::todoClause(int flags)
         // (Already on iNaturalist?, or by hand).
         any << named + QStringLiteral(" AND latitude IS NOT NULL AND longitude IS NOT NULL "
                                       "AND inat_observation_id IS NULL AND NOT EXISTS (SELECT 1 FROM "
-                                      "capture_inat_status s WHERE s.capture_id = id AND s.status = 'on_inat')");
+                                      "capture_inat_status s WHERE s.capture_id = id AND s.status = 'on_inat') "
+                                      // Unsorted folders: culled and sorted first.
+                                      "AND NOT in_unsorted");
     if (flags & TodoNoLocation)
         any << QStringLiteral("latitude IS NULL OR longitude IS NULL");
     if (flags & TodoNotInTree)
@@ -563,7 +575,7 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             "SELECT id, base_name, name_text, captured_on, date_source, path, preview_path, "
             "       preview_hash, match_status, matched_name, preview_ext, latitude, longitude, "
             "       is_best_shot, locality, matched_taxon_inat_id, preview_kind, "
-            "       matched_common_name "
+            "       matched_common_name, run_extra "
             "FROM ("
             "  SELECT c.id, c.base_name, c.name_text, c.captured_on, c.date_source, f.path, "
             "    (SELECT r.path FROM rendition r WHERE r.capture_id = c.id "
@@ -574,6 +586,9 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             "       ORDER BY (r.kind = 'raw'), r.id LIMIT 1) AS preview_ext, "
             "    m.status AS match_status, m.taxon_id AS matched_id, t.name AS matched_name, "
             "    c.latitude, c.longitude, c.inat_observation_id, "
+            "    EXISTS (SELECT 1 FROM unsorted_folder uf WHERE f.path = uf.path "
+            "            OR substr(f.path, 1, length(uf.path) + 1) = uf.path || '/') AS in_unsorted, "
+            "    (SELECT COUNT(DISTINCT u.base_name) FROM unsorted_photo u WHERE u.capture_id = c.id) AS run_extra, "
             "    EXISTS(SELECT 1 FROM best_shot bs WHERE bs.capture_id = c.id) AS is_best_shot, "
             "    g.locality AS locality, t.inat_id AS matched_taxon_inat_id, "
             "    (SELECT r.kind FROM rendition r WHERE r.capture_id = c.id "
@@ -637,6 +652,7 @@ QList<CaptureListModel::Row> CaptureListModel::fetchRows(QSqlDatabase db,
             row.matchedTaxonInatId = q.value(15).toLongLong();
             row.previewIsRaw = q.value(16).toString() == QLatin1String("raw");
             row.matchedCommonName = q.value(17).toString();
+            row.runExtra = q.value(18).toInt();
 
             rows.append(std::move(row));
         }

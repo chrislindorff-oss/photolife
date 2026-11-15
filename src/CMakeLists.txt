@@ -104,6 +104,7 @@ qt_add_library(photolife_core STATIC
     scan/CaptureRenamer.h scan/CaptureRenamer.cpp
     scan/LibraryRenamer.h scan/LibraryRenamer.cpp
     scan/CatalogueWriter.h  scan/CatalogueWriter.cpp
+    scan/UnsortedFolders.h  scan/UnsortedFolders.cpp
     scan/Exif.h             scan/Exif.cpp
     scan/FileScanner.h      scan/FileScanner.cpp
     scan/FilenameParser.h   scan/FilenameParser.cpp
@@ -328,6 +329,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/024_capture_camera.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/025_inat_presence.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/026_inat_time_entered.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/sqlite/027_unsorted_folders.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/001_initial.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/002_taxonomy.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/003_matching.sql"
@@ -354,6 +356,7 @@ qt_add_resources(photolife_core "photolife_migrations"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/024_capture_camera.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/025_inat_presence.sql"
         "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/026_inat_time_entered.sql"
+        "${CMAKE_SOURCE_DIR}/resources/migrations/postgres/027_unsorted_folders.sql"
 )
 
 qt_add_resources(photolife_core "photolife_help"

@@ -357,7 +357,10 @@ QList<PresencePhoto> photosToCheck(const QString &connectionName)
             "JOIN taxon t ON t.id = m.taxon_id "
             "WHERE m.status IN ('auto', 'confirmed') AND c.inat_observation_id IS NULL "
             "  AND NOT EXISTS (SELECT 1 FROM capture_inat_status s WHERE s.capture_id = c.id "
-            "                  AND s.status IN ('on_inat', 'not_on_inat'))")))
+            "                  AND s.status IN ('on_inat', 'not_on_inat')) "
+            // Unsorted folders: culled and sorted first.
+            "  AND NOT EXISTS (SELECT 1 FROM folder f JOIN unsorted_folder uf ON f.path = uf.path "
+            "     OR substr(f.path, 1, length(uf.path) + 1) = uf.path || '/' WHERE f.id = c.folder_id)")))
         return out;
     while (q.next()) {
         PresencePhoto p;

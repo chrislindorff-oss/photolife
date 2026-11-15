@@ -1,5 +1,7 @@
 #include "model/TaxonomyTreeModel.h"
 
+#include "scan/UnsortedFolders.h"
+
 #include "catalogue/SeenStore.h"
 #include "db/Database.h"
 #include "taxonomy/TaxonomyStore.h"
@@ -96,6 +98,7 @@ void TaxonomyTreeModel::emitSeenDataChanged(const QModelIndex &parent)
 void TaxonomyTreeModel::setCoverage(const pl::coverage::ProjectCoverage &coverage)
 {
     m_coverage = coverage;
+    m_unsortedOnly = scan::Unsorted::unsortedOnlyTaxa(m_db.connectionName());
     recomputeSeen();
     if (m_photographedOnly || m_threatenedOnly || m_introducedOnly || !m_statusFilter.isEmpty()
         || m_coverageFilter != CoverageFilter::All) {
@@ -527,9 +530,11 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
     case Qt::TextAlignmentRole:
         return index.column() == 2 ? int(Qt::AlignCenter) : QVariant();
     case Qt::FontRole:
-        if (index.column() == 0 && t.isLeafRank && t.inRegion) {
+        if (index.column() == 0 && t.isLeafRank && (t.inRegion || m_unsortedOnly.contains(t.inatId))) {
             QFont f;
-            f.setBold(true);
+            f.setBold(t.inRegion);
+            // Photographed only in Unsorted folders: italic.
+            f.setItalic(m_unsortedOnly.contains(t.inatId));
             return f;
         }
         return {};
@@ -571,6 +576,8 @@ QVariant TaxonomyTreeModel::data(const QModelIndex &index, int role) const
             if (cov->introduced)
                 bits << tr("Introduced");
         }
+        if (m_unsortedOnly.contains(t.inatId))
+            bits << tr("Photographed only in Unsorted folders (not culled yet)");
         return bits.isEmpty() ? QVariant() : bits.join(QStringLiteral(" · "));
     }
     case InatIdRole:

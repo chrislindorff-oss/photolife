@@ -2,6 +2,7 @@
 
 #include "db/Database.h"
 #include "raw/RawPreview.h"
+#include "scan/UnsortedFolders.h"
 #include "scan/Exif.h"
 #include "scan/FilenameParser.h"
 
@@ -232,7 +233,17 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
 
     const QString now = isoNow();
 
-    for (const DiscoveredCapture &cap : captures) {
+    // Unsorted folders: one photo per run is catalogued; the rest are only
+    // remembered (unsorted_photo). Files remembered already and unchanged
+    // are skipped here, with no further work; a new run sends just its
+    // representative on to be catalogued below.
+    const UnsortedPlan unsorted = planUnsorted(captures, roots);
+    if (!unsorted.error.isEmpty())
+        return bail(unsorted.error);
+    summary.renditionsUnchanged += unsorted.skippedFiles;
+    const QList<DiscoveredCapture> &work = unsorted.active ? unsorted.work : captures;
+
+    for (const DiscoveredCapture &cap : work) {
         if (cancelled()) {
             summary.cancelled = true;
             break;
@@ -251,7 +262,7 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
         // Upsert the capture row (date filled in after the renditions are probed).
         QSqlQuery findCap(db);
         findCap.prepare(QStringLiteral(
-            "SELECT id FROM capture WHERE folder_id = ? AND base_name = ?"));
+            "SELECT id, captured_on, time_checked FROM capture WHERE folder_id = ? AND base_name = ?"));
         findCap.addBindValue(folderId);
         findCap.addBindValue(cap.baseName);
         if (!findCap.exec())
@@ -259,6 +270,9 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
 
         int captureId = -1;
         bool captureExisted = findCap.next();
+        // What it has already (a renamed photo's files are read again anyway).
+        const QString storedOn = captureExisted ? findCap.value(1).toString() : QString();
+        const bool timeChecked = captureExisted && findCap.value(2).toInt() != 0;
         if (!captureExisted) {
             // A rename changes both the rendition path and capture stem. Reuse
             // the old capture when its file is gone but its content hash is
@@ -463,24 +477,56 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             }
         }
 
-        // Reconcile the capture date: a filename date always wins; EXIF is the
-        // fallback (film-era scans have a scan-date EXIF but a correct filename).
+        // No time from the files read just now, and none stored: look once
+        // for the camera's clock time -- a RAW's own metadata (its embedded
+        // preview's EXIF often has no date), or a JPEG's EXIF.
+        QDateTime fileTime = earliestExif;
+        bool checkedNow = false;
+        if (!fileTime.isValid() && !timeChecked && storedOn.size() <= 10 && !summary.cancelled) {
+            for (const DiscoveredFile &file : cap.files) {
+                if (file.isRaw)
+                    fileTime = raw::readInfo(file.path).taken;
+                else if (file.ext == QLatin1String("jpg") || file.ext == QLatin1String("jpeg")
+                         || file.ext == QLatin1String("jpe"))
+                    fileTime = readJpegExif(file.path).dateTimeOriginal;
+                if (fileTime.isValid())
+                    break;
+            }
+            checkedNow = true;
+        }
+        // A time already stored, when nothing newer was read.
+        const QDateTime storedTime = storedOn.size() > 10 ? QDateTime::fromString(storedOn, Qt::ISODate) : QDateTime();
+        const QDateTime knownTime = fileTime.isValid() ? fileTime : storedTime;
+
+        // Reconcile the capture date: a filename date always wins (film-era
+        // scans have a scan-date EXIF but a correct filename); the camera's
+        // time is kept when it's on that day, and is the date otherwise.
         QString capturedOn;
         QString dateSource = QStringLiteral("none");
         if (parsed.capturedOn.isValid()) {
-            capturedOn = parsed.capturedOn.toString(Qt::ISODate);
-            dateSource = QStringLiteral("filename");
-        } else if (earliestExif.isValid()) {
-            capturedOn = earliestExif.toString(Qt::ISODate);
+            if (knownTime.isValid() && knownTime.date() == parsed.capturedOn) {
+                capturedOn = knownTime.toString(Qt::ISODate);
+                dateSource = QStringLiteral("exif");
+            } else {
+                capturedOn = parsed.capturedOn.toString(Qt::ISODate);
+                dateSource = QStringLiteral("filename");
+            }
+        } else if (fileTime.isValid()) {
+            capturedOn = fileTime.toString(Qt::ISODate);
             dateSource = QStringLiteral("exif");
         }
 
-        if (!capturedOn.isEmpty() || !captureExisted) {
+        if (!capturedOn.isEmpty() || !captureExisted || checkedNow) {
             QSqlQuery setDate(db);
-            setDate.prepare(QStringLiteral(
-                "UPDATE capture SET captured_on = ?, date_source = ? WHERE id = ?"));
-            setDate.addBindValue(capturedOn.isEmpty() ? QVariant() : capturedOn);
-            setDate.addBindValue(dateSource);
+            if (!capturedOn.isEmpty() || !captureExisted) {
+                setDate.prepare(QStringLiteral(
+                    "UPDATE capture SET captured_on = ?, date_source = ?, time_checked = ? WHERE id = ?"));
+                setDate.addBindValue(capturedOn.isEmpty() ? QVariant() : capturedOn);
+                setDate.addBindValue(dateSource);
+            } else {
+                setDate.prepare(QStringLiteral("UPDATE capture SET time_checked = ? WHERE id = ?"));
+            }
+            setDate.addBindValue(timeChecked || checkedNow || earliestExif.isValid() ? 1 : 0);
             setDate.addBindValue(captureId);
             if (!setDate.exec())
                 return bail(setDate.lastError().text());
@@ -522,11 +568,263 @@ ScanSummary CatalogueWriter::sync(const QList<DiscoveredCapture> &captures,
             m_progress(m_stats);
     }
 
+    if (unsorted.active && !summary.cancelled) {
+        if (const QString error = rememberUnsorted(unsorted); !error.isEmpty())
+            return bail(error);
+    }
+
     if (!db.commit())
         return bail(QStringLiteral("commit failed: %1").arg(db.lastError().text()));
 
     summary.foldersUpserted = m_folderIds.size();
     return summary;
+}
+
+CatalogueWriter::UnsortedPlan CatalogueWriter::planUnsorted(const QList<DiscoveredCapture> &captures,
+                                                            const QStringList &roots)
+{
+    UnsortedPlan plan;
+    plan.folders = Unsorted::folders(m_connectionName);
+    if (plan.folders.isEmpty())
+        return plan;
+    plan.active = true;
+    plan.roots = roots;
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+
+    // What's remembered, and which photos there are catalogued.
+    struct Known
+    {
+        qint64 size = 0;
+        qint64 mtime = 0;
+        int captureId = 0;
+    };
+    QHash<QString, Known> known;
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        if (!q.exec(QStringLiteral("SELECT path, file_size, mtime, capture_id FROM unsorted_photo"))) {
+            plan.error = q.lastError().text();
+            return plan;
+        }
+        while (q.next())
+            known.insert(q.value(0).toString(), {q.value(1).toLongLong(), q.value(2).toLongLong(), q.value(3).toInt()});
+    }
+    QSet<QString> catalogued;   // "dir/base" of captures in Unsorted folders
+    QHash<int, QString> repPaths;   // representative capture -> one of its files
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        if (!q.exec(QStringLiteral("SELECT f.path, c.base_name, c.id, "
+                                   "  (SELECT r.path FROM rendition r WHERE r.capture_id = c.id ORDER BY r.id LIMIT 1) "
+                                   "FROM capture c JOIN folder f ON f.id = c.folder_id"))) {
+            plan.error = q.lastError().text();
+            return plan;
+        }
+        while (q.next()) {
+            const QString dir = q.value(0).toString();
+            if (!Unsorted::contains(plan.folders, dir))
+                continue;
+            catalogued.insert(dir + QLatin1Char('/') + q.value(1).toString());
+            repPaths.insert(q.value(2).toInt(), q.value(3).toString());
+        }
+    }
+
+    QList<DiscoveredCapture> fresh;
+    QHash<int, QList<const DiscoveredCapture *>> membersByRep;   // remembered and still there
+    for (const DiscoveredCapture &cap : captures) {
+        for (const DiscoveredFile &f : cap.files)
+            plan.seen.insert(f.path);
+        const QString dir = normalise(cap.dirPath);
+        if (!Unsorted::contains(plan.folders, dir) || catalogued.contains(dir + QLatin1Char('/') + cap.baseName)) {
+            plan.work << cap;
+            continue;
+        }
+        bool allKnown = !cap.files.isEmpty();
+        int rep = 0;
+        for (const DiscoveredFile &f : cap.files) {
+            const auto it = known.constFind(f.path);
+            if (it == known.constEnd() || it->size != f.size || it->mtime != f.mtime) {
+                allKnown = false;
+                break;
+            }
+            rep = it->captureId;
+        }
+        if (allKnown) {
+            plan.skippedFiles += int(cap.files.size());
+            membersByRep[rep] << &cap;
+            continue;
+        }
+        fresh << cap;
+    }
+
+    // A representative whose files are gone (culled) while others of its run
+    // remain: another of them takes its place, so the species stays.
+    for (auto it = membersByRep.cbegin(); it != membersByRep.cend(); ++it) {
+        const QString repFile = repPaths.value(it.key());
+        if (it.key() > 0 && !repFile.isEmpty() && plan.seen.contains(repFile))
+            continue;
+        if (it.key() > 0 && (repFile.isEmpty() || rootForDir(QFileInfo(repFile).path(), roots).isEmpty()))
+            continue;   // not in what was scanned: can't tell it's gone
+        const QList<const DiscoveredCapture *> &members = it.value();
+        const DiscoveredCapture *promoted = members.at(members.size() / 2);
+        plan.work << *promoted;
+        UnsortedPlan::Promotion promotion;
+        promotion.oldCaptureId = it.key();
+        promotion.dirPath = normalise(promoted->dirPath);
+        promotion.baseName = promoted->baseName;
+        for (const DiscoveredFile &f : promoted->files)
+            promotion.files << f.path;
+        plan.promotions << promotion;
+    }
+
+    // New photos: into runs, by when they were taken.
+    QList<RunItem> items;
+    for (const DiscoveredCapture &cap : std::as_const(fresh)) {
+        RunItem item;
+        item.group = Unsorted::groupKey(cap.dirPath, cap.baseName);
+        for (const DiscoveredFile &f : cap.files)
+            if (const QDateTime t = Unsorted::fileTime(f); t.isValid()) {
+                item.taken = t;
+                break;
+            }
+        item.day = item.taken.isValid() ? item.taken.date() : parseStem(cap.baseName).capturedOn;
+        items << item;
+    }
+    for (const QList<int> &run : groupRuns(items)) {
+        // A representative already catalogued from this run (shots added to it)?
+        const DiscoveredCapture &first = fresh.at(run.first());
+        int existing = 0;
+        {
+            QSqlQuery q(db);
+            q.prepare(QStringLiteral("SELECT c.id, c.base_name, c.captured_on FROM capture c JOIN folder f ON f.id = c.folder_id "
+                                     "WHERE f.path = ?"));
+            q.addBindValue(normalise(first.dirPath));
+            if (q.exec()) {
+                const QString group = items.at(run.first()).group;
+                while (q.next() && existing == 0) {
+                    if (Unsorted::groupKey(first.dirPath, q.value(1).toString()) != group)
+                        continue;
+                    const QString on = q.value(2).toString();
+                    const QDateTime t = on.size() > 10 ? QDateTime::fromString(on.left(19), Qt::ISODate) : QDateTime();
+                    for (int i : run) {
+                        const RunItem &it = items.at(i);
+                        const bool near = it.taken.isValid() && t.isValid()
+                                              ? std::abs(t.secsTo(it.taken)) <= kRunGapSeconds
+                                              : !it.taken.isValid() && !t.isValid()
+                                                    && QDate::fromString(on.left(10), Qt::ISODate) == it.day;
+                        if (near) {
+                            existing = q.value(0).toInt();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        const int repIndex = existing > 0 ? -1 : run.at(run.size() / 2);
+        if (repIndex >= 0)
+            plan.work << fresh.at(repIndex);
+        for (int i : run) {
+            if (i == repIndex)
+                continue;
+            const DiscoveredCapture &cap = fresh.at(i);
+            for (const DiscoveredFile &f : cap.files) {
+                UnsortedPlan::Member m;
+                m.path = f.path;
+                m.dirPath = normalise(cap.dirPath);
+                m.baseName = cap.baseName;
+                m.size = f.size;
+                m.mtime = f.mtime;
+                m.taken = items.at(i).taken.isValid() ? items.at(i).taken.toString(Qt::ISODate)
+                          : items.at(i).day.isValid() ? items.at(i).day.toString(Qt::ISODate)
+                                                      : QString();
+                m.repCaptureId = existing;
+                if (repIndex >= 0) {
+                    m.repDirPath = normalise(fresh.at(repIndex).dirPath);
+                    m.repBaseName = fresh.at(repIndex).baseName;
+                }
+                plan.members << m;
+            }
+        }
+    }
+    return plan;
+}
+
+QString CatalogueWriter::rememberUnsorted(const UnsortedPlan &plan)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_connectionName, false);
+    auto captureIdOf = [&](const QString &dirPath, const QString &baseName) {
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("SELECT c.id FROM capture c JOIN folder f ON f.id = c.folder_id "
+                                 "WHERE f.path = ? AND c.base_name = ?"));
+        q.addBindValue(dirPath);
+        q.addBindValue(baseName);
+        return q.exec() && q.next() ? q.value(0).toInt() : 0;
+    };
+    // New runs' other shots, remembered with their representative.
+    for (const UnsortedPlan::Member &m : plan.members) {
+        const int rep = m.repCaptureId > 0 ? m.repCaptureId : captureIdOf(m.repDirPath, m.repBaseName);
+        QSqlQuery del(db);
+        del.prepare(QStringLiteral("DELETE FROM unsorted_photo WHERE path = ?"));
+        del.addBindValue(m.path);
+        del.exec();
+        QSqlQuery ins(db);
+        ins.prepare(QStringLiteral(
+            "INSERT INTO unsorted_photo (path, folder_id, base_name, file_size, mtime, taken, capture_id) "
+            "VALUES (?, (SELECT id FROM folder WHERE path = ?), ?, ?, ?, ?, ?)"));
+        ins.addBindValue(m.path);
+        ins.addBindValue(m.dirPath);
+        ins.addBindValue(m.baseName);
+        ins.addBindValue(m.size);
+        ins.addBindValue(m.mtime);
+        ins.addBindValue(m.taken.isEmpty() ? QVariant() : m.taken);
+        ins.addBindValue(rep > 0 ? QVariant(rep) : QVariant());
+        if (!ins.exec())
+            return ins.lastError().text();
+    }
+    // A promoted shot is catalogued now: the rest of its run follow it.
+    for (const UnsortedPlan::Promotion &p : plan.promotions) {
+        const int rep = captureIdOf(p.dirPath, p.baseName);
+        if (rep <= 0)
+            continue;
+        for (const QString &path : p.files) {
+            QSqlQuery del(db);
+            del.prepare(QStringLiteral("DELETE FROM unsorted_photo WHERE path = ?"));
+            del.addBindValue(path);
+            del.exec();
+        }
+        QSqlQuery move(db);
+        move.prepare(p.oldCaptureId > 0
+                         ? QStringLiteral("UPDATE unsorted_photo SET capture_id = ? WHERE capture_id = ?")
+                         : QStringLiteral("UPDATE unsorted_photo SET capture_id = ? WHERE capture_id IS NULL "
+                                          "AND folder_id = (SELECT id FROM folder WHERE path = ?)"));
+        move.addBindValue(rep);
+        if (p.oldCaptureId > 0)
+            move.addBindValue(p.oldCaptureId);
+        else
+            move.addBindValue(p.dirPath);
+        if (!move.exec())
+            return move.lastError().text();
+    }
+    // Remembered files that are gone (culled), within the folders scanned.
+    {
+        QSqlQuery q(db);
+        q.setForwardOnly(true);
+        QStringList gone;
+        if (q.exec(QStringLiteral("SELECT path FROM unsorted_photo")))
+            while (q.next()) {
+                const QString path = q.value(0).toString();
+                if (!plan.seen.contains(path) && !rootForDir(QFileInfo(path).path(), plan.roots).isEmpty())
+                    gone << path;
+            }
+        for (const QString &path : std::as_const(gone)) {
+            QSqlQuery del(db);
+            del.prepare(QStringLiteral("DELETE FROM unsorted_photo WHERE path = ?"));
+            del.addBindValue(path);
+            if (!del.exec())
+                return del.lastError().text();
+        }
+    }
+    return {};
 }
 
 } // namespace pl::scan

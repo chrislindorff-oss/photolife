@@ -52,6 +52,7 @@ struct LifeListEntry
     QString camera;
     std::optional<double> focalLength;   // millimetres
     bool cameraChecked = false;
+    bool unsortedOnly = false;   // every photo of it is in an Unsorted folder (not culled yet)
 };
 
 // True for a captured_on to date by: known, and not after `today` (a file

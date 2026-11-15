@@ -113,7 +113,8 @@ QVariant LifeListModel::data(const QModelIndex &index, int role) const
         case FocalColumn:
             return e.focalLength ? scan::focalText(*e.focalLength) : QString();
         case PhotosColumn:
-            return e.photoCount;
+            // Only in Unsorted folders: no culled, sorted photo of it yet.
+            return e.unsortedOnly ? QVariant(tr("%1, unsorted").arg(e.photoCount)) : QVariant(e.photoCount);
         default:
             return {};
         }

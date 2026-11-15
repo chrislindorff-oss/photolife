@@ -3,6 +3,7 @@
 #include "scan/ScanTypes.h"
 
 #include <QHash>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -33,6 +34,36 @@ public:
     ScanSummary sync(const QList<DiscoveredCapture> &captures, const QStringList &roots);
 
 private:
+    // Unsorted folders (scan::Unsorted): what this sync catalogues, and what
+    // it only remembers.
+    struct UnsortedPlan
+    {
+        bool active = false;          // there are Unsorted folders
+        QString error;
+        QStringList folders;
+        QStringList roots;
+        QList<DiscoveredCapture> work;   // to catalogue (everything else, and runs' representatives)
+        QSet<QString> seen;              // every file found
+        int skippedFiles = 0;            // remembered already, unchanged
+        struct Member
+        {
+            QString path, dirPath, baseName, taken;
+            qint64 size = 0, mtime = 0;
+            int repCaptureId = 0;            // the run's representative, when already catalogued...
+            QString repDirPath, repBaseName; // ...or being catalogued now
+        };
+        QList<Member> members;
+        struct Promotion   // a run whose representative's files are gone
+        {
+            int oldCaptureId = 0;
+            QString dirPath, baseName;
+            QStringList files;
+        };
+        QList<Promotion> promotions;
+    };
+    UnsortedPlan planUnsorted(const QList<DiscoveredCapture> &captures, const QStringList &roots);
+    QString rememberUnsorted(const UnsortedPlan &plan);
+
     int folderIdFor(const QString &dirPath, const QString &rootPath);
     QString rootForDir(const QString &dirPath, const QStringList &roots) const;
     bool cancelled() const { return m_cancel && m_cancel(); }

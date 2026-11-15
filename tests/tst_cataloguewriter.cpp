@@ -116,6 +116,35 @@ QByteArray jpegWithGps()
     return jpeg;
 }
 
+// A JPEG whose EXIF has only DateTimeOriginal ("YYYY:MM:DD HH:MM:SS").
+QByteArray jpegWithDate(const QByteArray &when)
+{
+    const quint32 kExifIfdAt = 8 + 2 + 1 * 12 + 4;   // IFD0: 1 entry
+    const quint32 kDateAt = kExifIfdAt + 2 + 1 * 12 + 4;
+    QByteArray b;
+    b.append("II");
+    putU16(b, 0x002A);
+    putU32(b, 8);
+    putU16(b, 1);
+    putEntry(b, 0x8769, 4, 1, kExifIfdAt);   // Exif IFD pointer
+    putU32(b, 0);
+    putU16(b, 1);
+    putEntry(b, 0x9003, 2, 20, kDateAt);     // DateTimeOriginal
+    putU32(b, 0);
+    QByteArray date = when;
+    date.append('\0');
+    b.append(date.leftJustified(20, '\0', true));
+    const QByteArray payload = QByteArrayLiteral("Exif\0\0") + b;
+    QByteArray jpeg;
+    jpeg.append('\xFF').append('\xD8');
+    jpeg.append('\xFF').append('\xE1');
+    const int segLen = payload.size() + 2;
+    jpeg.append(char((segLen >> 8) & 0xFF)).append(char(segLen & 0xFF));
+    jpeg.append(payload);
+    jpeg.append('\xFF').append('\xD9');
+    return jpeg;
+}
+
 } // namespace
 
 class TestCatalogueWriter : public QObject
@@ -135,6 +164,8 @@ private slots:
     void unchangedRescanKeepsExistingGps();
     void backfillsGpsForPreExistingUncheckedRendition();
     void pgSyncWritesFolderTreeCaptureAndRenditions();
+    void cameraTimeKeptOnTheFileNamesDay();
+    void timeLookedForOnceForPhotosAlreadyThere();
 
 private:
     QTemporaryDir m_tmp;
@@ -445,6 +476,48 @@ void TestCatalogueWriter::pgSyncWritesFolderTreeCaptureAndRenditions()
     QVERIFY(r.exec(QStringLiteral("SELECT COUNT(*) FROM rendition")));
     QVERIFY(r.next());
     QCOMPARE(r.value(0).toInt(), 3);
+}
+
+void TestCatalogueWriter::cameraTimeKeptOnTheFileNamesDay()
+{
+    const QString dir = m_root + QStringLiteral("/Orchidaceae/Diuris/Diuris pardina/");
+    writeFile(dir + QStringLiteral("Same day - Loc 2026-06-04 (1).jpg"), jpegWithDate("2026:06:04 10:15:30"));
+    writeFile(dir + QStringLiteral("Other day - Loc 4-6-2026.jpg"), jpegWithDate("2025:01:01 09:00:00"));
+    writeFile(dir + QStringLiteral("DSC_0001.jpg"), jpegWithDate("2024:12:31 23:59:00"));
+    FileScanner scanner;
+    QVERIFY(CatalogueWriter(m_db->connectionName()).sync(scanner.scan({m_root}), {m_root}).ok());
+    auto dateOf = [&](const char *like) {
+        QSqlQuery q = exec(QStringLiteral("SELECT captured_on || ' ' || date_source FROM capture WHERE base_name LIKE '%1'")
+                               .arg(QString::fromLatin1(like)));
+        return q.next() ? q.value(0).toString() : QString();
+    };
+    QCOMPARE(dateOf("Same day%"), QStringLiteral("2026-06-04T10:15:30 exif"));
+    QCOMPARE(dateOf("Other day%"), QStringLiteral("2026-06-04 filename"));   // the name's day wins
+    QCOMPARE(dateOf("DSC_0001"), QStringLiteral("2024-12-31T23:59:00 exif"));
+    // An unchanged rescan keeps the time.
+    QVERIFY(CatalogueWriter(m_db->connectionName()).sync(scanner.scan({m_root}), {m_root}).ok());
+    QCOMPARE(dateOf("Same day%"), QStringLiteral("2026-06-04T10:15:30 exif"));
+}
+
+void TestCatalogueWriter::timeLookedForOnceForPhotosAlreadyThere()
+{
+    const QString path = m_root + QStringLiteral("/Orchidaceae/Diuris/Diuris pardina/Old one - Loc 2026-06-04.jpg");
+    writeFile(path, jpegWithDate("2026:06:04 07:45:00"));
+    FileScanner scanner;
+    QVERIFY(CatalogueWriter(m_db->connectionName()).sync(scanner.scan({m_root}), {m_root}).ok());
+    // As an earlier PhotoLife left it: the name's day, its time never looked for.
+    exec(QStringLiteral("UPDATE capture SET captured_on = '2026-06-04', date_source = 'filename', time_checked = 0 "
+                        "WHERE base_name LIKE 'Old one%'"));
+    QVERIFY(CatalogueWriter(m_db->connectionName()).sync(scanner.scan({m_root}), {m_root}).ok());
+    QSqlQuery q = exec(QStringLiteral("SELECT captured_on, time_checked FROM capture WHERE base_name LIKE 'Old one%'"));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toString(), QStringLiteral("2026-06-04T07:45:00"));
+    QCOMPARE(q.value(1).toInt(), 1);
+    // A photo with no time to find is looked at once only.
+    exec(QStringLiteral("UPDATE capture SET captured_on = NULL, date_source = 'none', time_checked = 0 "
+                        "WHERE base_name LIKE 'Diuris pardina%'"));
+    QVERIFY(CatalogueWriter(m_db->connectionName()).sync(scanner.scan({m_root}), {m_root}).ok());
+    QCOMPARE(scalarInt(QStringLiteral("SELECT MIN(time_checked) FROM capture WHERE base_name LIKE 'Diuris pardina%'")), 1);
 }
 
 QTEST_GUILESS_MAIN(TestCatalogueWriter)

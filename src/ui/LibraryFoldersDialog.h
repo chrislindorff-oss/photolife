@@ -26,13 +26,18 @@ public:
 
 signals:
     void librariesChanged();
+    // No longer Unsorted: its photos are to be catalogued (and matched) again.
+    void folderSorted(const QString &folder);
 
 private:
     void reload();
     void removeSelected();
+    void markUnsorted();
+    void markSorted();
 
     Application &m_app;
     QTableWidget *m_table;
+    QTableWidget *m_unsorted = nullptr;
     bool m_dirty = false;
 };
 

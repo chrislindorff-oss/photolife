@@ -57,6 +57,7 @@ public:
         PreviewIsRawRole,  // true when PreviewPathRole's rendition is a RAW file
                           // (only possible when the capture has no JPEG rendition)
         MatchedCommonNameRole,   // matched taxon's common name, or empty
+        RunSizeRole,             // in an Unsorted folder: the shots in its run (it stands for them); 0 otherwise
     };
 
     // Which fields the Qt::DisplayRole caption (shown under each grid thumbnail)
@@ -188,6 +189,7 @@ public:
         QString matchStatus;
         QString matchedName;
         QString matchedCommonName;
+        int runExtra = 0;   // remembered shots of its run (Unsorted folders)
         bool hasGps = false;
         double latitude = 0.0;
         double longitude = 0.0;
