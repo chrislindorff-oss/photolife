@@ -6,6 +6,7 @@
 #include "match/TaxonResolver.h"
 #include "scan/FilenameParser.h"
 
+#include <QDateTime>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -301,7 +302,37 @@ MatchOutcome MatchEngine::evaluateCapture(qint64 captureId,
     return out;
 }
 
-MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressFn &progress)
+QString MatchEngine::inputsFingerprint(const QString &connectionName)
+{
+    QSqlQuery q(QSqlDatabase::database(connectionName, false));
+    QStringList parts;
+    for (const char *sql : {"SELECT COUNT(*), COALESCE(SUM(project_id), 0), COALESCE(SUM(taxon_id), 0) FROM project_taxon",
+                            "SELECT COUNT(*), COALESCE(MAX(id), 0), 0 FROM project",
+                            "SELECT COUNT(*), COALESCE(MAX(id), 0), 0 FROM taxon_name",
+                            "SELECT COUNT(*), 0, 0 FROM project_excluded_taxon"}) {
+        if (q.exec(QString::fromLatin1(sql)) && q.next())
+            parts << QStringLiteral("%1/%2/%3").arg(q.value(0).toString(), q.value(1).toString(), q.value(2).toString());
+        else
+            parts << QStringLiteral("?");
+    }
+    return parts.join(QLatin1Char(' '));
+}
+
+QString MatchEngine::learnedFingerprint(const QString &connectionName)
+{
+    QSqlQuery q(QSqlDatabase::database(connectionName, false));
+    QStringList parts;
+    for (const char *sql : {"SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(taxon_id), 0) FROM name_alias",
+                            "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(taxon_id), 0) FROM capture_keyword_hint"}) {
+        if (q.exec(QString::fromLatin1(sql)) && q.next())
+            parts << QStringLiteral("%1/%2/%3").arg(q.value(0).toString(), q.value(1).toString(), q.value(2).toString());
+        else
+            parts << QStringLiteral("?");
+    }
+    return parts.join(QLatin1Char(' '));
+}
+
+MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressFn &progress, bool everything)
 {
     classifyFolders(m_connectionName);
 
@@ -312,10 +343,45 @@ MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressF
         return stats;
     }
 
+    // Every photo when what matching goes by has changed since the last
+    // full match (or there's been none).
+    const QString fingerprint = inputsFingerprint(m_connectionName);
+    const QString learned = learnedFingerprint(m_connectionName);
+    bool unresolvedToo = true;
+    {
+        QSqlQuery last(db);
+        const bool known = last.exec(QStringLiteral("SELECT fingerprint, learned FROM match_state WHERE id = 1"))
+                           && last.next();
+        if (!everything)
+            everything = !known || last.value(0).toString() != fingerprint;
+        unresolvedToo = everything || !known || last.value(1).toString() != learned;
+    }
+
     QList<qint64> captureIds;
     QSqlQuery q(db);
     q.setForwardOnly(true);
-    if (!q.exec(QStringLiteral("SELECT id FROM capture"))) {
+    // Never matched.
+    QString quickSql = QStringLiteral(
+        "SELECT c.id FROM capture c JOIN folder f ON f.id = c.folder_id "
+        "WHERE NOT EXISTS (SELECT 1 FROM capture_match m WHERE m.capture_id = c.id) ");
+    // Unresolved or matched only above species, when something new has been
+    // learned that might settle them.
+    if (unresolvedToo)
+        quickSql += QStringLiteral(
+            "   OR EXISTS (SELECT 1 FROM capture_match m LEFT JOIN taxon t ON t.id = m.taxon_id "
+            "              WHERE m.capture_id = c.id AND m.decided_by = 'engine' "
+            "                AND (m.status = 'pending' OR (m.status = 'auto' AND t.rank_level > 10))) ");
+    quickSql += QStringLiteral(
+        // Renamed or moved since the engine matched it.
+        "   OR EXISTS (SELECT 1 FROM capture_match m WHERE m.capture_id = c.id AND m.decided_by = 'engine' "
+        "                AND (m.decided_name_text IS NULL "
+        "                     OR m.decided_name_text <> COALESCE(c.name_text, '') || '|' || f.path)) "
+        // Your decisions whose name changed: only checked.
+        "   OR EXISTS (SELECT 1 FROM capture_match m WHERE m.capture_id = c.id AND m.decided_by = 'user' "
+        "                AND (m.decided_name_text IS NULL "
+        "                     OR m.decided_name_text <> COALESCE(c.name_text, '')))");
+    const QString sql = everything ? QStringLiteral("SELECT id FROM capture") : quickSql;
+    if (!q.exec(sql)) {
         Stats stats;
         stats.error = q.lastError().text();
         return stats;
@@ -323,7 +389,25 @@ MatchEngine::Stats MatchEngine::matchAll(const CancelFn &cancel, const ProgressF
     while (q.next())
         captureIds.append(q.value(0).toLongLong());
 
-    return run(captureIds, {}, cancel, progress);
+    Stats stats = run(captureIds, {}, cancel, progress);
+    stats.everything = everything;
+    // Done: remember what it went by (the trees only after a full match).
+    if (stats.ok() && !stats.cancelled) {
+        QSqlQuery save(db);
+        if (everything) {
+            save.exec(QStringLiteral("DELETE FROM match_state"));
+            save.prepare(QStringLiteral("INSERT INTO match_state (id, fingerprint, learned, matched_at) VALUES (1, ?, ?, ?)"));
+            save.addBindValue(fingerprint);
+            save.addBindValue(learned);
+            save.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        } else {
+            save.prepare(QStringLiteral("UPDATE match_state SET learned = ?, matched_at = ? WHERE id = 1"));
+            save.addBindValue(learned);
+            save.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        }
+        save.exec();
+    }
+    return stats;
 }
 
 MatchEngine::Stats MatchEngine::matchGroup(const QSet<qint64> &groupTaxonIds,
@@ -561,10 +645,14 @@ MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<
         }
 
         QSqlQuery ins(db);
+        // decided_name_text: the name and folder it went by, so a quick
+        // Match Library can tell it was renamed or moved since.
         ins.prepare(QStringLiteral(
             "INSERT INTO capture_match (capture_id, taxon_id, matched_rank, method, confidence, "
-            "status, qualifier, note, decided_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'engine')"));
+            "status, qualifier, note, decided_by, decided_name_text) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'engine', "
+            "  (SELECT COALESCE(c.name_text, '') || '|' || f.path FROM capture c JOIN folder f ON f.id = c.folder_id "
+            "   WHERE c.id = ?))"));
         ins.addBindValue(qlonglong(id));
         ins.addBindValue(outcome.taxonId > 0 ? QVariant(qlonglong(outcome.taxonId)) : QVariant());
         ins.addBindValue(outcome.matchedRank.isEmpty() ? QVariant() : outcome.matchedRank);
@@ -573,6 +661,7 @@ MatchEngine::Stats MatchEngine::run(const QList<qint64> &captureIds, const QSet<
         ins.addBindValue(outcome.status);
         ins.addBindValue(outcome.qualifier.isEmpty() ? QVariant() : outcome.qualifier);
         ins.addBindValue(outcome.note.isEmpty() ? QVariant() : outcome.note);
+        ins.addBindValue(qlonglong(id));
         if (!ins.exec()) {
             db.rollback();
             stats.error = ins.lastError().text();

@@ -19,9 +19,9 @@ class MatchService::Worker : public QObject
 
 public:
     Worker(CatalogueDescriptor descriptor, std::shared_ptr<std::atomic_bool> cancel,
-           QSet<qint64> group, QList<qint64> captures)
+           QSet<qint64> group, QList<qint64> captures, bool everything)
         : m_descriptor(std::move(descriptor)), m_cancel(std::move(cancel)),
-          m_group(std::move(group)), m_captures(std::move(captures))
+          m_group(std::move(group)), m_captures(std::move(captures)), m_everything(everything)
     {
     }
 
@@ -45,7 +45,7 @@ public:
         else if (!m_group.isEmpty())
             stats = engine.matchGroup(m_group, cancelled, reportProgress);
         else
-            stats = engine.matchAll(cancelled, reportProgress);
+            stats = engine.matchAll(cancelled, reportProgress, m_everything);
         emit finished(stats);
     }
 
@@ -58,6 +58,7 @@ private:
     std::shared_ptr<std::atomic_bool> m_cancel;
     QSet<qint64> m_group;
     QList<qint64> m_captures;
+    bool m_everything = false;
 };
 
 MatchService::MatchService(CatalogueDescriptor descriptor, QObject *parent)
@@ -78,22 +79,27 @@ MatchService::~MatchService()
 
 void MatchService::start(const QSet<qint64> &groupTaxonIds)
 {
-    launch(groupTaxonIds, {});
+    launch(groupTaxonIds, {}, false);
+}
+
+void MatchService::startEverything()
+{
+    launch({}, {}, true);
 }
 
 void MatchService::startForCaptures(const QList<qint64> &captureIds)
 {
-    launch({}, captureIds);
+    launch({}, captureIds, false);
 }
 
-void MatchService::launch(QSet<qint64> groupTaxonIds, QList<qint64> captureIds)
+void MatchService::launch(QSet<qint64> groupTaxonIds, QList<qint64> captureIds, bool everything)
 {
     if (m_running)
         return;
     m_running = true;
     m_cancel = std::make_shared<std::atomic_bool>(false);
 
-    m_worker = new Worker(m_descriptor, m_cancel, std::move(groupTaxonIds), std::move(captureIds));
+    m_worker = new Worker(m_descriptor, m_cancel, std::move(groupTaxonIds), std::move(captureIds), everything);
     Worker *worker = m_worker;
     m_thread = QThread::create([worker] { worker->run(); });
 

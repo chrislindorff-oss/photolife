@@ -58,6 +58,7 @@ public:
         int pending = 0;
         int unmatched = 0;   // pending with no taxon
         int outsideGroup = 0;   // matchGroup() only: evaluated, but left unchanged
+        bool everything = false;   // matchAll(): every photo was looked at
         QList<StaleDecision> staleDecisions;
         bool cancelled = false;
         QString error;
@@ -74,7 +75,21 @@ public:
     // `preferTaxonIds`: see ResolveHints::preferTaxonIds.
     MatchOutcome evaluateCapture(qint64 captureId, const QSet<qint64> &preferTaxonIds = {}) const;
 
-    Stats matchAll(const CancelFn &cancel = {}, const ProgressFn &progress = {});
+    // Match Library. Every photo when `everything`, or when the reference
+    // trees or taxon names have changed since the last full match (see
+    // inputsFingerprint()); otherwise only the photos that need it: new,
+    // renamed or moved since they were matched, user decisions whose name
+    // has changed (checked only) -- and the unresolved ones (pending, or
+    // matched above species) when the learned names have changed since the
+    // last run. Anything else would come out the same.
+    Stats matchAll(const CancelFn &cancel = {}, const ProgressFn &progress = {}, bool everything = false);
+
+    // A summary of what matching depends on -- the trees' taxa and the
+    // taxon names -- to tell whether it changed since the last full match.
+    static QString inputsFingerprint(const QString &connectionName);
+    // The same for what's been learned (names confirmed in Review, keyword
+    // hints): when it changes, the unresolved photos are looked at again.
+    static QString learnedFingerprint(const QString &connectionName);
 
     // Re-checks only the captures an earlier pass left unresolved -- no match
     // row yet, pending (in Review Unmatched), or auto-matched above species

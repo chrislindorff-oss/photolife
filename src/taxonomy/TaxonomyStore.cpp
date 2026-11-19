@@ -1168,7 +1168,8 @@ int TaxonomyStore::moveTaxonReferences(qint64 oldInatId, qint64 newInatId)
         // A photo matched to both: the user's decision on the old one carries over.
         run(QStringLiteral(
                 "UPDATE capture_match SET status = o.status, decided_by = o.decided_by, "
-                "decided_at = o.decided_at, method = o.method, confidence = o.confidence "
+                "decided_at = o.decided_at, method = o.method, confidence = o.confidence, "
+                "decided_name_text = o.decided_name_text "
                 "FROM capture_match o WHERE o.capture_id = capture_match.capture_id "
                 "AND o.taxon_id = ? AND o.decided_by = 'user' AND capture_match.taxon_id = ?"),
             {from, to})

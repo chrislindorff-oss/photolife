@@ -541,8 +541,10 @@ MainWindow::MainWindow(Application &app, QWidget *parent)
                 }
                 statusBar()->showMessage(
                     tr("Matched — %1 automatic, %2 to review, %3 unmatched")
-                        .arg(s.autoApplied).arg(s.pending - s.unmatched).arg(s.unmatched),
-                    8000);
+                        .arg(s.autoApplied).arg(s.pending - s.unmatched).arg(s.unmatched)
+                        + (s.everything ? tr(" (every photo checked)")
+                                        : tr(" (%n photo(s) that needed it checked)", nullptr, s.captures)),
+                    10000);
             });
 
     connect(m_builder, &taxonomy::ProjectBuilder::finished, this,
@@ -1380,7 +1382,14 @@ void MainWindow::buildViewMenu()
 
 void MainWindow::buildMatchingMenu(QMenu *matchingMenu)
 {
-    m_matchAction = matchingMenu->addAction(tr("&Match Library"), this, &MainWindow::startMatch);
+    m_matchAction = matchingMenu->addAction(tr("&Match Library"), this, [this] { startMatch(false); });
+    m_matchAction->setToolTip(tr("Matches the photos that need it: new, unresolved, matched above species, or "
+                                 "renamed or moved since -- every photo when your trees have changed."));
+    m_rematchAllAction = matchingMenu->addAction(tr("Re-match &Everything"), this, [this] { startMatch(true); });
+    m_rematchAllAction->setToolTip(tr("Looks at every photo again, as Match Library did before it learned to skip "
+                                      "the ones that can't have changed. Slower."));
+    matchingMenu->setToolTipsVisible(true);
+    connect(m_matchAction, &QAction::enabledChanged, m_rematchAllAction, &QAction::setEnabled);
 
     matchingMenu->addSeparator();
     // Same QAction as View's radio group -- Qt keeps both menus' copies in
@@ -3586,7 +3595,7 @@ void MainWindow::reloadProjectList()
     refreshCoverage();
 }
 
-void MainWindow::startMatch()
+void MainWindow::startMatch(bool everything)
 {
     if (!ensureCanEdit())
         return;
@@ -3597,11 +3606,14 @@ void MainWindow::startMatch()
                                 tr("Add and scan a folder of photos first."));
         return;
     }
-    beginMatchProgress(tr("Match Library"));
-    scanThenMatch([this] {
+    beginMatchProgress(everything ? tr("Re-match Everything") : tr("Match Library"));
+    scanThenMatch([this, everything] {
         m_groupMatchName.clear();
         m_matchingDownload = false;
-        m_app.matchService().start();
+        if (everything)
+            m_app.matchService().startEverything();
+        else
+            m_app.matchService().start();
     });
 }
 

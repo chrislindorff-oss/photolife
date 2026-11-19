@@ -30,6 +30,7 @@ class TestMatchEngine : public QObject
     Q_OBJECT
 
 private slots:
+    void matchLibraryLooksOnlyAtWhatNeedsIt();
     void init();
     void cleanup();
 
@@ -432,7 +433,7 @@ void TestMatchEngine::unrecordedAgreeingDecisionGetsItsNameRecorded()
     // A decision from before names were recorded (decided_name_text NULL).
     QSqlQuery upd(QSqlDatabase::database(m_db->connectionName(), false));
     QVERIFY(upd.exec(QStringLiteral(
-        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed' "
+        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed', decided_name_text = NULL "
         "WHERE capture_id = (SELECT c.id FROM capture c WHERE c.base_name LIKE 'Caladenia carnea%')")));
 
     QVERIFY(engine.matchAll().staleDecisions.isEmpty());
@@ -441,7 +442,7 @@ void TestMatchEngine::unrecordedAgreeingDecisionGetsItsNameRecorded()
     // chose the genus) isn't a contradiction either.
     QSqlQuery genus(QSqlDatabase::database(m_db->connectionName(), false));
     genus.prepare(QStringLiteral(
-        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed', taxon_id = ? "
+        "UPDATE capture_match SET decided_by = 'user', status = 'confirmed', taxon_id = ?, decided_name_text = NULL "
         "WHERE capture_id = (SELECT c.id FROM capture c "
         "                    WHERE c.base_name LIKE 'Thelymitra ixioides%')"));
     genus.addBindValue(localId(110));
@@ -519,6 +520,51 @@ void TestMatchEngine::taxonInsideTheFolderTaxonAgrees()
     auto stray = matchRow(QStringLiteral("Caladenia carnea - Rainbow%"));
     QCOMPARE(stray.value(4).toString(), QStringLiteral("pending"));
     QCOMPARE(stray.value(6).toString(), QStringLiteral("folder and filename disagree"));
+}
+
+void TestMatchEngine::matchLibraryLooksOnlyAtWhatNeedsIt()
+{
+    MatchEngine engine(m_db->connectionName());
+    const MatchEngine::Stats first = engine.matchAll();
+    QVERIFY(first.everything);   // never matched in full before
+    const int all = first.captures;
+    QVERIFY(all > 2);
+
+    // Nothing changed: only the unresolved ones and above-species matches.
+    const MatchEngine::Stats quick = engine.matchAll();
+    QVERIFY(!quick.everything);
+    QVERIFY(quick.captures < all);
+
+    // A renamed photo is looked at again; a resolved, unchanged one isn't.
+    QSqlQuery q(QSqlDatabase::database(m_db->connectionName(), false));
+    QVERIFY(q.exec(QStringLiteral("UPDATE capture SET name_text = 'Caladenia carnea renamed' "
+                                  "WHERE base_name LIKE 'Caladenia carnea%'")));
+    QCOMPARE(engine.matchAll().captures, quick.captures + 1);
+
+    // Nothing new learned since: the renamed one is settled, nothing else looked at.
+    QCOMPARE(engine.matchAll().captures, quick.captures);
+    // A name learned in Review: the unresolved ones are looked at again.
+    const int unresolved = [&] {
+        QSqlQuery u(QSqlDatabase::database(m_db->connectionName(), false));
+        u.exec(QStringLiteral("SELECT COUNT(DISTINCT m.capture_id) FROM capture_match m LEFT JOIN taxon t ON t.id = m.taxon_id "
+                              "WHERE m.decided_by = 'engine' AND (m.status = 'pending' OR (m.status = 'auto' AND t.rank_level > 10))"));
+        return u.next() ? u.value(0).toInt() : -1;
+    }();
+    QVERIFY(unresolved > 0);
+    QVERIFY(q.exec(QStringLiteral("INSERT INTO name_alias (raw_text, raw_folded, taxon_id) "
+                                  "SELECT 'odd name', 'odd name', MIN(id) FROM taxon")));
+    QCOMPARE(engine.matchAll().captures, quick.captures + unresolved);
+    QCOMPARE(engine.matchAll().captures, quick.captures);   // and once only
+
+    // The names changed (a tree built or refreshed brings them): every photo again.
+    QVERIFY(q.exec(QStringLiteral("INSERT INTO taxon_name (taxon_id, name, name_folded, kind) "
+                                  "SELECT MIN(id), 'A new synonym', 'a new synonym', 'synonym' FROM taxon")));
+    const MatchEngine::Stats afterTree = engine.matchAll();
+    QVERIFY(afterTree.everything);
+    QCOMPARE(afterTree.captures, all);
+
+    // Re-match Everything, asked for.
+    QVERIFY(engine.matchAll({}, {}, true).everything);
 }
 
 QTEST_GUILESS_MAIN(TestMatchEngine)

@@ -28,6 +28,8 @@ public slots:
     // Empty `groupTaxonIds` = the whole library (matchAll); otherwise
     // matchGroup() against those local taxon ids.
     void start(const QSet<qint64> &groupTaxonIds = {});
+    // Re-match Everything: matchAll() over every photo.
+    void startEverything();
     // MatchEngine::matchCaptures() on just these captures.
     void startForCaptures(const QList<qint64> &captureIds);
     void cancel();
@@ -39,7 +41,7 @@ signals:
 
 private:
     class Worker;
-    void launch(QSet<qint64> groupTaxonIds, QList<qint64> captureIds);
+    void launch(QSet<qint64> groupTaxonIds, QList<qint64> captureIds, bool everything);
     void onFinished(pl::match::MatchEngine::Stats stats);
 
     CatalogueDescriptor m_descriptor;

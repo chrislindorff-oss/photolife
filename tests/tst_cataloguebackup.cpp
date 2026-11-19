@@ -53,11 +53,9 @@ QString TestCatalogueBackup::olderCatalogue(QTemporaryDir &dir, int *version)
             return {};
         QSqlQuery q(QSqlDatabase::database(db.connectionName(), false));
         q.exec(QStringLiteral("INSERT INTO folder (path, name, depth) VALUES ('/photos', 'photos', 0)"));
-        // Undo the latest migration (027: Unsorted folders, time_checked).
-        q.exec(QStringLiteral("DROP TABLE unsorted_photo"));
-        q.exec(QStringLiteral("DROP TABLE unsorted_folder"));
-        q.exec(QStringLiteral("ALTER TABLE capture DROP COLUMN time_checked"));
-        q.exec(QStringLiteral("DELETE FROM schema_migrations WHERE version = 27"));
+        // Undo the latest migration (028: match_state).
+        q.exec(QStringLiteral("DROP TABLE match_state"));
+        q.exec(QStringLiteral("DELETE FROM schema_migrations WHERE version = 28"));
     }
     *version = versionOf(path);
     return path;

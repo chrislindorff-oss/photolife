@@ -168,6 +168,7 @@ const Spec kSpecs[] = {
     {"unsorted_folder", "unsortedFolders", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Unsorted folders"), false,
      "SELECT m.path || ' marked Unsorted' FROM main.unsorted_folder m WHERE m.path IN ({ADDED})", nullptr,
      "SELECT b.path || ' no longer Unsorted' FROM base.unsorted_folder b WHERE b.path IN ({REMOVED})"},
+    {"match_state", "matchState", QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Match Library's last full run"), true},
     {"unsorted_photo", "unsortedPhotos",
      QT_TRANSLATE_NOOP("pl::sync::ChangeSummary", "Shots in Unsorted folders (remembered, not catalogued)"), true},
     {"inat_my_observation", "inatObservations",

@@ -318,7 +318,7 @@ int MatchReviewer::ignoreFolderTree(int folderId)
         QSqlQuery rej(db);
         rej.prepare(QStringLiteral(
             "UPDATE capture_match SET status = 'rejected', decided_by = 'user', "
-            "  decided_at = %1 "
+            "  decided_at = %1, decided_name_text = (SELECT name_text FROM capture WHERE id = capture_match.capture_id) "
             "WHERE capture_id IN (SELECT id FROM capture WHERE folder_id = ?) "
             "  AND decided_by = 'engine'")
                         .arg(Database::nowIsoExpr(Database::backendFor(m_connectionName))));

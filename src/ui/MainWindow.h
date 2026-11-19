@@ -462,7 +462,8 @@ private:
     void fixRawGeolocation();
     void fetchPhotoLocalities();
     int currentProjectId() const;
-    void startMatch();
+    // Match Library; `everything`: Re-match Everything (every photo).
+    void startMatch(bool everything = false);
     // Rescans the library, then calls `startMatching` -- unless the scan was
     // stopped or failed. See the .cpp for why matching always scans first.
     void scanThenMatch(std::function<void()> startMatching);
@@ -721,6 +722,7 @@ private:
     bool m_scanProgressActive = false;   // a user-started scan owns m_taskProgress
 
     QAction *m_matchAction = nullptr;
+    QAction *m_rematchAllAction = nullptr;
     QString m_groupMatchName;   // set while a group match runs; empty for a full Match Library
     bool m_matchingDownload = false;   // set while matching just an iNaturalist download's photos
     QComboBox *m_filterCombo = nullptr;
